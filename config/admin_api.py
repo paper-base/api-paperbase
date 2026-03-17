@@ -9,14 +9,14 @@ from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 
 from config.permissions import IsStaffUser
-from core.models import DashboardBranding
-from orders.models import Order
-from orders.admin_serializers import AdminOrderListSerializer
-from products.models import Product, NavbarCategory, Category, Brand
-from contact.models import ContactSubmission
-from notifications.models import Notification
-from cart.models import Cart, CartItem
-from wishlist.models import WishlistItem
+from engine.core.models import DashboardBranding
+from engine.apps.orders.models import Order
+from engine.apps.orders.admin_serializers import AdminOrderListSerializer
+from engine.apps.products.models import Product, Category, Brand
+from engine.apps.support.models import ContactSubmission
+from engine.apps.notifications.models import Notification
+from engine.apps.cart.models import Cart, CartItem
+from engine.apps.wishlist.models import WishlistItem
 
 
 class DashboardStatsView(APIView):
@@ -54,8 +54,8 @@ class DashboardStatsView(APIView):
                 'active': product_stats['active_count'],
                 'out_of_stock': product_stats['oos_count'],
             },
-            'categories': NavbarCategory.objects.count(),
-            'subcategories': Category.objects.count(),
+            'categories': Category.objects.filter(parent__isnull=True).count(),
+            'subcategories': Category.objects.filter(parent__isnull=False).count(),
             'brands': Brand.objects.count(),
             'contacts': ContactSubmission.objects.count(),
             'notifications': Notification.objects.filter(is_active=True).count(),
@@ -222,9 +222,9 @@ def _get_branding_response(request, instance):
         logo_url = request.build_absolute_uri(instance.logo.url)
     return {
         'logo_url': logo_url,
-        'admin_name': instance.admin_name or 'Gadzilla',
+        'admin_name': instance.admin_name or 'E-commerce Store',
         'admin_subtitle': instance.admin_subtitle or 'Admin dashboard',
-        'currency_symbol': instance.currency_symbol or '৳',
+        'currency_symbol': instance.currency_symbol or '$',
     }
 
 
@@ -237,7 +237,7 @@ class BrandingView(APIView):
         instance = DashboardBranding.objects.first()
         if instance is None:
             instance = DashboardBranding.objects.create(
-                admin_name='Gadzilla', admin_subtitle='Admin dashboard'
+                admin_name='E-commerce Store', admin_subtitle='Admin dashboard'
             )
         return instance
 
@@ -248,11 +248,11 @@ class BrandingView(APIView):
     def patch(self, request):
         instance = self._get_instance()
         if 'admin_name' in request.data:
-            instance.admin_name = request.data.get('admin_name', instance.admin_name) or 'Gadzilla'
+            instance.admin_name = request.data.get('admin_name', instance.admin_name) or 'E-commerce Store'
         if 'admin_subtitle' in request.data:
             instance.admin_subtitle = request.data.get('admin_subtitle', instance.admin_subtitle) or 'Admin dashboard'
         if 'currency_symbol' in request.data:
-            instance.currency_symbol = (request.data.get('currency_symbol') or '৳').strip()[:10]
+            instance.currency_symbol = (request.data.get('currency_symbol') or '$').strip()[:10]
         logo_file = request.FILES.get('logo')
         if logo_file:
             instance.logo = logo_file

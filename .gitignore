@@ -48,7 +48,3 @@ media_local/
 # Env
 .env
 .env.local
-
-# Others
-db.sh
-run_local.sh
