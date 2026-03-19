@@ -3,6 +3,7 @@ from rest_framework import mixins, viewsets
 from rest_framework.exceptions import ValidationError
 
 from config.permissions import IsDashboardUser
+from engine.core.admin_views import StoreRolePermissionMixin
 from engine.core.tenancy import get_active_store
 
 from .models import ShippingZone, ShippingMethod, ShippingRate
@@ -13,8 +14,7 @@ from .admin_serializers import (
 )
 
 
-class _AdminStoreScopedViewSet(viewsets.GenericViewSet):
-    permission_classes = [IsDashboardUser]
+class _AdminStoreScopedViewSet(StoreRolePermissionMixin, viewsets.GenericViewSet):
 
     def _get_store_or_error(self):
         ctx = get_active_store(self.request)

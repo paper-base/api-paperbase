@@ -16,6 +16,13 @@ class ActivityLog(models.Model):
         blank=True,
         related_name="admin_activity_logs",
     )
+    store = models.ForeignKey(
+        "stores.Store",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="activity_logs",
+    )
     action = models.CharField(max_length=20, choices=Action.choices)
     entity_type = models.CharField(max_length=50)
     entity_id = models.CharField(max_length=64, blank=True, default="")

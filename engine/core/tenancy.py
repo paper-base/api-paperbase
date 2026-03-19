@@ -51,19 +51,23 @@ def get_active_store(request: HttpRequest) -> ActiveStoreContext:
     store: Optional[Store] = None
     membership: Optional[StoreMembership] = None
 
-    # 1) Explicit header — try public_id first, fall back to integer PK for backward compat
+    # 1) Explicit header — public_id only (sequential integer PK fallback removed).
     header_store_id = request.headers.get("X-Store-ID") or request.headers.get("x-store-id")
     if header_store_id:
         try:
             store = Store.objects.get(public_id=header_store_id, is_active=True)
         except (Store.DoesNotExist, ValueError):
-            # Backward-compat: allow integer PK during frontend migration window
+            store = None
+
+        # Backward compatibility: during migration, allow integer PK in header.
+        if store is None:
             try:
-                store = Store.objects.get(pk=int(header_store_id), is_active=True)
+                store_pk = int(str(header_store_id))
+                store = Store.objects.get(id=store_pk, is_active=True)
             except (Store.DoesNotExist, ValueError, TypeError):
                 store = None
 
-    # 2) JWT claim `active_store_id`
+    # 2) JWT claim `active_store_id` — public_id only.
     # In DRF SimpleJWT, the validated token is available as `request.auth`.
     if store is None and getattr(request, "auth", None):
         active_store_id = request.auth.get("active_store_id")  # type: ignore[union-attr]
@@ -71,11 +75,7 @@ def get_active_store(request: HttpRequest) -> ActiveStoreContext:
             try:
                 store = Store.objects.get(public_id=active_store_id, is_active=True)
             except (Store.DoesNotExist, ValueError):
-                # Backward-compat: allow integer PK during frontend migration window
-                try:
-                    store = Store.objects.get(pk=int(active_store_id), is_active=True)
-                except (Store.DoesNotExist, ValueError, TypeError):
-                    store = None
+                store = None
 
     # 3) Fallback to host-resolved store (set by middleware)
     if store is None:

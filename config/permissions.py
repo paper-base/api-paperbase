@@ -23,9 +23,11 @@ class IsStaffUser(BasePermission):
 
 class IsDashboardUser(BasePermission):
     """
-    Allow authenticated users who are either staff OR have an active store membership.
-    Used for dashboard API so signup users (not staff) can use the dashboard when they own a store.
-    Staff/superusers retain full access; Django admin (/admin/) still requires is_staff.
+    Allow authenticated users who are either staff OR have an active store membership
+    AND an active subscription (or a default plan as fallback).
+
+    Staff/superusers bypass the subscription check and retain full access.
+    Django admin (/admin/) still requires is_staff separately.
     """
 
     def has_permission(self, request, view):
@@ -34,7 +36,12 @@ class IsDashboardUser(BasePermission):
         if request.user.is_staff:
             return True
         ctx = get_active_store(request)
-        return bool(ctx.store and ctx.membership)
+        if not (ctx.store and ctx.membership):
+            return False
+        # Require an active subscription or a configured default plan.
+        # Importing here to avoid circular import at module load time.
+        from engine.apps.billing.feature_gate import _get_effective_plan
+        return _get_effective_plan(request.user) is not None
 
 
 class IsStoreStaff(BasePermission):

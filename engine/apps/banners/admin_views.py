@@ -3,6 +3,7 @@ from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 
 from config.permissions import IsDashboardUser
 from engine.core.activity import log_activity
+from engine.core.admin_views import StoreRolePermissionMixin
 from engine.core.models import ActivityLog
 from engine.core.tenancy import get_active_store
 
@@ -10,8 +11,7 @@ from .models import Banner
 from .admin_serializers import AdminBannerSerializer
 
 
-class AdminBannerViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsDashboardUser]
+class AdminBannerViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
     parser_classes = [MultiPartParser, FormParser, JSONParser]
     serializer_class = AdminBannerSerializer
     queryset = Banner.objects.all()
@@ -20,9 +20,9 @@ class AdminBannerViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         qs = super().get_queryset()
         ctx = get_active_store(self.request)
-        if ctx.store:
-            return qs.filter(store=ctx.store)
-        return qs
+        if not ctx.store:
+            return qs.none()
+        return qs.filter(store=ctx.store)
 
     def perform_create(self, serializer):
         ctx = get_active_store(self.request)

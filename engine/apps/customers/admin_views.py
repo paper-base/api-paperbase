@@ -2,6 +2,7 @@ from rest_framework import viewsets
 
 from config.permissions import IsDashboardUser
 from engine.core.activity import log_activity
+from engine.core.admin_views import StoreRolePermissionMixin
 from engine.core.models import ActivityLog
 from engine.core.tenancy import get_active_store
 
@@ -13,8 +14,7 @@ from .admin_serializers import (
 )
 
 
-class AdminCustomerViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsDashboardUser]
+class AdminCustomerViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
     queryset = Customer.objects.select_related("user").prefetch_related("addresses").all()
     lookup_field = 'public_id'
 
@@ -26,9 +26,9 @@ class AdminCustomerViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         qs = super().get_queryset()
         ctx = get_active_store(self.request)
-        if ctx.store:
-            return qs.filter(store=ctx.store)
-        return qs
+        if not ctx.store:
+            return qs.none()
+        return qs.filter(store=ctx.store)
 
     def perform_create(self, serializer):
         ctx = get_active_store(self.request)
@@ -67,14 +67,17 @@ class AdminCustomerViewSet(viewsets.ModelViewSet):
         )
 
 
-class AdminCustomerAddressViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsDashboardUser]
+class AdminCustomerAddressViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
     serializer_class = AdminCustomerAddressSerializer
     queryset = CustomerAddress.objects.select_related("customer").all()
     lookup_field = 'public_id'
 
     def get_queryset(self):
         qs = super().get_queryset()
+        ctx = get_active_store(self.request)
+        if not ctx.store:
+            return qs.none()
+        qs = qs.filter(customer__store=ctx.store)
         customer_id = self.request.query_params.get("customer")
         if customer_id:
             qs = qs.filter(customer_id=customer_id)

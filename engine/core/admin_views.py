@@ -2,9 +2,30 @@ from datetime import date
 
 from rest_framework import mixins, viewsets
 
-from config.permissions import IsDashboardUser
+from config.permissions import IsDashboardUser, IsStoreAdmin
+from engine.core.tenancy import get_active_store
 from .models import ActivityLog
 from .admin_serializers import AdminActivityLogSerializer
+
+
+class StoreRolePermissionMixin:
+    """
+    Mixin that applies role-based permissions to ViewSet actions.
+
+    - Safe read actions (list, retrieve) → IsDashboardUser (any store staff)
+    - Write/destructive actions (create, update, partial_update, destroy,
+      and any custom action) → IsStoreAdmin (owner or admin only)
+
+    Subclasses must NOT set `permission_classes` directly; they should call
+    `super().get_permissions()` via this mixin instead.
+    """
+
+    READ_ACTIONS = {"list", "retrieve", "metadata"}
+
+    def get_permissions(self):
+        if self.action in self.READ_ACTIONS:
+            return [IsDashboardUser()]
+        return [IsStoreAdmin()]
 
 
 class AdminActivityLogViewSet(
@@ -18,6 +39,11 @@ class AdminActivityLogViewSet(
 
     def get_queryset(self):
         qs = super().get_queryset()
+        ctx = get_active_store(self.request)
+        if not ctx.store:
+            return qs.none()
+        qs = qs.filter(store=ctx.store)
+
         params = self.request.query_params
 
         entity_type = (params.get("entity_type") or "").strip()

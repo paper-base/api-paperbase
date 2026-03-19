@@ -5,19 +5,23 @@ from engine.core.ids import generate_public_id
 
 
 class UserManager(BaseUserManager):
-    def create_user(self, email, password=None, **extra_fields):
+    def create_user(self, email, password=None, username=None, **extra_fields):
         if not email:
             raise ValueError("Email address is required.")
         email = self.normalize_email(email)
+        # Backwards-compat: some legacy code/tests may still pass `username`.
+        # This project uses email as the login identifier, so we intentionally ignore it.
+        extra_fields.pop("username", None)
         user = self.model(email=email, **extra_fields)
         user.set_password(password)
         user.save(using=self._db)
         return user
 
-    def create_superuser(self, email, password, **extra_fields):
+    def create_superuser(self, email, password, username=None, **extra_fields):
         extra_fields.setdefault("is_staff", True)
         extra_fields.setdefault("is_superuser", True)
         extra_fields.setdefault("is_verified", True)
+        extra_fields.pop("username", None)
 
         if not extra_fields.get("is_staff"):
             raise ValueError("Superuser must have is_staff=True.")

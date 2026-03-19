@@ -110,17 +110,27 @@ class ProductRelatedView(ListAPIView):
     serializer_class = ProductListSerializer
 
     def get_queryset(self):
+        ctx = get_active_store(self.request)
+        if not ctx.store:
+            return Product.objects.none()
         identifier = self.kwargs.get('identifier')
-        qs = Product.objects.filter(is_active=True, status=Product.Status.ACTIVE)
+        base_qs = Product.objects.filter(
+            is_active=True, status=Product.Status.ACTIVE, store=ctx.store
+        )
         try:
             import uuid
 
             uuid.UUID(str(identifier))
-            product = get_object_or_404(qs, id=identifier)
+            product = get_object_or_404(base_qs, id=identifier)
         except Exception:
-            product = get_object_or_404(qs, slug=identifier)
+            product = get_object_or_404(base_qs, slug=identifier)
         return (
-            Product.objects.filter(is_active=True, status=Product.Status.ACTIVE, category=product.category)
+            Product.objects.filter(
+                is_active=True,
+                status=Product.Status.ACTIVE,
+                store=ctx.store,
+                category=product.category,
+            )
             .exclude(id=product.id)
             .select_related("category")
             .prefetch_related("images")
@@ -174,9 +184,15 @@ class BrandListView(APIView):
     Returns brand names sorted alphabetically.
     """
     def get(self, request):
+        ctx = get_active_store(request)
+        if not ctx.store:
+            return Response([])
+
         category_slug = request.query_params.get('category')
 
-        qs = Product.objects.filter(is_active=True, status=Product.Status.ACTIVE)
+        qs = Product.objects.filter(
+            is_active=True, status=Product.Status.ACTIVE, store=ctx.store
+        )
 
         if category_slug:
             qs = qs.filter(category__slug=category_slug)
@@ -224,13 +240,19 @@ class ProductSearchView(ListAPIView):
     serializer_class = ProductListSerializer
 
     def get_queryset(self):
+        ctx = get_active_store(self.request)
+        if not ctx.store:
+            return Product.objects.none()
+
         query = self.request.query_params.get('q', '').strip()
 
         if not query or len(query) < 2:
             return Product.objects.none()
 
         qs = (
-            Product.objects.filter(is_active=True, status=Product.Status.ACTIVE)
+            Product.objects.filter(
+                is_active=True, status=Product.Status.ACTIVE, store=ctx.store
+            )
             .select_related('category')
             .prefetch_related('images')
         )

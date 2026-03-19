@@ -5,9 +5,11 @@ from django.conf import settings
 
 def sync_store_owner_to_user(store):
     """
-    Sync Store owner_name and owner_email to the owner User's first_name, last_name, and email.
+    Sync Store owner_name to the owner User's first_name and last_name.
 
-    Finds the User with StoreMembership role=OWNER for this store and updates their profile.
+    Intentionally does NOT sync owner_email → User.email: changing a store's
+    contact email must never silently overwrite the owner's authentication
+    credentials (account takeover vector).
     """
     from .models import StoreMembership
 
@@ -34,13 +36,6 @@ def sync_store_owner_to_user(store):
             user.first_name = first
             user.last_name = last
             update_fields.extend(["first_name", "last_name"])
-
-    if store.owner_email and "@" in store.owner_email:
-        email = store.owner_email.strip()[:254]
-        if user.email != email:
-            user.email = email
-            user.username = email[:150]
-            update_fields.extend(["email", "username"])
 
     if update_fields:
         user.save(update_fields=update_fields)

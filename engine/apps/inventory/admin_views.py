@@ -3,13 +3,14 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from config.permissions import IsDashboardUser
+from engine.core.admin_views import StoreRolePermissionMixin
+from engine.core.tenancy import get_active_store
 from .models import Inventory, StockMovement
 from .admin_serializers import InventoryListSerializer, InventoryDetailSerializer, StockMovementSerializer
 from .services import adjust_stock
 
 
-class AdminInventoryViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsDashboardUser]
+class AdminInventoryViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
     queryset = Inventory.objects.select_related('product', 'variant').order_by('product__name')
     lookup_field = 'public_id'
 
@@ -17,6 +18,13 @@ class AdminInventoryViewSet(viewsets.ModelViewSet):
         if self.action == 'retrieve':
             return InventoryDetailSerializer
         return InventoryListSerializer
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        ctx = get_active_store(self.request)
+        if not ctx.store:
+            return qs.none()
+        return qs.filter(product__store=ctx.store)
 
     @action(detail=True, methods=['post'])
     def adjust(self, request, pk=None):
@@ -43,6 +51,10 @@ class AdminStockMovementViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         qs = super().get_queryset()
+        ctx = get_active_store(self.request)
+        if not ctx.store:
+            return qs.none()
+        qs = qs.filter(inventory__product__store=ctx.store)
         inventory_id = self.request.query_params.get('inventory_id')
         if inventory_id:
             qs = qs.filter(inventory_id=inventory_id)

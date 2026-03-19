@@ -3,8 +3,10 @@ Minimal Django settings for local development/testing of the reusable e-commerce
 Not intended for production use.
 """
 
+from datetime import timedelta
 from pathlib import Path
 import os
+import sys
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -14,6 +16,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = "dev-secret-key-change-me"
 DEBUG = True
+
+# Used to make test runs deterministic (e.g. avoid DRF throttling interfering with auth tests).
+TESTING = any(arg == "test" or arg.startswith("test") for arg in sys.argv)
 ALLOWED_HOSTS = ["*"]
 
 # ---------------------------------------------------------------------------
@@ -49,6 +54,7 @@ INSTALLED_APPS = [
     "corsheaders",
     "rest_framework",
     "rest_framework_simplejwt",
+    "rest_framework_simplejwt.token_blacklist",
     "engine.core",
     "engine.apps.stores",
     "engine.apps.billing",
@@ -138,7 +144,42 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 24,
+    "DEFAULT_THROTTLE_CLASSES": [
+        "rest_framework.throttling.AnonRateThrottle",
+        "rest_framework.throttling.UserRateThrottle",
+    ],
+    "DEFAULT_THROTTLE_RATES": {
+        "anon": "120/min",
+        "user": "600/min",
+        # Named scopes used by specific views:
+        "auth_token": "10/min",        # login attempts
+        "auth_register": "10/min",     # account creation
+        "auth_reset": "5/min",         # password reset requests
+        "direct_order": "30/hour",     # unauthenticated order placement
+    },
 }
+
+# JWT configuration — runs in both dev and production.
+# Requires `rest_framework_simplejwt.token_blacklist` in INSTALLED_APPS
+# and `python manage.py migrate` to create the blacklist tables.
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=60),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+    "ROTATE_REFRESH_TOKENS": True,
+    # BLACKLIST_AFTER_ROTATION requires token_blacklist in INSTALLED_APPS + migration.
+    # Steps to enable:
+    #   1. Uncomment "rest_framework_simplejwt.token_blacklist" in INSTALLED_APPS above.
+    #   2. Run: python manage.py migrate
+    #   3. Set BLACKLIST_AFTER_ROTATION to True here.
+    "BLACKLIST_AFTER_ROTATION": True,
+    "ALGORITHM": "HS256",
+    "AUTH_HEADER_TYPES": ("Bearer",),
+    "USER_ID_FIELD": "id",
+    "USER_ID_CLAIM": "user_id",
+}
+
+# Password reset token expires in 1 hour (Django default is 3 days).
+PASSWORD_RESET_TIMEOUT = 3600
 
 # Basic session/CSRF configuration suitable for local development
 CSRF_COOKIE_SECURE = False

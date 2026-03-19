@@ -9,6 +9,8 @@ from rest_framework.permissions import IsAuthenticatedOrReadOnly
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from rest_framework.permissions import IsAuthenticated
+
 from engine.apps.cart.views import get_or_create_cart
 from engine.apps.analytics.service import meta_conversions
 
@@ -16,12 +18,14 @@ from .models import Order, OrderItem
 from .serializers import OrderCreateSerializer, OrderSerializer, DirectOrderCreateSerializer
 from .utils import get_next_order_number
 from .stock import adjust_stock
+from .throttles import DirectOrderRateThrottle
 from engine.apps.shipping.service import quote_shipping
 
 
 class OrderCreateView(CreateAPIView):
     """Create order from current cart."""
     serializer_class = OrderCreateSerializer
+    permission_classes = [IsAuthenticated]
 
     @transaction.atomic
     def create(self, request, *args, **kwargs):
@@ -81,7 +85,8 @@ class OrderCreateView(CreateAPIView):
         
         # Create order and reduce stock
         subtotal = Decimal('0.00')
-        store = getattr(cart, "store", None)
+        # Cart has no direct store FK; derive store from the first cart item's product.
+        store = items[0].product.store if items else None
         if not store:
             return Response(
                 {"detail": "No store found for this cart."},
@@ -154,8 +159,9 @@ class OrderCreateView(CreateAPIView):
 class DirectOrderCreateView(CreateAPIView):
     """Create order directly with products (not from cart)."""
     serializer_class = DirectOrderCreateSerializer
-    permission_classes = []  # Allow unauthenticated access
-    authentication_classes = []  # No authentication required
+    permission_classes = []  # Allow unauthenticated (storefront) access
+    authentication_classes = []
+    throttle_classes = [DirectOrderRateThrottle]
 
     @transaction.atomic
     def create(self, request, *args, **kwargs):
@@ -190,6 +196,14 @@ class DirectOrderCreateView(CreateAPIView):
             str(p.id): p
             for p in Product.objects.filter(id__in=product_ids).select_for_update()
         }
+
+        # Validate all products belong to the same store.
+        store_ids = {p.store_id for p in locked_products.values() if p.store_id}
+        if len(store_ids) > 1:
+            return Response(
+                {'detail': 'All products in a single order must belong to the same store.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         
         # Check stock availability
         stock_errors = []
@@ -224,11 +238,15 @@ class DirectOrderCreateView(CreateAPIView):
         else:
             delivery_area = ser.validated_data['delivery_area']
 
+        # Resolve store from the (now validated) locked products set.
+        first_product = next(iter(locked_products.values()))
+        order_store = first_product.store
+
         # Create order and reduce stock
         subtotal = Decimal('0.00')
         order = Order.objects.create(
-            store=locked_products[product_id_str].store,
-            order_number=get_next_order_number(locked_products[product_id_str].store),
+            store=order_store,
+            order_number=get_next_order_number(order_store),
             user=request.user if request.user.is_authenticated else None,
             email=email,
             shipping_name=ser.validated_data['shipping_name'],

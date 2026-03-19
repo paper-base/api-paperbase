@@ -27,7 +27,12 @@ from engine.apps.shipping.admin_views import (
     AdminShippingRateViewSet,
 )
 
-from .admin_api import DashboardStatsView, BrandingView, DashboardAnalyticsView
+from .admin_api import (
+    DashboardStatsView,
+    DashboardStatsOverviewView,
+    BrandingView,
+    DashboardAnalyticsView,
+)
 
 router = DefaultRouter()
 router.register(r'orders', AdminOrderViewSet, basename='admin-orders')
@@ -62,6 +67,7 @@ router.register(r'shipping-rates', AdminShippingRateViewSet, basename='admin-shi
 
 urlpatterns = [
     path('stats/', DashboardStatsView.as_view(), name='admin-dashboard-stats'),
+    path('stats/overview/', DashboardStatsOverviewView.as_view(), name='admin-dashboard-stats-overview'),
     path('analytics/overview/', DashboardAnalyticsView.as_view(), name='admin-dashboard-analytics'),
     path('branding/', BrandingView.as_view(), name='admin-branding'),
     path('', include(router.urls)),

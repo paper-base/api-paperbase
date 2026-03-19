@@ -5,6 +5,7 @@ from rest_framework.response import Response
 
 from config.permissions import IsDashboardUser
 from engine.core.activity import log_activity
+from engine.core.admin_views import StoreRolePermissionMixin
 from engine.core.models import ActivityLog
 from engine.core.tenancy import get_active_store
 from .models import Order
@@ -18,6 +19,7 @@ from .admin_serializers import (
 
 
 class AdminOrderViewSet(
+    StoreRolePermissionMixin,
     mixins.CreateModelMixin,
     mixins.ListModelMixin,
     mixins.RetrieveModelMixin,
@@ -25,7 +27,6 @@ class AdminOrderViewSet(
     mixins.DestroyModelMixin,
     viewsets.GenericViewSet,
 ):
-    permission_classes = [IsDashboardUser]
     queryset = Order.objects.prefetch_related('items__product').all()
     lookup_field = 'pk'
 
@@ -64,9 +65,9 @@ class AdminOrderViewSet(
     def get_queryset(self):
         qs = super().get_queryset()
         ctx = get_active_store(self.request)
-        if ctx.store:
-            return qs.filter(store=ctx.store)
-        return qs
+        if not ctx.store:
+            return qs.none()
+        return qs.filter(store=ctx.store)
 
     def perform_create(self, serializer):
         ctx = get_active_store(self.request)

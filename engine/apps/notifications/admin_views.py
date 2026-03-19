@@ -1,7 +1,9 @@
+from django.db.models import Q
 from rest_framework import viewsets, mixins
 
 from config.permissions import IsDashboardUser
 from engine.core.activity import log_activity
+from engine.core.admin_views import StoreRolePermissionMixin
 from engine.core.models import ActivityLog
 from .models import Notification, SystemNotification
 from .admin_serializers import AdminNotificationSerializer, AdminSystemNotificationSerializer
@@ -19,9 +21,14 @@ class AdminSystemNotificationViewSet(
     queryset = SystemNotification.objects.all().order_by('-created_at')
     lookup_field = 'public_id'
 
+    def get_queryset(self):
+        # Show notifications targeted at this user OR global ones (user=null).
+        return super().get_queryset().filter(
+            Q(user=self.request.user) | Q(user__isnull=True)
+        )
 
-class AdminNotificationViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsDashboardUser]
+
+class AdminNotificationViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
     serializer_class = AdminNotificationSerializer
     queryset = Notification.objects.all()
     lookup_field = 'public_id'

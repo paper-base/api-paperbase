@@ -8,6 +8,7 @@ from rest_framework.response import Response
 
 from config.permissions import IsDashboardUser
 from engine.core.activity import log_activity
+from engine.core.admin_views import StoreRolePermissionMixin
 from engine.core.models import ActivityLog
 from engine.core.tenancy import get_active_store
 from .models import (
@@ -31,8 +32,7 @@ from .admin_serializers import (
 from .stock_sync import sync_product_stock_from_variants
 
 
-class AdminProductViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsDashboardUser]
+class AdminProductViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
     parser_classes = [MultiPartParser, FormParser, JSONParser]
     queryset = (
         Product.objects.select_related("category")
@@ -48,9 +48,9 @@ class AdminProductViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         qs = super().get_queryset()
         ctx = get_active_store(self.request)
-        if ctx.store:
-            return qs.filter(store=ctx.store)
-        return qs
+        if not ctx.store:
+            return qs.none()
+        return qs.filter(store=ctx.store)
 
     def get_serializer_class(self):
         if self.action == 'list':
@@ -124,8 +124,7 @@ class AdminProductViewSet(viewsets.ModelViewSet):
         return Response({'available': not exists})
 
 
-class AdminProductImageViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsDashboardUser]
+class AdminProductImageViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
     parser_classes = [MultiPartParser, FormParser, JSONParser]
     serializer_class = AdminProductImageSerializer
     queryset = ProductImage.objects.select_related('product').all()
@@ -134,9 +133,9 @@ class AdminProductImageViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         qs = super().get_queryset()
         ctx = get_active_store(self.request)
-        if ctx.store:
-            return qs.filter(product__store=ctx.store)
-        return qs
+        if not ctx.store:
+            return qs.none()
+        return qs.filter(product__store=ctx.store)
 
     def perform_create(self, serializer):
         ctx = get_active_store(self.request)
@@ -158,9 +157,8 @@ class AdminProductImageViewSet(viewsets.ModelViewSet):
         serializer.save()
 
 
-class AdminParentCategoryViewSet(viewsets.ModelViewSet):
+class AdminParentCategoryViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
     """Top-level (parent) categories in nested hierarchy. Served at /admin/parent-categories/."""
-    permission_classes = [IsDashboardUser]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
     serializer_class = AdminParentCategorySerializer
     queryset = Category.objects.filter(parent__isnull=True).order_by('order', 'name')
@@ -169,9 +167,9 @@ class AdminParentCategoryViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         qs = super().get_queryset()
         ctx = get_active_store(self.request)
-        if ctx.store:
-            return qs.filter(store=ctx.store)
-        return qs
+        if not ctx.store:
+            return qs.none()
+        return qs.filter(store=ctx.store)
 
     def perform_create(self, serializer):
         ctx = get_active_store(self.request)
@@ -217,9 +215,8 @@ class AdminParentCategoryViewSet(viewsets.ModelViewSet):
         )
 
 
-class AdminCategoryViewSet(viewsets.ModelViewSet):
+class AdminCategoryViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
     """Subcategories (parent is not null). Served at /admin/categories/."""
-    permission_classes = [IsDashboardUser]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
     serializer_class = AdminCategorySerializer
     queryset = Category.objects.filter(parent__isnull=False).select_related('parent').order_by('parent', 'order', 'name')
@@ -228,9 +225,9 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         qs = super().get_queryset()
         ctx = get_active_store(self.request)
-        if ctx.store:
-            return qs.filter(store=ctx.store)
-        return qs
+        if not ctx.store:
+            return qs.none()
+        return qs.filter(store=ctx.store)
 
     def get_serializer_context(self):
         ctx = get_active_store(self.request)
@@ -283,8 +280,7 @@ class AdminCategoryViewSet(viewsets.ModelViewSet):
         )
 
 
-class AdminProductVariantViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsDashboardUser]
+class AdminProductVariantViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
     serializer_class = AdminProductVariantSerializer
     queryset = (
         ProductVariant.objects.select_related("product")
@@ -296,8 +292,9 @@ class AdminProductVariantViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         qs = super().get_queryset()
         ctx = get_active_store(self.request)
-        if ctx.store:
-            qs = qs.filter(product__store=ctx.store)
+        if not ctx.store:
+            return qs.none()
+        qs = qs.filter(product__store=ctx.store)
         product_id = self.request.query_params.get("product")
         if product_id:
             qs = qs.filter(product_id=product_id)
@@ -369,10 +366,8 @@ class AdminProductVariantViewSet(viewsets.ModelViewSet):
         )
 
 
-class AdminProductAttributeViewSet(viewsets.ModelViewSet):
+class AdminProductAttributeViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
     """Global attribute definitions (Color, Size, …) shared across stores."""
-
-    permission_classes = [IsDashboardUser]
     serializer_class = AdminProductAttributeSerializer
     queryset = ProductAttribute.objects.prefetch_related("values").order_by("order", "name")
     lookup_field = "public_id"
@@ -410,8 +405,7 @@ class AdminProductAttributeViewSet(viewsets.ModelViewSet):
         )
 
 
-class AdminProductAttributeValueViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsDashboardUser]
+class AdminProductAttributeValueViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
     serializer_class = AdminProductAttributeValueSerializer
     queryset = ProductAttributeValue.objects.select_related("attribute").order_by(
         "attribute", "order", "value"

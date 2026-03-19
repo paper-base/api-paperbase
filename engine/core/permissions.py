@@ -10,7 +10,8 @@ class IsOwnerOrReadOnly(BasePermission):
             return True
         owner = getattr(obj, 'user', None) or getattr(obj, 'customer', None)
         if owner is None:
-            return True
+            # Deny write when no owner field is present — fail closed.
+            return False
         user = request.user
         if not user.is_authenticated:
             return False

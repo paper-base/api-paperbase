@@ -1,3 +1,5 @@
+import uuid as _uuid
+
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
 from django.test import TestCase, RequestFactory
@@ -8,12 +10,81 @@ from rest_framework.test import APIClient
 from engine.apps.stores.models import Store, StoreMembership
 from engine.core.tenancy import resolve_store_from_host, get_active_store
 from engine.core.ids import generate_public_id
+from engine.core.models import ActivityLog
 from engine.apps.support.models import SupportTicket
 from engine.apps.products.models import Product, Category
-from engine.apps.cart.models import Cart, CartItem
+from engine.apps.orders.models import Order
 from engine.apps.customers.models import Customer, CustomerAddress
+from engine.apps.coupons.models import Coupon
+from engine.apps.cart.models import Cart, CartItem
 
 User = get_user_model()
+
+
+# ---------------------------------------------------------------------------
+# Shared test helpers
+# ---------------------------------------------------------------------------
+
+def _make_store(name, domain):
+    return Store.objects.create(
+        name=name, domain=domain,
+        owner_name=f"{name} Owner", owner_email=f"owner@{domain}",
+    )
+
+
+def _make_membership(user, store, role=StoreMembership.Role.OWNER):
+    return StoreMembership.objects.create(user=user, store=store, role=role)
+
+
+def _make_category(store, name="Cat", slug=None):
+    return Category.objects.create(
+        store=store, name=name, slug=slug or name.lower().replace(" ", "-"),
+    )
+
+
+def _make_product(store, category, name="Product", price=10, stock=5):
+    return Product.objects.create(
+        store=store, category=category, name=name, price=price, stock=stock,
+        status=Product.Status.ACTIVE, is_active=True,
+    )
+
+
+def _make_order(store, email="cust@example.com"):
+    """Create an order with a globally unique order number to avoid UNIQUE constraint errors."""
+    order_number = f"T{_uuid.uuid4().hex[:12].upper()}"
+    return Order.objects.create(store=store, order_number=order_number, email=email)
+
+
+def _make_customer(store, user):
+    return Customer.objects.create(store=store, user=user)
+
+
+def _make_coupon(store, code=None):
+    code = code or f"SAVE-{_uuid.uuid4().hex[:6].upper()}"
+    return Coupon.objects.create(store=store, code=code, discount_type="percentage", discount_value=10)
+
+
+def _ensure_default_plan():
+    """
+    Create a default billing plan if one doesn't exist.
+    Required for IsDashboardUser permission which checks _get_effective_plan().
+    """
+    from engine.apps.billing.models import Plan
+    plan, _ = Plan.objects.get_or_create(
+        name="test-default",
+        defaults={
+            "public_id": f"pln_{_uuid.uuid4().hex[:20]}",
+            "price": "0.00",
+            "billing_cycle": "monthly",
+            "is_default": True,
+            "is_active": True,
+            "features": {"limits": {}, "features": {}},
+        },
+    )
+    if not plan.is_default:
+        plan.is_default = True
+        plan.save(update_fields=["is_default"])
+    return plan
 
 
 # ---------------------------------------------------------------------------
@@ -138,6 +209,7 @@ class AuthStoreEndpointsTests(TestCase):
 class SupportTicketTests(TestCase):
     def setUp(self):
         self.client = APIClient()
+        _ensure_default_plan()
         self.store = Store.objects.create(
             name="Tenant Store",
             domain="tenant.local",
@@ -264,6 +336,7 @@ class PublicIdGenerationTests(TestCase):
 class PublicIdApiTests(TestCase):
     def setUp(self):
         self.client = APIClient()
+        _ensure_default_plan()
         self.store = Store.objects.create(
             name="API Test Store",
             domain="apitest.local",
@@ -593,4 +666,548 @@ class IdrSecurityTests(TestCase):
             resp_b.status_code,
             [404, 403],
             "User B should not be able to access User A's address",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Cross-tenant admin isolation
+# ---------------------------------------------------------------------------
+
+class CrossTenantAdminIsolationTests(TestCase):
+    """
+    Verify that admin endpoints (/api/v1/admin/...) are strictly scoped by
+    active store and cannot expose data across tenant boundaries.
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+        _ensure_default_plan()
+
+        self.store_a = _make_store("Admin Store A", "admin-a.local")
+        self.store_b = _make_store("Admin Store B", "admin-b.local")
+
+        self.admin_a = make_user("admin-a@example.com")
+        self.admin_b = make_user("admin-b@example.com")
+
+        _make_membership(self.admin_a, self.store_a, StoreMembership.Role.OWNER)
+        _make_membership(self.admin_b, self.store_b, StoreMembership.Role.OWNER)
+
+        self.cat_a = _make_category(self.store_a, "CatA", "cat-a")
+        self.cat_b = _make_category(self.store_b, "CatB", "cat-b")
+
+        self.product_a = _make_product(self.store_a, self.cat_a, name="Product A")
+        self.product_b = _make_product(self.store_b, self.cat_b, name="Product B")
+
+        self.order_a = _make_order(self.store_a, "cust-a@example.com")
+        self.order_b = _make_order(self.store_b, "cust-b@example.com")
+
+        self.customer_a = _make_customer(self.store_a, self.admin_a)
+        self.customer_b = _make_customer(self.store_b, self.admin_b)
+
+        self.ticket_a = SupportTicket.objects.create(
+            store=self.store_a, name="A", email="a@example.com", message="help"
+        )
+        self.ticket_b = SupportTicket.objects.create(
+            store=self.store_b, name="B", email="b@example.com", message="help"
+        )
+
+        self.coupon_a = _make_coupon(self.store_a)
+        self.coupon_b = _make_coupon(self.store_b)
+
+    def _auth_as(self, user, store):
+        self.client.force_authenticate(user=user)
+        self.client.credentials(HTTP_X_STORE_ID=store.public_id)
+
+    def _list_ids(self, resp):
+        """Extract identifiers from a list response, preferring 'id' then 'public_id'."""
+        results = resp.data.get("results", resp.data)
+        ids = []
+        for item in results:
+            ids.append(str(item.get("id") or item.get("public_id") or ""))
+        return ids
+
+    # ------------------------------------------------------------------
+    # Product isolation
+    # ------------------------------------------------------------------
+
+    def test_admin_product_list_isolated_by_store(self):
+        """Store A admin via /admin/products/ must only see store A's products."""
+        self._auth_as(self.admin_a, self.store_a)
+        resp = self.client.get("/api/v1/admin/products/")
+        self.assertEqual(resp.status_code, 200)
+        ids = self._list_ids(resp)
+        self.assertIn(str(self.product_a.id), ids)
+        self.assertNotIn(str(self.product_b.id), ids)
+
+    def test_admin_product_detail_cross_store_denied(self):
+        """Store A admin fetching store B's product UUID via /admin/products/ must get 404."""
+        self._auth_as(self.admin_a, self.store_a)
+        resp = self.client.get(f"/api/v1/admin/products/{self.product_b.public_id}/")
+        self.assertEqual(resp.status_code, 404)
+
+    # ------------------------------------------------------------------
+    # Order isolation
+    # ------------------------------------------------------------------
+
+    def test_admin_order_list_isolated_by_store(self):
+        """Store A admin must not see store B's orders."""
+        self._auth_as(self.admin_a, self.store_a)
+        resp = self.client.get("/api/v1/admin/orders/")
+        self.assertEqual(resp.status_code, 200)
+        ids = self._list_ids(resp)
+        self.assertIn(str(self.order_a.id), ids)
+        self.assertNotIn(str(self.order_b.id), ids)
+
+    def test_admin_order_detail_cross_store_denied(self):
+        """Store A admin fetching store B's order UUID returns 404."""
+        self._auth_as(self.admin_a, self.store_a)
+        resp = self.client.get(f"/api/v1/admin/orders/{self.order_b.pk}/")
+        self.assertEqual(resp.status_code, 404)
+
+    # ------------------------------------------------------------------
+    # Customer isolation
+    # ------------------------------------------------------------------
+
+    def test_admin_customer_list_isolated_by_store(self):
+        """Store A admin must not see store B's customers."""
+        self._auth_as(self.admin_a, self.store_a)
+        resp = self.client.get("/api/v1/admin/customers/")
+        self.assertEqual(resp.status_code, 200)
+        results = resp.data.get("results", resp.data)
+        public_ids = [item.get("public_id") or item.get("id") for item in results]
+        self.assertIn(self.customer_a.public_id, public_ids)
+        self.assertNotIn(self.customer_b.public_id, public_ids)
+
+    def test_admin_customer_detail_cross_store_denied(self):
+        """Store A admin fetching store B's customer returns 404."""
+        self._auth_as(self.admin_a, self.store_a)
+        resp = self.client.get(f"/api/v1/admin/customers/{self.customer_b.public_id}/")
+        self.assertEqual(resp.status_code, 404)
+
+    # ------------------------------------------------------------------
+    # Support ticket isolation
+    # ------------------------------------------------------------------
+
+    def test_admin_support_ticket_isolated_by_store(self):
+        """Store A admin must not see store B's support tickets."""
+        self._auth_as(self.admin_a, self.store_a)
+        resp = self.client.get("/api/v1/admin/support-tickets/")
+        self.assertEqual(resp.status_code, 200)
+        results = resp.data.get("results", resp.data)
+        public_ids = [item.get("public_id") or item.get("id") for item in results]
+        self.assertIn(self.ticket_a.public_id, public_ids)
+        self.assertNotIn(self.ticket_b.public_id, public_ids)
+
+    def test_admin_support_ticket_detail_cross_store_denied(self):
+        """Store A admin fetching store B's ticket returns 404."""
+        self._auth_as(self.admin_a, self.store_a)
+        resp = self.client.get(f"/api/v1/admin/support-tickets/{self.ticket_b.public_id}/")
+        self.assertEqual(resp.status_code, 404)
+
+    # ------------------------------------------------------------------
+    # Coupon isolation
+    # ------------------------------------------------------------------
+
+    def test_admin_coupon_isolated_by_store(self):
+        """Store A admin must not see store B's coupons."""
+        self._auth_as(self.admin_a, self.store_a)
+        resp = self.client.get("/api/v1/admin/coupons/")
+        self.assertEqual(resp.status_code, 200)
+        results = resp.data.get("results", resp.data)
+        public_ids = [item.get("public_id") or item.get("id") for item in results]
+        self.assertIn(self.coupon_a.public_id, public_ids)
+        self.assertNotIn(self.coupon_b.public_id, public_ids)
+
+    # ------------------------------------------------------------------
+    # Activity log isolation (Critical fix)
+    # ------------------------------------------------------------------
+
+    def test_admin_activity_log_isolated_by_store(self):
+        """
+        Store A admin must not see activity log entries from store B.
+        Validates the fix for the Critical vulnerability in AdminActivityLogViewSet.
+        """
+        ActivityLog.objects.create(
+            actor=self.admin_a, store=self.store_a,
+            action=ActivityLog.Action.CREATE, entity_type="product", summary="A log",
+        )
+        ActivityLog.objects.create(
+            actor=self.admin_b, store=self.store_b,
+            action=ActivityLog.Action.CREATE, entity_type="product", summary="B log",
+        )
+        self._auth_as(self.admin_a, self.store_a)
+        resp = self.client.get("/api/v1/admin/activities/")
+        self.assertEqual(resp.status_code, 200)
+        results = resp.data.get("results", resp.data)
+        summaries = [item.get("summary") for item in results]
+        self.assertIn("A log", summaries)
+        self.assertNotIn("B log", summaries)
+
+    # ------------------------------------------------------------------
+    # Null store context — must return empty, not all records
+    # ------------------------------------------------------------------
+
+    def test_admin_null_store_context_returns_empty_not_all(self):
+        """
+        When no store is resolved (no X-Store-ID, no JWT claim), admin list endpoints
+        must return empty results or deny access — never return all tenant records.
+        Validates the Critical null store passthrough fix.
+        Acceptable responses: 200 with empty list, or 403 (IsDashboardUser denies no-store context).
+        """
+        self.client.force_authenticate(user=self.admin_a)
+        # Deliberately send NO X-Store-ID header.
+        resp = self.client.get("/api/v1/admin/products/")
+        self.assertIn(
+            resp.status_code,
+            [200, 403],
+            "Null store context must return empty (200) or deny access (403), never leak all records",
+        )
+        if resp.status_code == 200:
+            results = resp.data.get("results", resp.data)
+            ids = [str(item.get("id") or item.get("public_id")) for item in results]
+            self.assertNotIn(
+                str(self.product_a.id),
+                ids,
+                "Null store context must never return tenant records",
+            )
+            self.assertNotIn(str(self.product_b.id), ids)
+
+    def test_admin_null_store_orders_returns_empty(self):
+        """No store context must yield empty order list or 403, never all tenants' orders."""
+        self.client.force_authenticate(user=self.admin_a)
+        resp = self.client.get("/api/v1/admin/orders/")
+        self.assertIn(resp.status_code, [200, 403])
+        if resp.status_code == 200:
+            results = resp.data.get("results", resp.data)
+            ids = [str(item.get("id")) for item in results]
+            self.assertNotIn(str(self.order_a.id), ids)
+            self.assertNotIn(str(self.order_b.id), ids)
+
+    def test_admin_null_store_customers_returns_empty(self):
+        """No store context must yield empty customer list or 403, never all tenants' customers."""
+        self.client.force_authenticate(user=self.admin_a)
+        resp = self.client.get("/api/v1/admin/customers/")
+        self.assertIn(resp.status_code, [200, 403])
+        if resp.status_code == 200:
+            results = resp.data.get("results", resp.data)
+            public_ids = [item.get("public_id") for item in results]
+            self.assertNotIn(self.customer_a.public_id, public_ids)
+            self.assertNotIn(self.customer_b.public_id, public_ids)
+
+
+# ---------------------------------------------------------------------------
+# Token tampering tests
+# ---------------------------------------------------------------------------
+
+class TokenTamperingTests(TestCase):
+    """
+    Verify that using Store A's token to access Store B's resources is blocked,
+    and that store-switching requires an active membership in the target store.
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+        _ensure_default_plan()
+
+        self.store_a = _make_store("Token Store A", "token-a.local")
+        self.store_b = _make_store("Token Store B", "token-b.local")
+
+        self.user_a = make_user("token-a@example.com")
+        # user_a has NO membership in store_b
+        _make_membership(self.user_a, self.store_a)
+
+    def test_store_a_token_cannot_access_store_b_admin_resources(self):
+        """
+        Authenticated user with membership only in store A must be denied
+        when sending X-Store-ID for store B (no membership).
+        """
+        cat_b = _make_category(self.store_b, "Cat B", "cat-b")
+        product_b = _make_product(self.store_b, cat_b, name="Product B")
+
+        self.client.force_authenticate(user=self.user_a)
+        # Force the store context to store_b via header — user has no membership there.
+        resp = self.client.get(
+            f"/api/v1/admin/products/{product_b.public_id}/",
+            HTTP_X_STORE_ID=self.store_b.public_id,
+        )
+        self.assertIn(
+            resp.status_code,
+            [403, 404],
+            "A user without membership in store B must be denied access to store B's resources",
+        )
+
+    def test_switch_store_requires_membership(self):
+        """
+        /auth/switch-store/ with a store the user has no membership in must fail.
+        """
+        self.client.force_authenticate(user=self.user_a)
+        resp = self.client.post(
+            "/api/v1/auth/switch-store/",
+            {"store_id": self.store_b.public_id},
+            format="json",
+        )
+        self.assertIn(
+            resp.status_code,
+            [400, 403],
+            "switch-store must be denied when the user has no membership in the target store",
+        )
+
+    def test_jwt_active_store_id_claim_is_verified_against_membership(self):
+        """
+        Even if the JWT carries an active_store_id claim for store_b,
+        the user must not be able to access store_b's resources without membership.
+        """
+        cat_b = _make_category(self.store_b, "Cat B2", "cat-b2")
+        product_b = _make_product(self.store_b, cat_b, name="Product B2")
+
+        # Authenticate as user_a scoped to store_a.
+        self.client.force_authenticate(user=self.user_a)
+        # Override store context to store_b via header.
+        resp = self.client.get(
+            "/api/v1/admin/products/",
+            HTTP_X_STORE_ID=self.store_b.public_id,
+        )
+        # With no membership, IsDashboardUser must deny access.
+        self.assertIn(resp.status_code, [200, 403])
+        if resp.status_code == 200:
+            results = resp.data.get("results", resp.data)
+            ids = [str(item["id"]) for item in results]
+            self.assertNotIn(
+                str(product_b.id),
+                ids,
+                "Products from store B must not appear for a user without store B membership",
+            )
+
+
+# ---------------------------------------------------------------------------
+# Role / Permission isolation tests
+# ---------------------------------------------------------------------------
+
+class RolePermissionIsolationTests(TestCase):
+    """
+    Verify that permissions are enforced per-role within a store.
+    STAFF must not be able to perform write/delete operations.
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+        _ensure_default_plan()
+        self.store = _make_store("Role Store", "role-store.local")
+
+        self.owner = make_user("role-owner@example.com")
+        self.staff = make_user("role-staff@example.com")
+        self.admin_user = make_user("role-admin@example.com")
+
+        _make_membership(self.owner, self.store, StoreMembership.Role.OWNER)
+        _make_membership(self.staff, self.store, StoreMembership.Role.STAFF)
+        _make_membership(self.admin_user, self.store, StoreMembership.Role.ADMIN)
+
+        self.cat = _make_category(self.store, "RoleCat", "role-cat")
+        self.product = _make_product(self.store, self.cat, name="Role Product")
+
+    def _auth_as(self, user):
+        self.client.force_authenticate(user=user)
+        self.client.credentials(HTTP_X_STORE_ID=self.store.public_id)
+
+    def test_staff_cannot_delete_products(self):
+        """STAFF role must receive 403 when attempting to delete a product."""
+        self._auth_as(self.staff)
+        resp = self.client.delete(f"/api/v1/admin/products/{self.product.public_id}/")
+        self.assertEqual(resp.status_code, 403, "STAFF must not be able to delete products")
+
+    def test_staff_cannot_update_products(self):
+        """STAFF role must receive 403 when attempting to update a product."""
+        self._auth_as(self.staff)
+        resp = self.client.patch(
+            f"/api/v1/admin/products/{self.product.public_id}/",
+            {"name": "Hacked Name"},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 403, "STAFF must not be able to update products")
+
+    def test_staff_can_read_products(self):
+        """STAFF role must be able to list and retrieve products (read-only)."""
+        self._auth_as(self.staff)
+        resp = self.client.get("/api/v1/admin/products/")
+        self.assertEqual(resp.status_code, 200)
+        resp2 = self.client.get(f"/api/v1/admin/products/{self.product.public_id}/")
+        self.assertEqual(resp2.status_code, 200)
+
+    def test_admin_can_delete_products(self):
+        """ADMIN role must be able to delete products."""
+        self._auth_as(self.admin_user)
+        resp = self.client.delete(f"/api/v1/admin/products/{self.product.public_id}/")
+        self.assertEqual(resp.status_code, 204, "ADMIN must be able to delete products")
+
+    def test_staff_cannot_update_store_branding(self):
+        """STAFF role must receive 403 when attempting to update store branding."""
+        self._auth_as(self.staff)
+        resp = self.client.patch(
+            "/api/v1/admin/branding/",
+            {"admin_name": "Hacked Name"},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 403, "STAFF must not be able to update store branding")
+
+    def test_staff_cannot_delete_orders(self):
+        """STAFF role must receive 403 when attempting to delete an order."""
+        order = _make_order(self.store)
+        self._auth_as(self.staff)
+        resp = self.client.delete(f"/api/v1/admin/orders/{order.pk}/")
+        self.assertEqual(resp.status_code, 403, "STAFF must not be able to delete orders")
+
+
+# ---------------------------------------------------------------------------
+# ID enumeration (IDOR) tests
+# ---------------------------------------------------------------------------
+
+class IDEnumerationTests(TestCase):
+    """
+    Verify that incrementing or enumerating IDs/UUIDs across stores is blocked
+    by store-level access controls in admin endpoints.
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+        _ensure_default_plan()
+
+        self.store_a = _make_store("IDOR Store A", "idor-a.local")
+        self.store_b = _make_store("IDOR Store B", "idor-b.local")
+
+        self.admin_a = make_user("idor-a@example.com")
+        self.admin_b = make_user("idor-b@example.com")
+
+        _make_membership(self.admin_a, self.store_a)
+        _make_membership(self.admin_b, self.store_b)
+
+        cat_a = _make_category(self.store_a, "IDA Cat", "ida-cat")
+        cat_b = _make_category(self.store_b, "IDB Cat", "idb-cat")
+
+        self.product_a = _make_product(self.store_a, cat_a, name="IDOR Product A")
+        self.product_b = _make_product(self.store_b, cat_b, name="IDOR Product B")
+
+        self.order_a = _make_order(self.store_a)
+        self.order_b = _make_order(self.store_b)
+
+        self.customer_b = _make_customer(self.store_b, self.admin_b)
+
+    def _auth_as(self, user, store):
+        self.client.force_authenticate(user=user)
+        self.client.credentials(HTTP_X_STORE_ID=store.public_id)
+
+    def test_cannot_access_cross_store_product_by_uuid(self):
+        """
+        Store A admin cannot retrieve store B's product by UUID via admin endpoint.
+        Validates IDOR protection on /admin/products/{public_id}/.
+        """
+        self._auth_as(self.admin_a, self.store_a)
+        resp = self.client.get(f"/api/v1/admin/products/{self.product_b.public_id}/")
+        self.assertEqual(
+            resp.status_code, 404,
+            "Store A admin must not access store B's product by public_id",
+        )
+
+    def test_cannot_access_cross_store_order_by_uuid(self):
+        """
+        Store A admin cannot retrieve store B's order by UUID via admin endpoint.
+        Validates IDOR protection on /admin/orders/{pk}/.
+        """
+        self._auth_as(self.admin_a, self.store_a)
+        resp = self.client.get(f"/api/v1/admin/orders/{self.order_b.pk}/")
+        self.assertEqual(
+            resp.status_code, 404,
+            "Store A admin must not access store B's order by UUID",
+        )
+
+    def test_cannot_access_cross_store_customer_by_public_id(self):
+        """
+        Store A admin cannot retrieve store B's customer by public_id.
+        Validates IDOR protection on /admin/customers/{public_id}/.
+        """
+        self._auth_as(self.admin_a, self.store_a)
+        resp = self.client.get(f"/api/v1/admin/customers/{self.customer_b.public_id}/")
+        self.assertEqual(
+            resp.status_code, 404,
+            "Store A admin must not access store B's customer by public_id",
+        )
+
+    def test_storefront_product_access_denied_cross_store(self):
+        """
+        Storefront product detail endpoint enforces store scoping via host header.
+        Store A host cannot retrieve store B's product UUID or slug.
+        """
+        resp = self.client.get(
+            f"/api/v1/products/{self.product_b.id}/",
+            HTTP_HOST="idor-a.local",
+        )
+        self.assertEqual(
+            resp.status_code, 404,
+            "Storefront must not expose cross-store product by UUID",
+        )
+
+
+# ---------------------------------------------------------------------------
+# File storage isolation tests
+# ---------------------------------------------------------------------------
+
+class FileStorageIsolationTests(TestCase):
+    """
+    Document and assert expected file path isolation for uploaded media.
+
+    NOTE: Currently product/category images use flat paths (products/, categories/)
+    shared across all tenants, making paths guessable across stores. Only support
+    ticket attachments use per-store isolation (store_{id}/support/...).
+
+    These tests document the isolation posture and will fail if the flat paths
+    are inadvertently changed to cross-store paths.
+    """
+
+    def setUp(self):
+        self.store_a = _make_store("File Store A", "file-a.local")
+        self.store_b = _make_store("File Store B", "file-b.local")
+
+    def test_support_ticket_attachment_path_is_store_scoped(self):
+        """
+        Support ticket attachment upload path must include the store ID,
+        providing isolation between tenants.
+        """
+        from engine.apps.support.models import SupportTicketAttachment, SupportTicket
+        ticket = SupportTicket.objects.create(
+            store=self.store_a, name="Test", email="t@t.com", message="m"
+        )
+        path_fn = SupportTicketAttachment.file.field.upload_to
+        # upload_to is a callable or string; resolve the expected path pattern.
+        if callable(path_fn):
+            # Simulate with a mock instance.
+            import types
+            fake_instance = types.SimpleNamespace(
+                ticket=ticket,
+                ticket_id=ticket.pk,
+            )
+            computed_path = path_fn(fake_instance, "attachment.pdf")
+            self.assertIn(
+                str(self.store_a.id),
+                computed_path,
+                "Support ticket attachment path must include store_id for isolation",
+            )
+        else:
+            # String upload_to — just check it contains 'support'
+            self.assertIn("support", str(path_fn))
+
+    def test_product_image_path_is_not_store_scoped(self):
+        """
+        Documents the Low-severity finding: product images use a flat 'products/'
+        path with no per-store prefix. A URL is guessable across tenants.
+        This test documents the current (insecure) posture and must be updated
+        when per-store product image paths are implemented.
+        """
+        from engine.apps.products.models import ProductImage
+        image_upload_to = ProductImage.image.field.upload_to
+        path_str = image_upload_to if isinstance(image_upload_to, str) else "products/"
+        # Currently this path is flat — does NOT include store context.
+        self.assertNotIn(
+            "store_",
+            path_str,
+            "KNOWN LOW SEVERITY: product image paths are not store-scoped. "
+            "Update this test when per-store paths are implemented.",
         )

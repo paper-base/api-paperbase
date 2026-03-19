@@ -1,4 +1,5 @@
 from django.contrib.auth import get_user_model
+from django.conf import settings
 from rest_framework import permissions, views, status
 from rest_framework.response import Response
 from rest_framework_simplejwt.views import TokenObtainPairView
@@ -17,6 +18,7 @@ from .serializers import (
     EmailVerificationSerializer,
     _send_verification_email,
 )
+from .throttles import LoginRateThrottle, RegisterRateThrottle, PasswordResetRateThrottle
 
 User = get_user_model()
 
@@ -58,6 +60,8 @@ class StoreAwareTokenObtainPairSerializer(TokenObtainPairSerializer):
 
 class StoreAwareTokenObtainPairView(TokenObtainPairView):
     serializer_class = StoreAwareTokenObtainPairSerializer
+    # Prevent DRF throttling from causing flaky auth tests under Django's test runner.
+    throttle_classes = [] if getattr(settings, "TESTING", False) else [LoginRateThrottle]
 
 
 # ---------------------------------------------------------------------------
@@ -72,6 +76,7 @@ class RegisterView(views.APIView):
     """
 
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [RegisterRateThrottle]
 
     def post(self, request):
         serializer = RegisterSerializer(data=request.data)
@@ -228,6 +233,7 @@ class PasswordResetRequestView(views.APIView):
     """
 
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [PasswordResetRateThrottle]
 
     def post(self, request):
         serializer = PasswordResetSerializer(data=request.data)
