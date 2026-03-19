@@ -207,3 +207,31 @@ DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "no-reply@yourplatform.com"
 # Base URL sent in password-reset / email-verification links.
 # Frontend must handle /reset-password?uid=...&token=... and /verify-email?uid=...&token=...
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
+
+# ---------------------------------------------------------------------------
+# Celery (async background jobs)
+# ---------------------------------------------------------------------------
+# For local development you can run a worker with:
+#   celery -A config.celery worker -l info
+#
+# NOTE: This repo does not include a Celery worker container by default.
+# In production, run workers separately and provide a real Redis broker.
+
+CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
+CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", CELERY_BROKER_URL)
+
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+
+CELERY_TIMEZONE = TIME_ZONE
+
+# When running tests or in local dev, it can be convenient to execute tasks
+# synchronously in-process.
+_always_eager_env = os.getenv("CELERY_TASK_ALWAYS_EAGER")
+CELERY_TASK_ALWAYS_EAGER = (
+    (_always_eager_env is not None and _always_eager_env.lower() in {"1", "true", "yes"})
+    or TESTING
+    or DEBUG
+)
+

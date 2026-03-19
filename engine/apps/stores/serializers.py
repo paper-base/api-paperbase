@@ -59,3 +59,26 @@ class StoreMembershipSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "created_at", "user_email", "user_username", "store_name", "store_public_id"]
 
+
+class DeleteStoreRequestSerializer(serializers.Serializer):
+    """
+    Payload for destructive store deletion.
+
+    We intentionally do NOT trim whitespace so backend validations can enforce
+    exact-match behavior that aligns with the frontend safeguards.
+    """
+
+    account_email = serializers.CharField(required=True, trim_whitespace=False)
+    store_name = serializers.CharField(required=True, trim_whitespace=False)
+
+    def validate(self, attrs):
+        account_email = attrs["account_email"]
+        store_name = attrs["store_name"]
+
+        if not account_email or not account_email.strip():
+            raise serializers.ValidationError({"account_email": "account_email is required."})
+        if not store_name or not store_name.strip():
+            raise serializers.ValidationError({"store_name": "store_name is required."})
+
+        return attrs
+

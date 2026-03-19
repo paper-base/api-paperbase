@@ -2,13 +2,19 @@ from django.contrib.auth import get_user_model
 from rest_framework import viewsets, mixins, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from config.permissions import IsPlatformRequest, IsStoreAdmin, IsStoreStaff
-from engine.apps.billing.feature_gate import get_feature_config
+from engine.apps.billing.feature_gate import get_feature_config, get_limit
 from engine.core.tenancy import get_active_store
 
-from .models import Store, StoreMembership, StoreSettings
-from .serializers import StoreSerializer, StoreMembershipSerializer, StoreSettingsSerializer
+from .models import Store, StoreDeletionJob, StoreMembership, StoreSettings
+from .serializers import (
+    DeleteStoreRequestSerializer,
+    StoreSerializer,
+    StoreMembershipSerializer,
+    StoreSettingsSerializer,
+)
 
 User = get_user_model()
 
@@ -160,6 +166,14 @@ class StoreSettingsViewSet(
     permission_classes = [permissions.IsAuthenticated, IsStoreStaff]
     serializer_class = StoreSettingsSerializer
 
+    def get_permissions(self):
+        # After store deactivation, `IsStoreStaff` would deny access because the
+        # membership is set to `is_active=False`. Deletion endpoints must remain
+        # reachable so the frontend can poll progress and complete redirect.
+        if self.action in {"delete_store", "delete_status"}:
+            return [permissions.IsAuthenticated()]
+        return [permissions.IsAuthenticated(), IsStoreStaff()]
+
     def get_object(self):
         ctx = get_active_store(self.request)
         store = ctx.store
@@ -179,4 +193,122 @@ class StoreSettingsViewSet(
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(serializer.data)
+
+    @action(detail=False, methods=["post"], url_path="delete")
+    def delete_store(self, request):
+        """
+        Irreversibly delete the active store (irreversible on the DB level),
+        but return immediately after enqueueing a Celery job.
+
+        Security: backend performs strict exact-match validation (email + store name)
+        and requires OWNER role.
+        """
+
+        serializer = DeleteStoreRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        ctx = get_active_store(request)
+        store = ctx.store
+        membership = ctx.membership
+        if not store or not membership:
+            return Response({"detail": "No active store."}, status=status.HTTP_403_FORBIDDEN)
+
+        if membership.role != StoreMembership.Role.OWNER:
+            return Response(
+                {"detail": "Only the store owner can delete the store."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        account_email = serializer.validated_data["account_email"]
+        store_name = serializer.validated_data["store_name"]
+        if request.user.email != account_email or store.name != store_name:
+            return Response(
+                {"detail": "Invalid confirmation inputs."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        max_stores = get_limit(request.user, "max_stores")
+        if max_stores <= 1:
+            redirect_route = "/onboarding"
+            next_store_public_id = None
+        else:
+            # Premium: if the user has another active owned store, switch to it.
+            other_store = (
+                Store.objects.filter(
+                    memberships__user=request.user,
+                    memberships__role=StoreMembership.Role.OWNER,
+                    memberships__is_active=True,
+                    is_active=True,
+                )
+                .exclude(id=store.id)
+                .order_by("created_at")
+                .first()
+            )
+            redirect_route = "/" if other_store else "/onboarding"
+            next_store_public_id = other_store.public_id if other_store else None
+
+        # Deactivate immediately so the store cannot be accessed while deletion runs.
+        store.is_active = False
+        store.save(update_fields=["is_active"])
+        StoreMembership.objects.filter(user=request.user, store=store, is_active=True).update(
+            is_active=False
+        )
+
+        # Create a progress-tracked job row.
+        job = StoreDeletionJob.objects.create(
+            user=request.user,
+            store_public_id_snapshot=store.public_id,
+            store_id_snapshot=store.id,
+            status=StoreDeletionJob.Status.PENDING,
+            current_step=StoreDeletionJob.STEP_REMOVING_ORDERS,
+            redirect_route=redirect_route,
+            next_store_public_id=next_store_public_id,
+        )
+
+        # Enqueue irreversible hard delete.
+        from .tasks import hard_delete_store
+
+        async_result = hard_delete_store.delay(job.id)
+        job.celery_task_id = async_result.id
+        job.save(update_fields=["celery_task_id"])
+
+        # Re-issue JWT(s) for post-deletion navigation context.
+        refresh = RefreshToken.for_user(request.user)
+        access = refresh.access_token
+        if next_store_public_id:
+            refresh["active_store_id"] = next_store_public_id
+            access["active_store_id"] = next_store_public_id
+
+        return Response(
+            {
+                "job_id": job.id,
+                "access": str(access),
+                "refresh": str(refresh),
+                "redirect_route": redirect_route,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    @action(detail=False, methods=["get"], url_path="delete-status")
+    def delete_status(self, request):
+        """
+        Fetch deletion progress for a job id (user-scoped).
+        """
+
+        job_id = request.query_params.get("job_id")
+        if not job_id:
+            return Response({"detail": "job_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        job = StoreDeletionJob.objects.filter(id=job_id, user=request.user).first()
+        if not job:
+            return Response({"detail": "Job not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        return Response(
+            {
+                "status": job.status,
+                "current_step": job.current_step,
+                "error_message": job.error_message or None,
+            },
+            status=status.HTTP_200_OK,
+        )
 

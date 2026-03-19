@@ -133,3 +133,70 @@ class StoreMembership(models.Model):
     def __str__(self) -> str:
         return f"{self.user} @ {self.store} ({self.get_role_display()})"
 
+
+class StoreDeletionJob(models.Model):
+    """
+    Track irreversible store deletion progress for the initiating user.
+
+    IMPORTANT: this model intentionally stores store identifiers as snapshots
+    (instead of FKs) so the job remains queryable even after the store is hard-deleted.
+    """
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        RUNNING = "running", "Running"
+        SUCCESS = "success", "Success"
+        FAILED = "failed", "Failed"
+
+    # Step strings returned to the frontend (kept stable for UI).
+    STEP_REMOVING_ORDERS = "Removing orders..."
+    STEP_CLEARING_CUSTOMERS = "Clearing customer data..."
+    STEP_DELETING_PRODUCTS = "Deleting products..."
+    STEP_DELETING_ANALYTICS = "Deleting analytics..."
+    STEP_FINALIZING = "Finalizing..."
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="store_deletion_jobs",
+    )
+
+    store_public_id_snapshot = models.CharField(
+        max_length=32,
+        db_index=True,
+        help_text="Store public_id snapshot taken at deletion request time.",
+    )
+    store_id_snapshot = models.BigIntegerField(
+        db_index=True,
+        help_text="Store primary key snapshot taken at deletion request time.",
+    )
+
+    celery_task_id = models.CharField(max_length=255, blank=True, null=True, db_index=True)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING, db_index=True)
+    current_step = models.CharField(max_length=120, blank=True, default="")
+
+    redirect_route = models.CharField(
+        max_length=64,
+        default="/onboarding",
+        help_text="Frontend route to redirect after deletion is finalized.",
+    )
+    next_store_public_id = models.CharField(
+        max_length=32,
+        blank=True,
+        null=True,
+        help_text="Optional next active store public_id for the issuing JWTs.",
+    )
+    error_message = models.TextField(blank=True, default="")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["user", "status"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"StoreDeletionJob({self.store_public_id_snapshot})[{self.status}]"
+
