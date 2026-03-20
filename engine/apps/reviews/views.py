@@ -10,16 +10,16 @@ from .serializers import ReviewSerializer, ReviewCreateSerializer
 
 
 class ReviewListByProductView(ListAPIView):
-    """List approved reviews for a product. GET /api/v1/reviews/?product_id=<uuid>"""
+    """List approved reviews for a product. GET /api/v1/reviews/?product_public_id=<public_id>"""
     serializer_class = ReviewSerializer
     permission_classes = [IsAuthenticatedOrReadOnly]
 
     def get_queryset(self):
-        product_id = self.request.query_params.get('product_id')
-        if not product_id:
+        product_public_id = self.request.query_params.get('product_public_id')
+        if not product_public_id:
             return Review.objects.none()
         return Review.objects.filter(
-            product_id=product_id,
+            product__public_id=product_public_id,
             status=Review.Status.APPROVED,
         ).select_related('user').order_by('-created_at')
 
@@ -34,15 +34,15 @@ class ReviewCreateView(CreateAPIView):
 
 
 class ReviewRatingSummaryView(APIView):
-    """GET /api/v1/reviews/summary/?product_id=<uuid> -> { average_rating, count }"""
+    """GET /api/v1/reviews/summary/?product_public_id=<public_id> -> { average_rating, count }"""
     permission_classes = [IsAuthenticatedOrReadOnly]
 
     def get(self, request):
-        product_id = request.query_params.get('product_id')
-        if not product_id:
+        product_public_id = request.query_params.get('product_public_id')
+        if not product_public_id:
             return Response({'average_rating': None, 'count': 0})
         agg = Review.objects.filter(
-            product_id=product_id,
+            product__public_id=product_public_id,
             status=Review.Status.APPROVED,
         ).aggregate(avg=Avg('rating'), count=Count('id'))
         return Response({

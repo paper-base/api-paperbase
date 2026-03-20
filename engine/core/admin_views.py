@@ -35,6 +35,7 @@ class AdminActivityLogViewSet(
 ):
     permission_classes = [IsDashboardUser]
     serializer_class = AdminActivityLogSerializer
+    lookup_field = "public_id"
     queryset = ActivityLog.objects.select_related("actor").all()
 
     def get_queryset(self):
@@ -56,7 +57,7 @@ class AdminActivityLogViewSet(
 
         actor = (params.get("actor") or "").strip()
         if actor:
-            qs = qs.filter(actor_id=actor)
+            qs = qs.filter(actor__public_id=actor)
 
         q = (params.get("q") or "").strip()
         if q:

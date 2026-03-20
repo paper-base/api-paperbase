@@ -261,9 +261,10 @@ class AdminOrderUpdateSerializer(serializers.ModelSerializer):
                 return instance
         except serializers.ValidationError:
             raise
-        except Exception as e:
-            # Convert unexpected exceptions into a safe error response (prevents opaque 500s).
-            raise serializers.ValidationError({"detail": str(e)})
+        except Exception:
+            raise serializers.ValidationError(
+                {"detail": "An unexpected error occurred. Please try again."}
+            )
 
 
 class AdminOrderItemWriteSerializer(serializers.Serializer):

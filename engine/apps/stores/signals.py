@@ -9,5 +9,5 @@ from .services import sync_store_owner_to_user
 
 @receiver(post_save, sender=Store)
 def sync_store_owner_on_save(sender, instance, **kwargs):
-    """When Store owner_name or owner_email changes, sync to the owner User."""
+    """When Store owner_name changes, sync to the owner User."""
     sync_store_owner_to_user(instance)

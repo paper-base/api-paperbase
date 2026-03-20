@@ -27,7 +27,7 @@ class AdminInventoryViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
         return qs.filter(product__store=ctx.store)
 
     @action(detail=True, methods=['post'])
-    def adjust(self, request, pk=None):
+    def adjust(self, request, public_id=None):
         """Adjust stock by a delta. Body: { "change": 5, "reason": "restock", "reference": "" }"""
         inventory = self.get_object()
         change = request.data.get('change')
@@ -47,6 +47,7 @@ class AdminInventoryViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
 class AdminStockMovementViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [IsDashboardUser]
     serializer_class = StockMovementSerializer
+    lookup_field = "public_id"
     queryset = StockMovement.objects.select_related('inventory__product', 'inventory__variant', 'actor').order_by('-created_at')
 
     def get_queryset(self):

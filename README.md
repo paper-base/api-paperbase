@@ -73,9 +73,9 @@ core/
 | **Shipping** |
 | GET | `/api/v1/shipping/options/?country=US&order_total=99` | no | Shipping options and prices |
 | **Reviews** |
-| GET | `/api/v1/reviews/?product_id=<uuid>` | no | Approved reviews for product |
+| GET | `/api/v1/reviews/?product_public_id=<public_id>` | no | Approved reviews for product |
 | POST | `/api/v1/reviews/create/` | JWT | Create review |
-| GET | `/api/v1/reviews/summary/?product_id=<uuid>` | no | Rating summary |
+| GET | `/api/v1/reviews/summary/?product_public_id=<public_id>` | no | Rating summary |
 | **Customers** |
 | GET / PATCH | `/api/v1/customers/me/` | JWT | Profile |
 | GET / POST | `/api/v1/customers/addresses/` | JWT | Addresses |

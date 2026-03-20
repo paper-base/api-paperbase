@@ -5,9 +5,9 @@ from engine.core.ids import generate_public_id
 
 
 def support_attachment_upload_to(instance: "SupportTicketAttachment", filename: str) -> str:
-    store_id = getattr(instance.ticket, "store_id", "unknown")
-    ticket_id = getattr(instance.ticket, "id", "unknown")
-    return f"store_{store_id}/support/tickets/{ticket_id}/{filename}"
+    store_pub = getattr(instance.ticket.store, "public_id", "unknown")
+    ticket_pub = getattr(instance.ticket, "public_id", "unknown")
+    return f"store_{store_pub}/support/tickets/{ticket_pub}/{filename}"
 
 
 class SupportTicket(models.Model):
@@ -72,6 +72,10 @@ class SupportTicket(models.Model):
 
 
 class SupportTicketAttachment(models.Model):
+    public_id = models.CharField(
+        max_length=32, unique=True, db_index=True, editable=False,
+        help_text="Non-sequential public identifier (e.g. ath_xxx).",
+    )
     ticket = models.ForeignKey(
         SupportTicket,
         on_delete=models.CASCADE,
@@ -82,6 +86,11 @@ class SupportTicketAttachment(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+
+    def save(self, *args, **kwargs):
+        if not self.public_id:
+            self.public_id = generate_public_id("attachment")
+        super().save(*args, **kwargs)
 
     def __str__(self) -> str:
         return f"Attachment for ticket {self.ticket_id}"

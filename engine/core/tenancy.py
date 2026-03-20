@@ -51,21 +51,13 @@ def get_active_store(request: HttpRequest) -> ActiveStoreContext:
     store: Optional[Store] = None
     membership: Optional[StoreMembership] = None
 
-    # 1) Explicit header — public_id only (sequential integer PK fallback removed).
+    # 1) Explicit header — public_id only.
     header_store_id = request.headers.get("X-Store-ID") or request.headers.get("x-store-id")
     if header_store_id:
         try:
             store = Store.objects.get(public_id=header_store_id, is_active=True)
         except (Store.DoesNotExist, ValueError):
             store = None
-
-        # Backward compatibility: during migration, allow integer PK in header.
-        if store is None:
-            try:
-                store_pk = int(str(header_store_id))
-                store = Store.objects.get(id=store_pk, is_active=True)
-            except (Store.DoesNotExist, ValueError, TypeError):
-                store = None
 
     # 2) JWT claim `active_store_id` — public_id only.
     # In DRF SimpleJWT, the validated token is available as `request.auth`.

@@ -510,13 +510,8 @@ class BrandingView(APIView):
             val = (request.data.get('owner_name') or '').strip()[:255]
             if val:
                 store.owner_name = val
-        if 'owner_email' in request.data:
-            # Update store contact email only — do NOT propagate to User.email.
-            # The post_save signal that synced store.owner_email → User.email has
-            # been intentionally disconnected to prevent silent account takeover.
-            val = (request.data.get('owner_email') or '').strip()[:254]
-            if val and '@' in val:
-                store.owner_email = val
+        # owner_email is read-only from the dashboard; only admins can change
+        # it via Django admin (which syncs User.email → Store.owner_email).
         if 'currency_symbol' in request.data:
             store.currency_symbol = (request.data.get('currency_symbol') or '৳').strip()[:10]
         if 'store_type' in request.data:

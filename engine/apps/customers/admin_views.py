@@ -78,7 +78,7 @@ class AdminCustomerAddressViewSet(StoreRolePermissionMixin, viewsets.ModelViewSe
         if not ctx.store:
             return qs.none()
         qs = qs.filter(customer__store=ctx.store)
-        customer_id = self.request.query_params.get("customer")
-        if customer_id:
-            qs = qs.filter(customer_id=customer_id)
+        customer_public_id = self.request.query_params.get("customer")
+        if customer_public_id:
+            qs = qs.filter(customer__public_id=customer_public_id)
         return qs

@@ -184,7 +184,7 @@ class MeSerializer(serializers.ModelSerializer):
         )
         return [
             {
-                "id": m.store.public_id,
+                "public_id": m.store.public_id,
                 "name": m.store.name,
                 "domain": m.store.domain,
                 "role": m.get_role_display(),

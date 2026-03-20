@@ -92,6 +92,27 @@ class StoreUserAdmin(BaseUserAdmin):
         obj.is_superuser = False
         super().save_model(request, obj, form, change)
 
+        if change and "email" in form.changed_data:
+            self._sync_email_to_owned_stores(obj)
+
+    @staticmethod
+    def _sync_email_to_owned_stores(user):
+        """Propagate User.email to Store.owner_email for every store the user owns."""
+        from engine.apps.stores.models import StoreMembership
+
+        owned_store_ids = StoreMembership.objects.filter(
+            user=user,
+            role=StoreMembership.Role.OWNER,
+            is_active=True,
+        ).values_list("store_id", flat=True)
+
+        if owned_store_ids:
+            from engine.apps.stores.models import Store
+
+            Store.objects.filter(id__in=owned_store_ids).update(
+                owner_email=user.email,
+            )
+
 
 # ---------------------------------------------------------------------------
 # Unregister the base User from admin — the two proxy sections replace it
