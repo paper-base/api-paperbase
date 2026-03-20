@@ -1,9 +1,13 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
+from django.db.models import CharField, OuterRef, Subquery, Value
+from django.db.models.functions import Coalesce
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 from .models import User, SuperUser, StoreUser
 from engine.apps.billing.admin import billing_user_actions
+from engine.apps.billing.models import Plan, Subscription
 
 
 # ---------------------------------------------------------------------------
@@ -74,14 +78,46 @@ class SuperUserAdmin(BaseUserAdmin):
 @admin.register(StoreUser)
 class StoreUserAdmin(BaseUserAdmin):
     list_display = [
-        "email", "public_id", "full_name", "is_verified",
-        "is_active", "store_count", "date_joined",
+        "email",
+        "public_id",
+        "full_name",
+        "subscription_plan_display",
+        "is_verified",
+        "is_active",
+        "store_count",
+        "date_joined",
     ]
     list_filter = ["is_active", "is_verified"]
     actions = billing_user_actions
 
     def get_queryset(self, request):
-        return super().get_queryset(request).filter(is_superuser=False)
+        qs = super().get_queryset(request).filter(is_superuser=False)
+        today = timezone.localdate()
+        default_plan_name = (
+            Plan.objects.filter(is_default=True, is_active=True)
+            .values_list("name", flat=True)
+            .first()
+        ) or "—"
+        active_plan_sq = (
+            Subscription.objects.filter(
+                user_id=OuterRef("pk"),
+                status=Subscription.Status.ACTIVE,
+                end_date__gte=today,
+            )
+            .order_by("-created_at")
+            .values("plan__name")[:1]
+        )
+        return qs.annotate(
+            _effective_plan_name=Coalesce(
+                Subquery(active_plan_sq, output_field=CharField()),
+                Value(default_plan_name),
+                output_field=CharField(),
+            )
+        )
+
+    @admin.display(description="Plan", ordering="_effective_plan_name")
+    def subscription_plan_display(self, obj):
+        return getattr(obj, "_effective_plan_name", "—")
 
     @admin.display(description="Stores")
     def store_count(self, obj):
