@@ -170,6 +170,14 @@ class StoreSettingsViewSet(
     permission_classes = [permissions.IsAuthenticated, IsStoreStaff]
     serializer_class = StoreSettingsSerializer
 
+    def get_serializer_context(self):
+        ctx = super().get_serializer_context()
+        req = self.request
+        store_ctx = get_active_store(req)
+        ctx["store"] = store_ctx.store if store_ctx else None
+        ctx["membership"] = store_ctx.membership if store_ctx else None
+        return ctx
+
     def get_permissions(self):
         # After store deactivation, `IsStoreStaff` would deny access because the
         # membership is set to `is_active=False`. Deletion endpoints must remain

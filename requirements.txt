@@ -9,3 +9,4 @@ celery
 redis
 cryptography>=43.0
 requests>=2.31
+python-dotenv>=1.0,<2

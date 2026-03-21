@@ -5,11 +5,12 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.tokens import default_token_generator
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.core.mail import send_mail
 from django.utils.encoding import force_bytes, force_str
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from rest_framework import serializers
 
+from engine.apps.emails.constants import EMAIL_VERIFICATION, PASSWORD_RESET
+from engine.apps.emails.tasks import send_email_task
 from engine.apps.stores.models import StoreMembership
 from .two_factor_service import disable_2fa
 
@@ -32,21 +33,37 @@ def _user_from_uid(uid):
         return None
 
 
+def _user_eligible_for_public_password_reset(email: str):
+    """
+    Dashboard / tenant users only: active StoreMembership, not Django staff/superuser.
+    Returns None if no such user (silent — used for unauthenticated reset).
+    """
+    return (
+        User.objects.filter(
+            email__iexact=email.strip().lower(),
+            is_active=True,
+            is_superuser=False,
+            is_staff=False,
+            store_memberships__is_active=True,
+        )
+        .distinct()
+        .first()
+    )
+
+
 def _send_verification_email(user, request=None):
     uid = _uid_for(user)
     token = default_token_generator.make_token(user)
     frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:3000")
-    link = f"{frontend_url}/verify-email?uid={uid}&token={token}"
-    send_mail(
-        subject="Verify your email address",
-        message=(
-            f"Hi {user.get_short_name() or user.email},\n\n"
-            f"Please verify your email by visiting:\n{link}\n\n"
-            "This link expires in 3 days."
-        ),
-        from_email=settings.DEFAULT_FROM_EMAIL,
-        recipient_list=[user.email],
-        fail_silently=False,
+    link = f"{frontend_url}/auth/verify-email?uid={uid}&token={token}"
+    send_email_task.delay(
+        EMAIL_VERIFICATION,
+        user.email,
+        {
+            "user_name": user.get_short_name() or user.email,
+            "user_email": user.email,
+            "verification_link": link,
+        },
     )
 
 
@@ -54,17 +71,15 @@ def _send_password_reset_email(user):
     uid = _uid_for(user)
     token = default_token_generator.make_token(user)
     frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:3000")
-    link = f"{frontend_url}/reset-password?uid={uid}&token={token}"
-    send_mail(
-        subject="Reset your password",
-        message=(
-            f"Hi {user.get_short_name() or user.email},\n\n"
-            f"Reset your password by visiting:\n{link}\n\n"
-            "This link expires in 1 hour. If you didn't request this, ignore this email."
-        ),
-        from_email=settings.DEFAULT_FROM_EMAIL,
-        recipient_list=[user.email],
-        fail_silently=False,
+    link = f"{frontend_url}/auth/password-reset/confirm?uid={uid}&token={token}"
+    send_email_task.delay(
+        PASSWORD_RESET,
+        user.email,
+        {
+            "user_name": user.get_short_name() or user.email,
+            "user_email": user.email,
+            "reset_link": link,
+        },
     )
 
 
@@ -244,11 +259,9 @@ class PasswordResetSerializer(serializers.Serializer):
 
     def save(self, **kwargs):
         email = self.validated_data["email"].strip().lower()
-        try:
-            user = User.objects.get(email__iexact=email, is_active=True)
+        user = _user_eligible_for_public_password_reset(email)
+        if user is not None:
             _send_password_reset_email(user)
-        except User.DoesNotExist:
-            pass  # Silently ignore — don't reveal whether the email exists
 
 
 class PasswordResetConfirmSerializer(serializers.Serializer):
@@ -349,4 +362,14 @@ class TwoFactorDisableSerializer(serializers.Serializer):
 
 
 class TwoFactorChallengeVerifySerializer(OTPCodeSerializer):
-    challenge_id = serializers.CharField(required=True)
+    challenge_public_id = serializers.CharField(required=True)
+
+
+class TwoFactorRecoveryVerifySerializer(serializers.Serializer):
+    code = serializers.CharField(required=True, max_length=64)
+
+    def validate_code(self, value):
+        normalized = "".join((value or "").split()).upper()
+        if len(normalized) != 8 or not all(c in "0123456789ABCDEF" for c in normalized):
+            raise serializers.ValidationError("Enter the 8-character recovery code.")
+        return normalized

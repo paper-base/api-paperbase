@@ -14,6 +14,8 @@ from .views import (
     ResendVerificationView,
     TwoFactorChallengeVerifyView,
     TwoFactorDisableView,
+    TwoFactorRecoveryRequestView,
+    TwoFactorRecoveryVerifyView,
     TwoFactorSetupView,
     TwoFactorStatusView,
     TwoFactorVerifyEnableView,
@@ -29,6 +31,8 @@ urlpatterns = [
     path("2fa/verify/", TwoFactorVerifyEnableView.as_view(), name="two_factor_verify"),
     path("2fa/challenge/verify/", TwoFactorChallengeVerifyView.as_view(), name="two_factor_challenge_verify"),
     path("2fa/disable/", TwoFactorDisableView.as_view(), name="two_factor_disable"),
+    path("2fa/recovery/request/", TwoFactorRecoveryRequestView.as_view(), name="two_factor_recovery_request"),
+    path("2fa/recovery/verify/", TwoFactorRecoveryVerifyView.as_view(), name="two_factor_recovery_verify"),
 
     # Profile
     path("me/", MeView.as_view(), name="auth_me"),

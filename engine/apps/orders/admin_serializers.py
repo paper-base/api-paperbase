@@ -83,7 +83,7 @@ class AdminOrderListSerializer(serializers.ModelSerializer):
             'shipping_name', 'phone', 'district', 'delivery_area',
             'delivery_area_label', 'items_count', 'extra_data',
             'courier_provider', 'courier_consignment_id', 'courier_tracking_code',
-            'courier_status', 'sent_to_courier',
+            'courier_status', 'sent_to_courier', 'customer_confirmation_sent_at',
             'created_at', 'updated_at',
         ]
 
@@ -110,13 +110,13 @@ class AdminOrderSerializer(serializers.ModelSerializer):
             'delivery_area', 'delivery_area_label', 'district',
             'tracking_number',
             'courier_provider', 'courier_consignment_id', 'courier_tracking_code',
-            'courier_status', 'sent_to_courier',
+            'courier_status', 'sent_to_courier', 'customer_confirmation_sent_at',
             'extra_data', 'items', 'created_at', 'updated_at',
         ]
         read_only_fields = [
-            'public_id', 'order_number', 'subtotal', 'shipping_cost', 'total',
+            'public_id', 'order_number', 'status', 'subtotal', 'shipping_cost', 'total',
             'courier_provider', 'courier_consignment_id', 'courier_tracking_code',
-            'courier_status', 'sent_to_courier',
+            'courier_status', 'sent_to_courier', 'customer_confirmation_sent_at',
             'created_at', 'updated_at',
         ]
 
@@ -160,7 +160,6 @@ class AdminOrderUpdateSerializer(serializers.ModelSerializer):
             "public_id",
             "order_number",
             "email",
-            "status",
             "shipping_zone",
             "shipping_method",
             "shipping_name",
@@ -309,7 +308,6 @@ class AdminOrderCreateSerializer(serializers.ModelSerializer):
             "public_id",
             "order_number",
             "email",
-            "status",
             "shipping_zone",
             "shipping_method",
             "shipping_name",
@@ -406,7 +404,3 @@ class AdminOrderCreateSerializer(serializers.ModelSerializer):
             ]
         )
         return order
-
-
-class AdminOrderStatusSerializer(serializers.Serializer):
-    status = serializers.ChoiceField(choices=Order.Status.choices)

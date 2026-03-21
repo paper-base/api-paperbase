@@ -3,6 +3,7 @@ from django.db import models
 from django.utils import timezone
 
 from engine.core.ids import generate_public_id
+from engine.core.models import PublicIdMixin
 from engine.core.encryption import decrypt_value, encrypt_value
 
 
@@ -159,6 +160,31 @@ class UserTwoFactor(models.Model):
 
     def is_locked(self) -> bool:
         return bool(self.locked_until and self.locked_until > timezone.now())
+
+
+class UserTwoFactorRecoveryCode(PublicIdMixin, models.Model):
+    """One-time email recovery code for disabling 2FA when the authenticator is unavailable."""
+
+    PUBLIC_ID_KIND = "twofarecovery"
+
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="two_factor_recovery_codes",
+    )
+    code_hash = models.CharField(max_length=128)
+    expires_at = models.DateTimeField(db_index=True)
+    used_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["user", "used_at", "expires_at"]),
+        ]
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
 
 
 class UserTwoFactorChallenge(models.Model):

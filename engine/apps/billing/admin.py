@@ -7,6 +7,7 @@ from django.utils.html import format_html
 
 from .models import Payment, Plan, Subscription
 from .services import activate_subscription, extend_subscription
+from engine.apps.stores.services import sync_order_email_notification_settings_for_user
 
 User = get_user_model()
 
@@ -136,6 +137,7 @@ def _activate_plan_for_users(modeladmin, request, queryset, plan_name, duration_
         )
         return
     success = 0
+    change_reason = f"Admin action: {label}"
     for user in queryset:
         try:
             activate_subscription(
@@ -146,6 +148,7 @@ def _activate_plan_for_users(modeladmin, request, queryset, plan_name, duration_
                 source=source,
                 amount=0,
                 provider="manual",
+                change_reason=change_reason,
             )
             success += 1
         except Exception as e:
@@ -217,6 +220,7 @@ def revoke_plan_action(modeladmin, request, queryset):
             status=Subscription.Status.ACTIVE,
         ).update(status=Subscription.Status.CANCELED, updated_at=timezone.now())
         if updated:
+            sync_order_email_notification_settings_for_user(user)
             success += 1
         else:
             skipped += 1

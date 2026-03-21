@@ -37,7 +37,6 @@ class OrderAdmin(admin.ModelAdmin):
         'delivery_area', 'status', 'total', 'created_at',
     ]
     list_filter = ['status', 'created_at']
-    list_editable = ['status']
     inlines = [OrderItemInline, OrderAddressInline, OrderStatusHistoryInline]
     # Allow editing core order fields in admin. Keep identity/timestamps read-only.
     readonly_fields = (

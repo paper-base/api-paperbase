@@ -6,19 +6,24 @@ from datetime import timedelta
 import pyotp
 import qrcode
 from django.conf import settings
+from django.contrib.auth.hashers import check_password, make_password
 from django.db import transaction
 from django.utils import timezone
 
 from engine.apps.accounts.models import (
     UserTwoFactor,
     UserTwoFactorChallenge,
+    UserTwoFactorRecoveryCode,
 )
+from engine.apps.emails.constants import TWO_FA_RECOVERY
+from engine.apps.emails.tasks import send_email_task
 
 
 TWO_FACTOR_OTP_DIGITS = 6
 TWO_FACTOR_MAX_ATTEMPTS = 5
 TWO_FACTOR_LOCK_MINUTES = 10
 TWO_FACTOR_CHALLENGE_TTL_MINUTES = 5
+RECOVERY_CODE_TTL_MINUTES = 20
 
 
 def get_or_create_profile(user):
@@ -90,6 +95,26 @@ def verify_setup_code(user, code: str):
     return True, None
 
 
+def _clear_2fa_secrets(profile: UserTwoFactor) -> None:
+    profile.secret_encrypted = ""
+    profile.pending_secret_encrypted = ""
+    profile.is_enabled = False
+    profile.last_used_step = None
+    profile.failed_attempts = 0
+    profile.locked_until = None
+    profile.save(
+        update_fields=[
+            "secret_encrypted",
+            "pending_secret_encrypted",
+            "is_enabled",
+            "last_used_step",
+            "failed_attempts",
+            "locked_until",
+            "updated_at",
+        ]
+    )
+
+
 def disable_2fa(user, otp_code: str):
     profile = get_or_create_profile(user)
     if not profile.is_enabled:
@@ -97,12 +122,68 @@ def disable_2fa(user, otp_code: str):
     ok, err = _verify_totp(profile, otp_code, use_pending=False)
     if not ok:
         return False, err
-    profile.secret_encrypted = ""
-    profile.pending_secret_encrypted = ""
-    profile.is_enabled = False
-    profile.last_used_step = None
-    profile.save(update_fields=["secret_encrypted", "pending_secret_encrypted", "is_enabled", "last_used_step", "updated_at"])
+    _clear_2fa_secrets(profile)
     return True, None
+
+
+def request_recovery_code(user):
+    """
+    Issue a single-use recovery code (emailed in plaintext once). Invalidates prior unused codes.
+    """
+    profile = get_or_create_profile(user)
+    if not profile.is_enabled:
+        return False, "Two-factor authentication is not enabled."
+
+    plain = secrets.token_hex(4).upper()
+    code_hash = make_password(plain)
+    expires_at = timezone.now() + timedelta(minutes=RECOVERY_CODE_TTL_MINUTES)
+
+    with transaction.atomic():
+        UserTwoFactorRecoveryCode.objects.filter(user=user, used_at__isnull=True).delete()
+        UserTwoFactorRecoveryCode.objects.create(
+            user=user,
+            code_hash=code_hash,
+            expires_at=expires_at,
+        )
+
+    send_email_task.delay(
+        TWO_FA_RECOVERY,
+        user.email,
+        {
+            "user_name": user.get_short_name() or user.email,
+            "code": plain,
+            "expires_at": expires_at.isoformat(),
+        },
+    )
+    return True, None
+
+
+@transaction.atomic
+def verify_recovery_and_disable_2fa(user, code: str):
+    """Validate recovery code, mark used, clear 2FA secrets."""
+    profile = get_or_create_profile(user)
+    if not profile.is_enabled:
+        return False, "Two-factor authentication is not enabled."
+
+    normalized = "".join((code or "").split()).upper()
+    if len(normalized) != 8 or not all(c in "0123456789ABCDEF" for c in normalized):
+        return False, "Invalid recovery code."
+
+    now = timezone.now()
+    rows = (
+        UserTwoFactorRecoveryCode.objects.select_for_update()
+        .filter(user=user, used_at__isnull=True, expires_at__gt=now)
+        .order_by("-created_at")
+    )
+
+    for row in rows:
+        if check_password(normalized, row.code_hash):
+            row.used_at = now
+            row.save(update_fields=["used_at", "updated_at"])
+            _clear_2fa_secrets(profile)
+            return True, None
+
+    return False, "Invalid or expired recovery code."
 
 
 def verify_login_otp(user, code: str):
@@ -123,12 +204,12 @@ def create_challenge(user, flow: str, payload: dict | None = None):
 
 
 @transaction.atomic
-def verify_challenge(challenge_id: str, otp_code: str):
+def verify_challenge(challenge_public_id: str, otp_code: str):
     try:
         challenge = (
             UserTwoFactorChallenge.objects.select_for_update()
             .select_related("user")
-            .get(challenge_id=challenge_id)
+            .get(challenge_id=challenge_public_id)
         )
     except UserTwoFactorChallenge.DoesNotExist:
         return None, "Invalid challenge."

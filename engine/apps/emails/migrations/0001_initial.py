@@ -1,0 +1,82 @@
+# Generated manually for engine.apps.emails
+
+from django.db import migrations, models
+
+
+class Migration(migrations.Migration):
+
+    initial = True
+
+    dependencies = []
+
+    operations = [
+        migrations.CreateModel(
+            name="EmailTemplate",
+            fields=[
+                ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
+                (
+                    "public_id",
+                    models.CharField(
+                        db_index=True,
+                        editable=False,
+                        help_text="Non-sequential public identifier (e.g. prd_xxx).",
+                        max_length=32,
+                        unique=True,
+                    ),
+                ),
+                (
+                    "type",
+                    models.CharField(
+                        db_index=True,
+                        help_text="Lookup key, e.g. ORDER_CONFIRMED, EMAIL_VERIFICATION.",
+                        max_length=64,
+                        unique=True,
+                    ),
+                ),
+                ("subject", models.CharField(max_length=255)),
+                ("html_body", models.TextField()),
+                ("text_body", models.TextField(blank=True, default="")),
+                ("is_active", models.BooleanField(default=True)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+            ],
+            options={
+                "ordering": ["type"],
+            },
+        ),
+        migrations.CreateModel(
+            name="EmailLog",
+            fields=[
+                ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
+                (
+                    "public_id",
+                    models.CharField(
+                        db_index=True,
+                        editable=False,
+                        help_text="Non-sequential public identifier (e.g. prd_xxx).",
+                        max_length=32,
+                        unique=True,
+                    ),
+                ),
+                ("to_email", models.EmailField(max_length=254)),
+                ("type", models.CharField(db_index=True, max_length=64)),
+                (
+                    "status",
+                    models.CharField(
+                        choices=[("pending", "Pending"), ("sent", "Sent"), ("failed", "Failed")],
+                        db_index=True,
+                        default="pending",
+                        max_length=16,
+                    ),
+                ),
+                ("provider", models.CharField(default="resend", max_length=32)),
+                ("error_message", models.TextField(blank=True, default="")),
+                ("metadata", models.JSONField(blank=True, default=dict)),
+                ("sent_at", models.DateTimeField(blank=True, null=True)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+            ],
+            options={
+                "ordering": ["-created_at"],
+            },
+        ),
+    ]

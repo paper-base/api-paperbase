@@ -86,6 +86,14 @@ class StoreSettings(models.Model):
         default=list,
         help_text="Extra field definitions for product, customer, order: [{id, entityType, name, fieldType, required, order, options}]",
     )
+    email_notify_owner_on_order_received = models.BooleanField(
+        default=False,
+        help_text="Premium: send email to store when a new order is placed.",
+    )
+    email_customer_on_order_confirmed = models.BooleanField(
+        default=False,
+        help_text="Premium: email customer when order is confirmed (send-to-courier).",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

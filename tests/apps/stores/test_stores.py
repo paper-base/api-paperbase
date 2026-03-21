@@ -10,10 +10,11 @@ from engine.apps.analytics.models import (
     StoreDashboardStatsSnapshot,
 )
 from engine.apps.billing.models import Plan
+from engine.apps.billing.services import activate_subscription
 from engine.apps.customers.models import Customer
 from engine.apps.orders.models import Order
 from engine.apps.products.models import Category, Product
-from engine.apps.stores.models import Store, StoreDeletionJob, StoreMembership
+from engine.apps.stores.models import Store, StoreDeletionJob, StoreMembership, StoreSettings
 
 
 User = get_user_model()
@@ -220,4 +221,67 @@ class DeleteStoreEndpointTests(TestCase):
             "/api/v1/stores/settings/delete-status/?job_id=" + str(job_id)
         )
         self.assertEqual(status_resp.status_code, 404)
+
+
+class StoreSettingsOrderEmailTests(TestCase):
+    """Order email notification flags: premium + owner-only writes."""
+
+    def setUp(self):
+        self.client = APIClient()
+        _set_default_plan(max_stores=5)
+        self.owner = _make_user("owner@order-email.test")
+        self.staff_user = _make_user("staff@order-email.test")
+        self.store = _make_store("Order Email Store", "order-email.test", self.owner.email)
+        _make_owner_membership(self.owner, self.store)
+        StoreMembership.objects.create(
+            user=self.staff_user,
+            store=self.store,
+            role=StoreMembership.Role.STAFF,
+            is_active=True,
+        )
+        StoreSettings.objects.get_or_create(store=self.store)
+
+    def test_staff_cannot_patch_order_email_flags(self):
+        premium = Plan.objects.filter(name="premium").first()
+        self.assertIsNotNone(premium)
+        activate_subscription(self.owner, premium, source="manual", amount=0, provider="manual")
+        _auth_client(self.client, self.staff_user.email)
+        resp = self.client.patch(
+            "/api/v1/stores/settings/current/",
+            {"email_notify_owner_on_order_received": True},
+            format="json",
+            HTTP_X_STORE_ID=self.store.public_id,
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_owner_basic_cannot_enable_order_email_flags(self):
+        basic = Plan.objects.filter(name="basic").first()
+        self.assertIsNotNone(basic)
+        activate_subscription(self.owner, basic, source="manual", amount=0, provider="manual")
+        _auth_client(self.client, self.owner.email)
+        resp = self.client.patch(
+            "/api/v1/stores/settings/current/",
+            {"email_notify_owner_on_order_received": True},
+            format="json",
+            HTTP_X_STORE_ID=self.store.public_id,
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_owner_premium_can_toggle_order_email_flags(self):
+        premium = Plan.objects.filter(name="premium").first()
+        self.assertIsNotNone(premium)
+        activate_subscription(self.owner, premium, source="manual", amount=0, provider="manual")
+        _auth_client(self.client, self.owner.email)
+        resp = self.client.patch(
+            "/api/v1/stores/settings/current/",
+            {
+                "email_notify_owner_on_order_received": True,
+                "email_customer_on_order_confirmed": True,
+            },
+            format="json",
+            HTTP_X_STORE_ID=self.store.public_id,
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.data["email_notify_owner_on_order_received"])
+        self.assertTrue(resp.data["email_customer_on_order_confirmed"])
 

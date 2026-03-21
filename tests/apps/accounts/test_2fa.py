@@ -1,9 +1,12 @@
+from unittest.mock import patch
+
 import pyotp
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
 
 from engine.apps.accounts.models import UserTwoFactor
+from engine.apps.emails.constants import TWO_FA_RECOVERY
 from engine.apps.stores.models import Store, StoreMembership
 
 User = get_user_model()
@@ -56,6 +59,8 @@ class TwoFactorFlowTests(TestCase):
         )
         self.assertEqual(login_resp.status_code, 202)
         self.assertTrue(login_resp.data["2fa_required"])
+        self.assertIn("challenge_public_id", login_resp.data)
+        self.assertNotIn("challenge_id", login_resp.data)
         self.assertNotIn("access", login_resp.data)
 
     def test_challenge_verify_issues_tokens(self):
@@ -71,12 +76,12 @@ class TwoFactorFlowTests(TestCase):
             format="json",
         )
         self.assertEqual(login_resp.status_code, 202)
-        challenge_id = login_resp.data["challenge_id"]
+        challenge_public_id = login_resp.data["challenge_public_id"]
 
         otp = pyotp.TOTP(secret).now()
         verify_resp = self.client.post(
             "/api/v1/auth/2fa/challenge/verify/",
-            {"challenge_id": challenge_id, "code": otp},
+            {"challenge_public_id": challenge_public_id, "code": otp},
             format="json",
         )
         self.assertEqual(verify_resp.status_code, 200)
@@ -120,11 +125,88 @@ class TwoFactorFlowTests(TestCase):
             format="json",
         )
         self.assertEqual(login_resp.status_code, 202)
-        challenge_id = login_resp.data["challenge_id"]
+        challenge_public_id = login_resp.data["challenge_public_id"]
 
         bad_verify = self.client.post(
             "/api/v1/auth/2fa/challenge/verify/",
-            {"challenge_id": challenge_id, "code": "ABCD-1234"},
+            {"challenge_public_id": challenge_public_id, "code": "ABCD-1234"},
             format="json",
         )
         self.assertEqual(bad_verify.status_code, 400)
+
+
+class TwoFactorRecoveryTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.store = Store.objects.create(
+            name="Rec Store",
+            domain="rec.local",
+            owner_name="Owner",
+            owner_email="owner@rec.local",
+        )
+        self.user = User.objects.create_user(email="owner@rec.local", password="pass1234")
+        StoreMembership.objects.create(
+            user=self.user,
+            store=self.store,
+            role=StoreMembership.Role.OWNER,
+            is_active=True,
+        )
+
+    def _auth(self):
+        resp = self.client.post(
+            "/api/v1/auth/token/",
+            {"email": self.user.email, "password": "pass1234"},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {resp.data['access']}")
+
+    def _enable_2fa(self):
+        profile, _ = UserTwoFactor.objects.get_or_create(user=self.user)
+        secret = pyotp.random_base32()
+        profile.secret = secret
+        profile.is_enabled = True
+        profile.save(update_fields=["secret_encrypted", "is_enabled", "updated_at"])
+        return secret
+
+    @patch("engine.apps.emails.tasks.send_email_task.delay")
+    def test_recovery_request_sends_email(self, mock_delay):
+        self._auth()
+        self._enable_2fa()
+
+        resp = self.client.post("/api/v1/auth/2fa/recovery/request/", {}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        mock_delay.assert_called_once()
+        self.assertEqual(mock_delay.call_args[0][0], TWO_FA_RECOVERY)
+
+    def test_recovery_request_fails_when_2fa_disabled(self):
+        self._auth()
+        resp = self.client.post("/api/v1/auth/2fa/recovery/request/", {}, format="json")
+        self.assertEqual(resp.status_code, 400)
+
+    @patch("engine.apps.emails.tasks.send_email_task.delay")
+    def test_recovery_verify_disables_2fa(self, mock_delay):
+        self._auth()
+        self._enable_2fa()
+
+        self.client.post("/api/v1/auth/2fa/recovery/request/", {}, format="json")
+        plain_code = mock_delay.call_args[0][2]["code"]
+
+        mock_delay.reset_mock()
+        verify = self.client.post(
+            "/api/v1/auth/2fa/recovery/verify/",
+            {"code": plain_code},
+            format="json",
+        )
+        self.assertEqual(verify.status_code, 200)
+        self.assertFalse(verify.data["is_enabled"])
+        profile = UserTwoFactor.objects.get(user=self.user)
+        self.assertFalse(profile.is_enabled)
+        self.assertTrue(mock_delay.called)
+
+        second = self.client.post(
+            "/api/v1/auth/2fa/recovery/verify/",
+            {"code": plain_code},
+            format="json",
+        )
+        self.assertEqual(second.status_code, 400)

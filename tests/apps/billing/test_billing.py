@@ -12,7 +12,7 @@ from engine.apps.billing.feature_gate import (
 )
 from engine.apps.billing.models import Plan, Subscription
 from engine.apps.billing.services import activate_subscription, extend_subscription, get_active_subscription
-from engine.apps.stores.models import Store, StoreMembership
+from engine.apps.stores.models import Store, StoreMembership, StoreSettings
 
 User = get_user_model()
 
@@ -86,6 +86,33 @@ class BillingServicesTests(TestCase):
         extend_subscription(sub, days=14)
         sub.refresh_from_db()
         self.assertEqual((sub.end_date - original_end).days, 14)
+
+    def test_downgrade_clears_order_email_notification_settings(self):
+        store = Store.objects.create(
+            name="Downgrade Store",
+            domain="downgrade-billing.test",
+            owner_name="O",
+            owner_email=self.user.email,
+        )
+        StoreMembership.objects.create(
+            user=self.user,
+            store=store,
+            role=StoreMembership.Role.OWNER,
+            is_active=True,
+        )
+        ss, _ = StoreSettings.objects.get_or_create(store=store)
+        ss.email_notify_owner_on_order_received = True
+        ss.email_customer_on_order_confirmed = True
+        ss.save()
+
+        activate_subscription(self.user, self.plan_premium, source="manual", amount=0, provider="manual")
+        ss.refresh_from_db()
+        self.assertTrue(ss.email_notify_owner_on_order_received)
+
+        activate_subscription(self.user, self.plan_basic, source="manual", amount=0, provider="manual")
+        ss.refresh_from_db()
+        self.assertFalse(ss.email_notify_owner_on_order_received)
+        self.assertFalse(ss.email_customer_on_order_confirmed)
 
 
 class FeatureGateTests(TestCase):

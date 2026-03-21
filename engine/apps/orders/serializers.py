@@ -23,19 +23,13 @@ class OrderSerializer(serializers.ModelSerializer):
     class Meta:
         model = Order
         fields = [
-            'public_id', 'status', 'subtotal', 'shipping_cost', 'total',
+            'public_id', 'order_number', 'status', 'subtotal', 'shipping_cost', 'total',
             'shipping_zone_public_id', 'shipping_method_public_id',
             'shipping_name', 'shipping_address',
             'phone', 'email', 'district', 'delivery_area', 'delivery_area_label',
             'tracking_number', 'created_at', 'updated_at', 'items',
         ]
-        read_only_fields = ['public_id']
-
-    def to_representation(self, instance):
-        data = super().to_representation(instance)
-        # Expose order_number (or public_id as fallback) as id for customer-facing API
-        data['id'] = instance.order_number or instance.public_id
-        return data
+        read_only_fields = ['public_id', 'order_number']
 
 
 class OrderCreateSerializer(serializers.Serializer):

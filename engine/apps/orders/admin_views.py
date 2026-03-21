@@ -1,23 +1,29 @@
 import logging
 
 import requests as http_requests
+from django.utils import timezone
 from rest_framework import viewsets, mixins, status
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
-from config.permissions import IsDashboardUser
 from engine.core.activity import log_activity
 from engine.core.admin_views import StoreRolePermissionMixin
 from engine.core.models import ActivityLog
 from engine.core.tenancy import get_active_store
+from engine.apps.emails.triggers import (
+    notify_customer_order_confirmation_send_to_courier,
+    notify_store_new_order,
+    should_send_customer_confirmation_order_email,
+)
+from engine.apps.couriers.status_mapping import courier_status_implies_order_confirmed
+
 from .models import Order
 from .admin_serializers import (
     AdminOrderListSerializer,
     AdminOrderSerializer,
     AdminOrderCreateSerializer,
     AdminOrderUpdateSerializer,
-    AdminOrderStatusSerializer,
 )
 
 logger = logging.getLogger(__name__)
@@ -87,6 +93,7 @@ class AdminOrderViewSet(
                 }
             )
         instance = serializer.save(store=store)
+        notify_store_new_order(instance)
         log_activity(
             request=self.request,
             action=ActivityLog.Action.CREATE,
@@ -94,25 +101,6 @@ class AdminOrderViewSet(
             entity_id=instance.public_id,
             summary=f"Order created: {instance.order_number}",
         )
-
-    @action(detail=True, methods=['patch'], url_path='status')
-    def update_status(self, request, public_id=None):
-        order = self.get_object()
-        serializer = AdminOrderStatusSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        prev_status = order.status
-        order.status = serializer.validated_data['status']
-        order.save(update_fields=['status'])
-        if prev_status != order.status:
-            log_activity(
-                request=request,
-                action=ActivityLog.Action.CUSTOM,
-                entity_type="order",
-                entity_id=order.public_id,
-                summary=f"Order {order.order_number} status changed: {prev_status} → {order.status}",
-                metadata={"from": prev_status, "to": order.status},
-            )
-        return Response(AdminOrderSerializer(order).data)
 
     @action(detail=True, methods=['patch'], url_path='tracking')
     def update_tracking(self, request, public_id=None):
@@ -144,6 +132,15 @@ class AdminOrderViewSet(
         if not order.shipping_address:
             raise ValidationError({"detail": "Shipping address is required for courier dispatch."})
 
+        if not (order.email or "").strip() and should_send_customer_confirmation_order_email(order):
+            raise ValidationError(
+                {
+                    "detail": (
+                        "Customer email is required to send order confirmation before courier dispatch."
+                    )
+                }
+            )
+
         from engine.apps.couriers.models import Courier
 
         ctx = get_active_store(request)
@@ -157,6 +154,14 @@ class AdminOrderViewSet(
             from engine.apps.couriers.services import steadfast_service as svc
         else:
             raise ValidationError({"detail": f"Unsupported courier provider: {courier.provider}"})
+
+        order.status = Order.Status.PENDING
+        if order.customer_confirmation_sent_at is None:
+            if should_send_customer_confirmation_order_email(order):
+                if not notify_customer_order_confirmation_send_to_courier(order):
+                    raise ValidationError({"detail": "Unable to queue customer confirmation email."})
+                order.customer_confirmation_sent_at = timezone.now()
+        order.save(update_fields=["status", "customer_confirmation_sent_at"])
 
         try:
             result = svc.create_order(order, courier)
@@ -232,15 +237,35 @@ class AdminOrderViewSet(
             raise ValidationError({"detail": f"Tracking error: {str(exc)}"})
 
         new_status = result.get("status", order.courier_status)
+        update_fields = []
         if new_status and new_status != order.courier_status:
             order.courier_status = new_status
-            order.save(update_fields=["courier_status"])
+            update_fields.append("courier_status")
+
+        effective = new_status or order.courier_status
+        if courier_status_implies_order_confirmed(order.courier_provider, effective):
+            if order.status != Order.Status.CONFIRMED:
+                prev = order.status
+                order.status = Order.Status.CONFIRMED
+                update_fields.append("status")
+                log_activity(
+                    request=request,
+                    action=ActivityLog.Action.CUSTOM,
+                    entity_type="order",
+                    entity_id=order.public_id,
+                    summary=f"Order {order.order_number} confirmed (courier handoff)",
+                    metadata={"from": prev, "to": order.status, "courier_status": effective},
+                )
+
+        if update_fields:
+            order.save(update_fields=update_fields)
 
         return Response({
             "courier_provider": order.courier_provider,
             "courier_consignment_id": order.courier_consignment_id,
             "courier_tracking_code": order.courier_tracking_code,
             "courier_status": order.courier_status,
+            "order_status": order.status,
             "details": result.get("details", {}),
         })
 

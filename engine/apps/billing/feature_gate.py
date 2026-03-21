@@ -8,7 +8,6 @@ Fallback when no subscription: use default plan (is_default=True).
 from rest_framework.exceptions import PermissionDenied
 
 from .models import Plan
-from .services import get_active_subscription
 
 
 def _get_effective_plan(user):
@@ -16,6 +15,9 @@ def _get_effective_plan(user):
     Return the plan effective for the user: from active subscription, or default plan.
     Returns None if no subscription and no default plan.
     """
+    # Imported lazily to avoid circular import: billing.services -> emails.triggers -> feature_gate.
+    from .services import get_active_subscription
+
     subscription = get_active_subscription(user)
     if subscription:
         return subscription.plan

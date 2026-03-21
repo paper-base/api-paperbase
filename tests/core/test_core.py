@@ -1,4 +1,5 @@
 import uuid as _uuid
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
@@ -19,6 +20,10 @@ from engine.apps.coupons.models import Coupon
 from engine.apps.cart.models import Cart, CartItem
 
 User = get_user_model()
+
+PASSWORD_RESET_OK_MESSAGE = (
+    "If an account exists, we've sent a password reset link."
+)
 
 
 # ---------------------------------------------------------------------------
@@ -445,6 +450,9 @@ class PasswordManagementTests(TestCase):
     def setUp(self):
         self.client = APIClient()
         self.user = make_user("pw_user@example.com", password="OldPass1234!")
+        patcher = patch("engine.apps.accounts.serializers.send_email_task.delay")
+        self._mock_send_email = patcher.start()
+        self.addCleanup(patcher.stop)
 
     def _authenticate(self, password="OldPass1234!"):
         resp = self.client.post(
@@ -457,20 +465,79 @@ class PasswordManagementTests(TestCase):
 
     def test_password_reset_request_always_200(self):
         """Should return 200 even for non-existent emails (prevent enumeration)."""
+        self._mock_send_email.reset_mock()
         resp = self.client.post(
             "/api/v1/auth/password/reset/",
             {"email": "doesnotexist@example.com"},
             format="json",
         )
         self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data.get("message"), PASSWORD_RESET_OK_MESSAGE)
+        self._mock_send_email.assert_not_called()
 
-    def test_password_reset_request_for_existing_user(self):
+    def test_password_reset_request_user_without_store_membership_no_email(self):
+        """Active user without tenant membership must not trigger reset (store users only)."""
+        self._mock_send_email.reset_mock()
         resp = self.client.post(
             "/api/v1/auth/password/reset/",
             {"email": "pw_user@example.com"},
             format="json",
         )
         self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data.get("message"), PASSWORD_RESET_OK_MESSAGE)
+        self._mock_send_email.assert_not_called()
+
+    def test_password_reset_request_store_user_sends_email(self):
+        store = Store.objects.create(
+            name="Reset Store",
+            domain="resetstore.local",
+            owner_name="Owner",
+            owner_email="owner@resetstore.local",
+        )
+        u = make_user("store_reset@example.com", password="pass1234!")
+        StoreMembership.objects.create(
+            user=u,
+            store=store,
+            role=StoreMembership.Role.OWNER,
+        )
+        self._mock_send_email.reset_mock()
+        resp = self.client.post(
+            "/api/v1/auth/password/reset/",
+            {"email": "store_reset@example.com"},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data.get("message"), PASSWORD_RESET_OK_MESSAGE)
+        self.assertEqual(self._mock_send_email.call_count, 1)
+
+    def test_password_reset_request_superuser_no_email(self):
+        User.objects.create_superuser(
+            email="su_reset@example.com",
+            password="pass1234!",
+        )
+        self._mock_send_email.reset_mock()
+        resp = self.client.post(
+            "/api/v1/auth/password/reset/",
+            {"email": "su_reset@example.com"},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data.get("message"), PASSWORD_RESET_OK_MESSAGE)
+        self._mock_send_email.assert_not_called()
+
+    def test_password_reset_request_staff_no_email(self):
+        u = make_user("staff_reset@example.com", password="pass1234!")
+        u.is_staff = True
+        u.save(update_fields=["is_staff"])
+        self._mock_send_email.reset_mock()
+        resp = self.client.post(
+            "/api/v1/auth/password/reset/",
+            {"email": "staff_reset@example.com"},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data.get("message"), PASSWORD_RESET_OK_MESSAGE)
+        self._mock_send_email.assert_not_called()
 
     def test_password_reset_confirm_sets_new_password(self):
         uid = urlsafe_base64_encode(force_bytes(self.user.pk))
@@ -540,6 +607,9 @@ class EmailVerificationTests(TestCase):
     def setUp(self):
         self.client = APIClient()
         self.user = make_user("verify@example.com")
+        patcher = patch("engine.apps.accounts.serializers.send_email_task.delay")
+        self._mock_send_email = patcher.start()
+        self.addCleanup(patcher.stop)
 
     def _authenticate(self):
         resp = self.client.post(

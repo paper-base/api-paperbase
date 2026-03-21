@@ -7,13 +7,16 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from engine.apps.billing.feature_gate import get_feature_config
+from engine.apps.emails.triggers import queue_two_fa_disabled_email
 from engine.apps.stores.models import StoreMembership
 from .models import UserTwoFactor
 from .two_factor_service import (
     begin_setup,
     create_challenge,
     get_or_create_profile,
+    request_recovery_code,
     verify_challenge,
+    verify_recovery_and_disable_2fa,
     verify_setup_code,
 )
 
@@ -27,6 +30,7 @@ from .serializers import (
     OTPCodeSerializer,
     TwoFactorChallengeVerifySerializer,
     TwoFactorDisableSerializer,
+    TwoFactorRecoveryVerifySerializer,
     _send_verification_email,
 )
 from .throttles import (
@@ -120,7 +124,7 @@ class StoreAwareTokenObtainPairView(views.APIView):
             return Response(
                 {
                     "2fa_required": True,
-                    "challenge_id": challenge.challenge_id,
+                    "challenge_public_id": challenge.challenge_id,
                     "flow": challenge.flow,
                 },
                 status=status.HTTP_202_ACCEPTED,
@@ -154,7 +158,7 @@ class RegisterView(views.APIView):
             return Response(
                 {
                     "2fa_required": True,
-                    "challenge_id": challenge.challenge_id,
+                    "challenge_public_id": challenge.challenge_id,
                     "flow": challenge.flow,
                 },
                 status=status.HTTP_202_ACCEPTED,
@@ -246,7 +250,7 @@ class SwitchStoreView(views.APIView):
             return Response(
                 {
                     "2fa_required": True,
-                    "challenge_id": challenge.challenge_id,
+                    "challenge_public_id": challenge.challenge_id,
                     "flow": challenge.flow,
                 },
                 status=status.HTTP_202_ACCEPTED,
@@ -311,7 +315,44 @@ class TwoFactorDisableView(views.APIView):
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         serializer.save()
+        queue_two_fa_disabled_email(request.user)
         return Response({"is_enabled": False}, status=status.HTTP_200_OK)
+
+
+class TwoFactorRecoveryRequestView(views.APIView):
+    """POST /auth/2fa/recovery/request/ — email a one-time recovery code (2FA must be enabled)."""
+
+    permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [OTPManageRateThrottle]
+
+    def post(self, request):
+        ok, err = request_recovery_code(request.user)
+        if not ok:
+            return Response({"detail": err}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {"detail": "Recovery code sent to your email."},
+            status=status.HTTP_200_OK,
+        )
+
+
+class TwoFactorRecoveryVerifyView(views.APIView):
+    """POST /auth/2fa/recovery/verify/ — verify recovery code and disable 2FA."""
+
+    permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [OTPManageRateThrottle]
+
+    def post(self, request):
+        serializer = TwoFactorRecoveryVerifySerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        ok, err = verify_recovery_and_disable_2fa(request.user, serializer.validated_data["code"])
+        if not ok:
+            return Response({"detail": err}, status=status.HTTP_400_BAD_REQUEST)
+        queue_two_fa_disabled_email(request.user)
+        return Response(
+            {"is_enabled": False, "detail": "2FA has been disabled successfully."},
+            status=status.HTTP_200_OK,
+        )
 
 
 class TwoFactorChallengeVerifyView(views.APIView):
@@ -324,7 +365,7 @@ class TwoFactorChallengeVerifyView(views.APIView):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         challenge, err = verify_challenge(
-            serializer.validated_data["challenge_id"],
+            serializer.validated_data["challenge_public_id"],
             serializer.validated_data["code"],
         )
         if challenge is None:
@@ -371,8 +412,9 @@ class PasswordChangeView(views.APIView):
 class PasswordResetRequestView(views.APIView):
     """
     POST /auth/password/reset/
-    Accepts { "email": "..." } and sends a password-reset link.
-    Always returns 200 regardless of whether the email exists (prevents enumeration).
+    Accepts { "email": "..." } and sends a password-reset link for tenant dashboard users only
+    (active StoreMembership, not staff/superuser). Others are ignored silently.
+    Always returns 200 with the same message (prevents enumeration).
     """
 
     permission_classes = [permissions.AllowAny]
@@ -384,7 +426,7 @@ class PasswordResetRequestView(views.APIView):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         serializer.save()
         return Response(
-            {"detail": "If that email is registered, a reset link has been sent."},
+            {"message": "If an account exists, we've sent a password reset link."},
             status=status.HTTP_200_OK,
         )
 

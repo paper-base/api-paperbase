@@ -20,6 +20,11 @@ from .utils import get_next_order_number
 from .stock import adjust_stock
 from .throttles import DirectOrderRateThrottle
 from engine.apps.shipping.service import quote_shipping
+from engine.apps.emails.triggers import notify_store_new_order
+
+
+def _notify_order_created(order: Order) -> None:
+    notify_store_new_order(order)
 
 
 class OrderCreateView(CreateAPIView):
@@ -149,6 +154,8 @@ class OrderCreateView(CreateAPIView):
         cart.items.all().delete()
 
         meta_conversions.track_purchase(request, order)
+
+        _notify_order_created(order)
 
         return Response(
             OrderSerializer(instance=order, context={'request': request}).data,
@@ -291,6 +298,8 @@ class DirectOrderCreateView(CreateAPIView):
             'shipping_name': order.shipping_name,
         })
         meta_conversions.track_purchase(request, order)
+
+        _notify_order_created(order)
 
         return Response(
             OrderSerializer(instance=order, context={'request': request}).data,

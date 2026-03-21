@@ -10,6 +10,13 @@ import sys
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(BASE_DIR / ".env")
+except ImportError:
+    pass
+
 # ---------------------------------------------------------------------------
 # Core settings (fixed values for local/testing)
 # ---------------------------------------------------------------------------
@@ -77,6 +84,7 @@ INSTALLED_APPS = [
     "engine.apps.analytics",
     "engine.apps.couriers",
     "engine.apps.marketing_integrations",
+    "engine.apps.emails",
 ]
 
 # CORS: allow frontend (e.g. localhost:3000) to call API
@@ -218,8 +226,19 @@ AUTH_USER_MODEL = "accounts.User"
 EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "no-reply@yourplatform.com")
 
+# Resend (transactional email — see engine.apps.emails)
+# Test API keys only allow sending to your Resend signup email unless a domain is verified.
+RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
+RESEND_FROM_EMAIL = os.getenv("RESEND_FROM_EMAIL", "")
+
+# Comma-separated inboxes for platform system emails (e.g. new subscription alerts).
+# If empty, active Django superuser emails are used.
+PLATFORM_NOTIFICATION_EMAILS = [
+    e.strip() for e in os.getenv("PLATFORM_NOTIFICATION_EMAILS", "").split(",") if e.strip()
+]
+
 # Base URL sent in password-reset / email-verification links.
-# Frontend must handle /reset-password?uid=...&token=... and /verify-email?uid=...&token=...
+# Frontend must handle /auth/password-reset/confirm?uid=...&token=... and /auth/verify-email?uid=...&token=...
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
 # ---------------------------------------------------------------------------

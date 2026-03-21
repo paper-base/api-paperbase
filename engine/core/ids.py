@@ -47,6 +47,9 @@ _PREFIXES: dict[str, str] = {
     "attachment": "ath",
     "courier": "crr",
     "mktintegration": "mkt",
+    "emailtemplate": "emt",
+    "emaillog": "eml",
+    "twofarecovery": "tfr",
 }
 
 
