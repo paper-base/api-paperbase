@@ -259,7 +259,10 @@ class DashboardStatsOverviewView(APIView):
             end_date=end_date,
             bucket=bucket,
         ).first()
-        if existing and existing.payload:
+        # Ranges that include "today" are live and should not be served from a
+        # stale snapshot indefinitely because underlying records can change.
+        is_live_range = end_date >= timezone.localdate()
+        if existing and existing.payload and not is_live_range:
             return Response(existing.payload)
 
         payload = self._compute_payload(
