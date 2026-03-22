@@ -99,16 +99,9 @@ class StoreViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        domain = None
-        requested_domain = (request.data.get("domain") or "").strip().lower()
-        if requested_domain:
-            if Store.objects.filter(domain__iexact=requested_domain).exists():
-                return Response({"detail": "domain is already in use."}, status=status.HTTP_400_BAD_REQUEST)
-            domain = requested_domain
-
         store = Store.objects.create(
             name=name,
-            domain=domain,
+            domain=None,
             owner_name=owner_name[:255],
             owner_email=owner_email[:254],
             store_type=store_type_raw,

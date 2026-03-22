@@ -7,7 +7,7 @@ from rest_framework.test import APIClient
 
 from engine.apps.accounts.models import UserTwoFactor
 from engine.apps.emails.constants import TWO_FA_RECOVERY
-from engine.apps.stores.models import Store, StoreMembership
+from engine.apps.stores.models import Domain, Store, StoreMembership
 
 User = get_user_model()
 
@@ -17,10 +17,11 @@ class TwoFactorFlowTests(TestCase):
         self.client = APIClient()
         self.store = Store.objects.create(
             name="2FA Store",
-            domain="2fa.local",
+            domain=None,
             owner_name="Owner",
             owner_email="owner@2fa.local",
         )
+        Domain.objects.filter(store=self.store, is_custom=False).update(domain="2fa.local")
         self.user = User.objects.create_user(email="owner@2fa.local", password="pass1234")
         StoreMembership.objects.create(
             user=self.user,
@@ -140,10 +141,11 @@ class TwoFactorRecoveryTests(TestCase):
         self.client = APIClient()
         self.store = Store.objects.create(
             name="Rec Store",
-            domain="rec.local",
+            domain=None,
             owner_name="Owner",
             owner_email="owner@rec.local",
         )
+        Domain.objects.filter(store=self.store, is_custom=False).update(domain="rec.local")
         self.user = User.objects.create_user(email="owner@rec.local", password="pass1234")
         StoreMembership.objects.create(
             user=self.user,

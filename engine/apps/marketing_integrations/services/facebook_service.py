@@ -160,7 +160,7 @@ def track_add_to_wishlist(request, product, integration) -> None:
     _send_event(integration, "AddToWishlist", event_data, user_data)
 
 
-def track_contact(request, integration) -> None:
+def track_support_ticket_submission(request, integration) -> None:
     user_data = _extract_user_data(request)
     _send_event(integration, "Contact", {}, user_data)
 

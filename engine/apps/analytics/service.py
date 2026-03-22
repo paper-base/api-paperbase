@@ -36,9 +36,9 @@ class AnalyticsService:
     def track_purchase(self, request, order) -> None:
         dispatcher.track_purchase(request, order)
 
-    def track_contact(self, request) -> None:
-        dispatcher.track_contact(request)
+    def track_support_ticket_submission(self, request) -> None:
+        dispatcher.track_support_ticket_submission(request)
 
 
-# Module-level singleton — kept as meta_conversions for backward compatibility.
+# Module-level singleton — import as meta_conversions across the codebase.
 meta_conversions = AnalyticsService()

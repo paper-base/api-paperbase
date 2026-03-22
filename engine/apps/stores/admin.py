@@ -1,6 +1,15 @@
 from django.contrib import admin
 
-from .models import Store, StoreSettings, StoreMembership
+from .models import Domain, Store, StoreMembership, StoreSettings
+
+
+@admin.register(Domain)
+class DomainAdmin(admin.ModelAdmin):
+    list_display = ("public_id", "domain", "store", "is_custom", "is_verified", "is_primary", "created_at")
+    list_filter = ("is_custom", "is_verified", "is_primary")
+    search_fields = ("public_id", "domain", "store__name", "store__public_id")
+    raw_id_fields = ("store",)
+    ordering = ("-created_at",)
 
 
 @admin.register(Store)

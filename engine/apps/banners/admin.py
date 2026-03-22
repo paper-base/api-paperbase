@@ -9,14 +9,12 @@ class BannerAdmin(admin.ModelAdmin):
         "public_id",
         "store",
         "title",
-        "placement",
-        "position",
-        "is_clickable",
+        "order",
         "is_active",
-        "start_date",
-        "end_date",
+        "start_at",
+        "end_at",
         "created_at",
     )
-    list_filter = ("store", "placement", "is_clickable", "is_active")
-    search_fields = ("public_id", "title", "description", "cta_text", "placement")
-    ordering = ("store", "placement", "position", "-created_at")
+    list_filter = ("store", "is_active")
+    search_fields = ("public_id", "title", "cta_text")
+    ordering = ("store", "order", "-created_at")

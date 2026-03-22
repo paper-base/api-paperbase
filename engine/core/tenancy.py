@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from django.http import HttpRequest
 from django.conf import settings
+from django.http import HttpRequest, JsonResponse
 from django.utils.deprecation import MiddlewareMixin
 
 from engine.apps.stores.models import Store, StoreMembership
@@ -24,19 +24,16 @@ def _normalize_host(host: str) -> str:
 
 
 def resolve_store_from_host(request: HttpRequest) -> Optional[Store]:
-    """Resolve a Store instance from the incoming Host header."""
+    """Resolve a Store instance from the incoming Host header via verified Domain rows."""
+    from engine.core.domain_resolution_cache import resolve_store_from_host_cached
+
     host = _normalize_host(request.get_host())
     if not host:
         return None
     platform_hosts = {h.lower() for h in getattr(settings, "PLATFORM_HOSTS", [])}
     if host in platform_hosts:
         return None
-    try:
-        return Store.objects.exclude(domain__isnull=True).get(
-            domain__iexact=host, is_active=True
-        )
-    except Store.DoesNotExist:
-        return None
+    return resolve_store_from_host_cached(host)
 
 
 def get_active_store(request: HttpRequest) -> ActiveStoreContext:
@@ -86,6 +83,18 @@ def get_active_store(request: HttpRequest) -> ActiveStoreContext:
     return ActiveStoreContext(store=store, membership=membership)
 
 
+def require_resolved_store(request: HttpRequest) -> None:
+    """
+    DRF storefront views: require a resolved store (host, X-Store-ID, or JWT active_store_id).
+    Raises PermissionDenied with the same message as TenantApiGuardMiddleware.
+    """
+    from rest_framework.exceptions import PermissionDenied
+
+    ctx = get_active_store(request)
+    if ctx.store is None:
+        raise PermissionDenied(detail="Unknown tenant host.")
+
+
 class TenantResolutionMiddleware(MiddlewareMixin):
     """
     Middleware that attaches `request.store` based on the Host header.
@@ -101,3 +110,47 @@ class TenantResolutionMiddleware(MiddlewareMixin):
         request.is_platform_request = host in platform_hosts
         request.store = None if request.is_platform_request else resolve_store_from_host(request)
 
+
+class TenantApiGuardMiddleware(MiddlewareMixin):
+    """
+    On tenant hosts, require a resolved store for tenant-scoped API routes.
+
+    Platform hosts (dashboard/API on PLATFORM_HOSTS) skip this check.
+    Exempt paths (e.g. auth) allow requests without host-based tenant resolution.
+    """
+
+    def process_request(self, request: HttpRequest):
+        if getattr(request, "is_platform_request", False):
+            return None
+        if request.method == "OPTIONS":
+            return None
+        path = request.path
+        prefix = getattr(settings, "TENANT_API_PREFIX", "/api/v1/")
+        exempt = getattr(settings, "TENANT_API_EXEMPT_PREFIXES", ())
+        if not path.startswith(prefix):
+            return None
+        if any(path.startswith(e) for e in exempt):
+            return None
+        # Dashboard APIs: tenant comes from X-Store-ID / JWT, not Host.
+        if path.startswith("/api/v1/admin/"):
+            return None
+        if path.startswith("/api/v1/stores/"):
+            return None
+        if getattr(request, "store", None) is None:
+            return JsonResponse({"detail": "Unknown tenant host."}, status=403)
+        return None
+
+
+def resolve_store_public_id_from_host_header(host: str) -> Optional[str]:
+    """WebSocket: return store public_id for verified domain host, or None."""
+    from engine.core.domain_resolution_cache import (
+        resolve_store_public_id_from_host_cached,
+    )
+
+    host = _normalize_host(host)
+    if not host:
+        return None
+    platform_hosts = {h.lower() for h in getattr(settings, "PLATFORM_HOSTS", [])}
+    if host in platform_hosts:
+        return None
+    return resolve_store_public_id_from_host_cached(host)

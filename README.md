@@ -38,7 +38,7 @@ core/
       coupons/             # (Reserved for promotions)
       reviews/             # Product reviews and ratings
       notifications/       # Banners and system notifications
-      contact/             # Contact form submissions
+      support/             # Support tickets (public submit + admin CRUD)
   engine.apps.analytics/              # Optional Meta Conversions API
 ```
 
@@ -50,11 +50,11 @@ core/
 | POST | `/api/v1/auth/token/` | no | JWT: `{"username","password"}` |
 | POST | `/api/v1/auth/token/refresh/` | no | `{"refresh": "..."}` |
 | **Products & catalog** |
-| GET | `/api/v1/products/` | no | List products. `?category=`, `?featured=true`, `?hot_deals=true` |
+| GET | `/api/v1/products/` | no | List products. `?category=`, `?brand=`, `?featured=true`, `?hot_deals=true` |
 | GET | `/api/v1/products/<id_or_slug>/` | no | Product detail |
 | GET | `/api/v1/products/<id>/related/` | no | Related products |
-| GET | `/api/v1/categories/` | no | Categories (navbar + subcategories) |
-| GET | `/api/v1/brands/` | no | Brand list |
+| GET | `/api/v1/categories/` | no | Category tree (tenant-scoped) |
+| GET | `/api/v1/banners/` | no | Active store banners (tenant-scoped) |
 | **Cart & wishlist** |
 | GET | `/api/v1/cart/` | session | Get cart |
 | POST | `/api/v1/cart/add/` | session | `{"product_id": "uuid", "quantity": 1, "size": ""}` |
@@ -82,9 +82,9 @@ core/
 | GET / PUT / DELETE | `/api/v1/customers/addresses/<id>/` | JWT | Address detail |
 | **Other** |
 | GET | `/api/v1/notifications/active/` | no | Active banner notifications |
-| POST | `/api/v1/contact/` | no | Contact form |
+| POST | `/api/v1/support/tickets/` | no | Submit support ticket (tenant host / store context) |
 
-**Admin API** (staff only): `/api/v1/admin/` – stats, analytics, branding, CRUD for products, orders, cart, wishlist, inventory, notifications, etc.
+**Admin API** (staff only): `/api/v1/admin/` – stats (`support_tickets`, `supportTickets` in analytics series), analytics, branding, CRUD including `support-tickets/`, products, orders, cart, wishlist, inventory, notifications, etc.
 
 ## Environment variables
 

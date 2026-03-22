@@ -112,8 +112,8 @@ def track_search(request, query: str) -> None:
     _dispatch(request, "track_view_content", "track_search", query)
 
 
-def track_contact(request) -> None:
-    _dispatch(request, "track_purchase", "track_contact")
+def track_support_ticket_submission(request) -> None:
+    _dispatch(request, "track_purchase", "track_support_ticket_submission")
 
 
 def track_add_payment_info(request, order_data: dict | None = None) -> None:

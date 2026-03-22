@@ -88,12 +88,15 @@ class BillingServicesTests(TestCase):
         self.assertEqual((sub.end_date - original_end).days, 14)
 
     def test_downgrade_clears_order_email_notification_settings(self):
+        from engine.apps.stores.models import Domain
+
         store = Store.objects.create(
             name="Downgrade Store",
-            domain="downgrade-billing.test",
+            domain=None,
             owner_name="O",
             owner_email=self.user.email,
         )
+        Domain.objects.filter(store=store, is_custom=False).update(domain="downgrade-billing.test")
         StoreMembership.objects.create(
             user=self.user,
             store=store,
@@ -280,12 +283,15 @@ class AnalyticsFeatureGateTests(TestCase):
 
     def setUp(self):
         self.client = APIClient()
+        from engine.apps.stores.models import Domain
+
         self.store = Store.objects.create(
             name="Test Store",
-            domain="analytics-test.local",
+            domain=None,
             owner_name="Owner",
             owner_email="owner@example.com",
         )
+        Domain.objects.filter(store=self.store, is_custom=False).update(domain="analytics-test.local")
         self.plan_basic = Plan.objects.filter(is_default=True).first()
         if not self.plan_basic:
             self.plan_basic = Plan.objects.create(

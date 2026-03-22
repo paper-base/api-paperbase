@@ -12,6 +12,7 @@ from rest_framework import serializers
 from engine.apps.emails.constants import EMAIL_VERIFICATION, PASSWORD_RESET
 from engine.apps.emails.tasks import send_email_task
 from engine.apps.stores.models import StoreMembership
+from engine.apps.stores.services import store_primary_domain_host
 from .two_factor_service import disable_2fa
 
 User = get_user_model()
@@ -202,7 +203,7 @@ class MeSerializer(serializers.ModelSerializer):
             {
                 "public_id": m.store.public_id,
                 "name": m.store.name,
-                "domain": m.store.domain,
+                "domain": store_primary_domain_host(m.store),
                 "role": m.get_role_display(),
             }
             for m in memberships

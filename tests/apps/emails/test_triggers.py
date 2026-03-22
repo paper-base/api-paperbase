@@ -10,7 +10,7 @@ from django.utils import timezone
 
 from engine.apps.billing.models import Plan, Subscription
 from engine.apps.billing.services import activate_subscription
-from engine.apps.stores.models import StoreMembership, StoreSettings
+from engine.apps.stores.models import Domain, Store, StoreMembership, StoreSettings
 from engine.apps.emails.constants import (
     ORDER_CONFIRMED,
     ORDER_RECEIVED,
@@ -26,19 +26,22 @@ from engine.apps.emails.triggers import (
     queue_two_fa_disabled_email,
 )
 from engine.apps.orders.models import Order
-from engine.apps.stores.models import Store
+
+from tests.core.test_core import _ensure_default_plan
 
 User = get_user_model()
 
 
 def _store():
     d = f"t{_uuid.uuid4().hex[:12]}.local"
-    return Store.objects.create(
+    store = Store.objects.create(
         name="S",
-        domain=d,
+        domain=None,
         owner_name="O",
         owner_email=f"owner@{d}",
     )
+    Domain.objects.filter(store=store, is_custom=False).update(domain=d)
+    return store
 
 
 def _order(store, **kwargs):
@@ -153,6 +156,7 @@ class CustomerConfirmationSendToCourierTests(TestCase):
 
 class SubscriptionPaymentEmailTests(TestCase):
     def setUp(self):
+        _ensure_default_plan()
         self.user = User.objects.create_user(email="sub@example.com", password="pass")
         self.plan = Plan.objects.filter(name="premium").first()
         self.assertIsNotNone(self.plan, "premium plan must exist from migrations")

@@ -14,7 +14,7 @@ from engine.apps.billing.services import activate_subscription
 from engine.apps.customers.models import Customer
 from engine.apps.orders.models import Order
 from engine.apps.products.models import Category, Product
-from engine.apps.stores.models import Store, StoreDeletionJob, StoreMembership, StoreSettings
+from engine.apps.stores.models import Domain, Store, StoreDeletionJob, StoreMembership, StoreSettings
 
 
 User = get_user_model()
@@ -66,12 +66,17 @@ def _set_default_plan(max_stores: int):
 
 
 def _make_store(name: str, domain: str, owner_email: str):
-    return Store.objects.create(
+    store = Store.objects.create(
         name=name,
-        domain=domain,
+        domain=None,
         owner_name=f"{name} Owner",
         owner_email=owner_email,
     )
+    if domain:
+        Domain.objects.filter(store=store, is_custom=False).update(
+            domain=domain.strip().lower().split(":", 1)[0]
+        )
+    return store
 
 
 def _make_owner_membership(user: User, store: Store):
@@ -154,7 +159,7 @@ class DeleteStoreEndpointTests(TestCase):
         self.assertEqual(resp.data["redirect_route"], "/onboarding")
 
         job_id = resp.data["job_id"]
-        job = StoreDeletionJob.objects.get(id=job_id, user=user)
+        job = StoreDeletionJob.objects.get(public_id=job_id, user=user)
 
         # The store should become inaccessible immediately (deactivated),
         # and the job should drive eventual hard deletion.

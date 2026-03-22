@@ -8,7 +8,8 @@ from pathlib import Path
 from decimal import Decimal
 from django.core.management.base import BaseCommand
 from django.utils.text import slugify
-from engine.apps.products.models import Product, NavbarCategory, Category
+from engine.apps.products.models import Category, Product
+from engine.apps.stores.models import Store
 
 
 GADGET_PRODUCTS = [
@@ -302,24 +303,26 @@ class Command(BaseCommand):
     help = "Clear all products and seed 100 gadgets + 100 accessories"
 
     def handle(self, *args, **options):
+        store = Store.objects.order_by("id").first()
+        if not store:
+            self.stdout.write(self.style.ERROR("No Store in DB; create a store first."))
+            return
+
         self.stdout.write("Deleting all existing products...")
-        deleted_count, _ = Product.objects.all().delete()
+        deleted_count, _ = Product.objects.filter(store=store).delete()
         self.stdout.write(self.style.WARNING(f"  Deleted {deleted_count} products."))
 
-        gadgets_nc = NavbarCategory.objects.get(slug="gadgets")
-        accessories_nc = NavbarCategory.objects.get(slug="accessories")
-
-        categories = {c.slug: c for c in Category.objects.all()}
+        categories = {c.slug: c for c in Category.objects.filter(store=store)}
 
         gadget_products_created = self._seed_products(
-            GADGET_PRODUCTS, gadgets_nc, categories, GADGET_DESCRIPTIONS
+            GADGET_PRODUCTS, store, categories, GADGET_DESCRIPTIONS
         )
         self.stdout.write(self.style.SUCCESS(
             f"  Created {gadget_products_created} Gadget products."
         ))
 
         accessory_products_created = self._seed_products(
-            ACCESSORY_PRODUCTS, accessories_nc, categories, ACCESSORY_DESCRIPTIONS
+            ACCESSORY_PRODUCTS, store, categories, ACCESSORY_DESCRIPTIONS
         )
         self.stdout.write(self.style.SUCCESS(
             f"  Created {accessory_products_created} Accessory products."
@@ -329,32 +332,36 @@ class Command(BaseCommand):
             f"\nDone! Total products in DB: {Product.objects.count()}"
         ))
 
-    def _seed_products(self, product_list, navbar_category, categories, descriptions):
+    def _seed_products(self, product_list, store, categories, descriptions):
         created = 0
         slug_counter = {}
 
-        for name, brand, sub_slug, price, original_price, badge in product_list:
+        # Tuples: (name, brand_label, subcategory_slug, price, original_price, badge)
+        for name, mfr, sub_slug, price, original_price, badge in product_list:
             base_slug = slugify(name)
             count = slug_counter.get(base_slug, 0) + 1
             slug_counter[base_slug] = count
             slug = base_slug if count == 1 else f"{base_slug}-{count}"
 
             sub_cat = categories.get(sub_slug)
+            if not sub_cat:
+                continue
             description = descriptions.get(sub_slug, "")
 
             Product.objects.create(
+                store=store,
                 name=name,
-                brand=brand,
+                brand=(mfr or "")[:100],
                 slug=slug,
                 price=Decimal(str(price)),
                 original_price=Decimal(str(original_price)) if original_price else None,
-                badge=badge or "",
-                category=navbar_category,
-                sub_category=sub_cat,
+                badge=(badge or "")[:10],
+                category=sub_cat,
                 description=description,
                 stock=random.randint(5, 150),
                 is_featured=random.random() < 0.15,
                 is_active=True,
+                status=Product.Status.ACTIVE,
             )
             created += 1
 

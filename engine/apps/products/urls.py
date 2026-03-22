@@ -10,24 +10,8 @@ urlpatterns = [
     path('<str:identifier>/related/', views.ProductRelatedView.as_view(), name='product-related'),
 ]
 
-# Navbar category URL patterns — main navigation categories
-navbar_category_urlpatterns = [
-    path('', views.CategoryListView.as_view(), name='navbar-category-list'),
-    path('<slug:slug>/', views.CategoryDetailView.as_view(), name='navbar-category-detail'),
-]
-
-# Category (subcategory) URL patterns
+# Category URL patterns (hierarchical; top-level when parent omitted)
 category_urlpatterns = [
     path('', views.CategoryListView.as_view(), name='category-list'),
     path('<slug:slug>/', views.CategoryDetailView.as_view(), name='category-detail'),
-]
-
-# Brands URL patterns (for product brand names)
-brands_urlpatterns = [
-    path('', views.BrandListView.as_view(), name='brand-list'),
-]
-
-# Brand showcase URL patterns (for homepage brand cards)
-brand_showcase_urlpatterns = [
-    path('', views.BrandShowcaseView.as_view(), name='brand-showcase'),
 ]

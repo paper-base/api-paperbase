@@ -6,3 +6,6 @@ class ProductsConfig(AppConfig):
     name = 'engine.apps.products'
     label = 'products'
     verbose_name = 'Products'
+
+    def ready(self):
+        import engine.apps.products.signals  # noqa: F401

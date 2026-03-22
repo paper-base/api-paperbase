@@ -17,7 +17,7 @@ from engine.apps.orders.models import Order
 from engine.apps.orders.admin_serializers import AdminOrderListSerializer
 from engine.apps.billing.feature_gate import require_feature
 from engine.apps.products.models import Product, Category
-from engine.apps.support.models import ContactSubmission
+from engine.apps.support.models import SupportTicket
 from engine.apps.notifications.models import Notification
 from engine.apps.cart.models import Cart, CartItem
 from engine.apps.wishlist.models import WishlistItem
@@ -34,7 +34,7 @@ class DashboardStatsView(APIView):
         order_qs = Order.objects.all()
         product_qs = Product.objects.all()
         category_qs = Category.objects.all()
-        contact_qs = ContactSubmission.objects.all()
+        support_ticket_qs = SupportTicket.objects.all()
         notification_qs = Notification.objects.filter(is_active=True)
         cart_qs = Cart.objects.filter(items__isnull=False)
         wishlist_qs = WishlistItem.objects.all()
@@ -43,7 +43,7 @@ class DashboardStatsView(APIView):
             order_qs = order_qs.filter(store=store)
             product_qs = product_qs.filter(store=store)
             category_qs = category_qs.filter(store=store)
-            contact_qs = contact_qs.filter(store=store)
+            support_ticket_qs = support_ticket_qs.filter(store=store)
             cart_qs = cart_qs.filter(items__product__store=store)
             wishlist_qs = wishlist_qs.filter(product__store=store)
 
@@ -80,7 +80,7 @@ class DashboardStatsView(APIView):
             },
             'categories': category_qs.filter(parent__isnull=True).count(),
             'subcategories': category_qs.filter(parent__isnull=False).count(),
-            'contacts': contact_qs.count(),
+            'support_tickets': support_ticket_qs.count(),
             'notifications': notification_qs.count(),
             # Count only carts that actually have at least one item
             'carts': cart_qs.distinct().count(),
@@ -159,7 +159,7 @@ class DashboardStatsOverviewView(APIView):
             created_at__date__gte=start_date,
             created_at__date__lte=end_date,
         )
-        contact_qs = ContactSubmission.objects.filter(
+        support_ticket_qs = SupportTicket.objects.filter(
             created_at__date__gte=start_date,
             created_at__date__lte=end_date,
         )
@@ -169,14 +169,14 @@ class DashboardStatsOverviewView(APIView):
             product_qs = product_qs.filter(store=store)
             cart_item_qs = cart_item_qs.filter(product__store=store)
             wishlist_qs = wishlist_qs.filter(product__store=store)
-            contact_qs = contact_qs.filter(store=store)
+            support_ticket_qs = support_ticket_qs.filter(store=store)
 
         summary = {
             "totalOrders": order_qs.count(),
             "totalProducts": product_qs.count(),
             "totalCartItems": cart_item_qs.count(),
             "totalWishlistItems": wishlist_qs.count(),
-            "totalContacts": contact_qs.count(),
+            "totalSupportTickets": support_ticket_qs.count(),
         }
 
         series_map: dict[str, dict] = {}
@@ -196,7 +196,7 @@ class DashboardStatsOverviewView(APIView):
                         "products": 0,
                         "cartItems": 0,
                         "wishlistItems": 0,
-                        "contacts": 0,
+                        "supportTickets": 0,
                     },
                 )
                 entry[key] = row["total"]
@@ -205,7 +205,7 @@ class DashboardStatsOverviewView(APIView):
         _update_series(product_qs, "products")
         _update_series(cart_item_qs, "cartItems")
         _update_series(wishlist_qs, "wishlistItems")
-        _update_series(contact_qs, "contacts")
+        _update_series(support_ticket_qs, "supportTickets")
 
         series = sorted(series_map.values(), key=lambda x: x["label"])
 
@@ -226,7 +226,7 @@ class DashboardStatsOverviewView(APIView):
                         "products": 0,
                         "cartItems": 0,
                         "wishlistItems": 0,
-                        "contacts": 0,
+                        "supportTickets": 0,
                     }
                 filled_series.append(entry)
                 current += timedelta(days=1)
@@ -355,7 +355,7 @@ class DashboardAnalyticsView(APIView):
             created_at__date__gte=start_date,
             created_at__date__lte=end_date,
         )
-        contact_qs = ContactSubmission.objects.filter(
+        support_ticket_qs = SupportTicket.objects.filter(
             created_at__date__gte=start_date,
             created_at__date__lte=end_date,
         )
@@ -365,14 +365,14 @@ class DashboardAnalyticsView(APIView):
             product_qs = product_qs.filter(store=store)
             cart_item_qs = cart_item_qs.filter(product__store=store)
             wishlist_qs = wishlist_qs.filter(product__store=store)
-            contact_qs = contact_qs.filter(store=store)
+            support_ticket_qs = support_ticket_qs.filter(store=store)
 
         summary = {
             'totalOrders': order_qs.count(),
             'totalProducts': product_qs.count(),
             'totalCartItems': cart_item_qs.count(),
             'totalWishlistItems': wishlist_qs.count(),
-            'totalContacts': contact_qs.count(),
+            'totalSupportTickets': support_ticket_qs.count(),
         }
 
         # Build time-series across all entities keyed by bucket label.
@@ -396,7 +396,7 @@ class DashboardAnalyticsView(APIView):
                         'products': 0,
                         'cartItems': 0,
                         'wishlistItems': 0,
-                        'contacts': 0,
+                        'supportTickets': 0,
                     },
                 )
                 entry[key] = row['total']
@@ -405,7 +405,7 @@ class DashboardAnalyticsView(APIView):
         _update_series(product_qs, 'products')
         _update_series(cart_item_qs, 'cartItems')
         _update_series(wishlist_qs, 'wishlistItems')
-        _update_series(contact_qs, 'contacts')
+        _update_series(support_ticket_qs, 'supportTickets')
 
         # Sort existing buckets.
         series = sorted(series_map.values(), key=lambda x: x['label'])
@@ -427,7 +427,7 @@ class DashboardAnalyticsView(APIView):
                         'products': 0,
                         'cartItems': 0,
                         'wishlistItems': 0,
-                        'contacts': 0,
+                        'supportTickets': 0,
                     }
                 filled_series.append(entry)
                 current += timedelta(days=1)
@@ -460,7 +460,6 @@ def _get_branding_response(request, store: Store):
         'contact_email': store.contact_email or '',
         'phone': store.phone or '',
         'address': store.address or '',
-        'brand_showcase': getattr(store, 'brand_showcase', []) or [],
     }
 
 
@@ -500,7 +499,6 @@ class BrandingView(APIView):
                 'contact_email': '',
                 'phone': '',
                 'address': '',
-                'brand_showcase': [],
             })
         return Response(_get_branding_response(request, store))
 
@@ -536,10 +534,6 @@ class BrandingView(APIView):
             store.logo = logo_file
         if request.data.get('clear_logo') in (True, 'true', '1'):
             store.logo = None
-        if 'brand_showcase' in request.data:
-            val = request.data.get('brand_showcase')
-            if isinstance(val, list):
-                store.brand_showcase = val
         # Save only non-auth fields; the post_save signal is responsible for
         # syncing owner_name to User — owner_email is NOT synced (see above).
         store.save()

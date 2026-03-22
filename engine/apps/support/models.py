@@ -94,7 +94,3 @@ class SupportTicketAttachment(models.Model):
 
     def __str__(self) -> str:
         return f"Attachment for ticket {self.ticket_id}"
-
-
-# Backwards-compat alias for older imports (will be removed later).
-ContactSubmission = SupportTicket

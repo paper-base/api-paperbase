@@ -50,6 +50,7 @@ _PREFIXES: dict[str, str] = {
     "emailtemplate": "emt",
     "emaillog": "eml",
     "twofarecovery": "tfr",
+    "domain": "dom",
 }
 
 

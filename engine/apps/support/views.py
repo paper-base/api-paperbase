@@ -27,7 +27,7 @@ class SupportTicketCreateView(APIView):
         ser = SupportTicketCreateSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
         ticket: SupportTicket = ser.save(store=ctx.store)
-        meta_conversions.track_contact(request)
+        meta_conversions.track_support_ticket_submission(request)
         return Response(
             SupportTicketPublicResponseSerializer(ticket).data,
             status=status.HTTP_201_CREATED,

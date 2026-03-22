@@ -14,7 +14,9 @@ class AdminCartItemSerializer(serializers.ModelSerializer):
             'public_id', 'product_public_id', 'product_name', 'product_brand', 'quantity', 'size',
             'created_at', 'updated_at',
         ]
-        read_only_fields = ['public_id', 'product_public_id', 'product_name', 'product_brand', 'created_at', 'updated_at']
+        read_only_fields = [
+            'public_id', 'product_public_id', 'product_name', 'product_brand', 'created_at', 'updated_at',
+        ]
 
 
 class AdminCartSerializer(serializers.ModelSerializer):

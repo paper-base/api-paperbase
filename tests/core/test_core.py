@@ -8,7 +8,7 @@ from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_encode
 from rest_framework.test import APIClient
 
-from engine.apps.stores.models import Store, StoreMembership
+from engine.apps.stores.models import Domain, Store, StoreMembership
 from engine.core.tenancy import resolve_store_from_host, get_active_store
 from engine.core.ids import generate_public_id
 from engine.core.models import ActivityLog
@@ -30,11 +30,19 @@ PASSWORD_RESET_OK_MESSAGE = (
 # Shared test helpers
 # ---------------------------------------------------------------------------
 
-def _make_store(name, domain):
-    return Store.objects.create(
-        name=name, domain=domain,
-        owner_name=f"{name} Owner", owner_email=f"owner@{domain}",
+def _make_store(name, domain, owner_email=None):
+    email = owner_email or f"owner@{domain}"
+    store = Store.objects.create(
+        name=name,
+        domain=None,
+        owner_name=f"{name} Owner",
+        owner_email=email,
     )
+    if domain:
+        Domain.objects.filter(store=store, is_custom=False).update(
+            domain=domain.strip().lower().split(":", 1)[0]
+        )
+    return store
 
 
 def _make_membership(user, store, role=StoreMembership.Role.OWNER):
@@ -109,12 +117,7 @@ class TenancyTests(TestCase):
     def setUp(self):
         self.factory = RequestFactory()
         self.client = APIClient()
-        self.store = Store.objects.create(
-            name="Test Store",
-            domain="teststore.local",
-            owner_name="Test Owner",
-            owner_email="owner@example.com",
-        )
+        self.store = _make_store("Test Store", "teststore.local", owner_email="owner@example.com")
         self.user = make_user("owner@example.com")
         StoreMembership.objects.create(
             user=self.user,
@@ -149,6 +152,23 @@ class TenancyTests(TestCase):
         self.assertIsNotNone(ctx.store)
         self.assertEqual(ctx.store.id, self.store.id)
 
+    def test_tenant_api_guard_unknown_host_returns_403(self):
+        resp = self.client.get(
+            "/api/v1/products/",
+            HTTP_HOST="unknown-tenant.invalid",
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.json().get("detail"), "Unknown tenant host.")
+
+    def test_tenant_api_auth_exempt_on_unknown_host(self):
+        resp = self.client.post(
+            "/api/v1/auth/token/",
+            {"email": "x@y.com", "password": "nope"},
+            format="json",
+            HTTP_HOST="unknown-tenant.invalid",
+        )
+        self.assertEqual(resp.status_code, 401)
+
 
 # ---------------------------------------------------------------------------
 # Auth endpoints
@@ -157,12 +177,7 @@ class TenancyTests(TestCase):
 class AuthStoreEndpointsTests(TestCase):
     def setUp(self):
         self.client = APIClient()
-        self.store = Store.objects.create(
-            name="Test Store",
-            domain="teststore.local",
-            owner_name="Test Owner",
-            owner_email="owner@example.com",
-        )
+        self.store = _make_store("Test Store", "teststore.local", owner_email="owner@example.com")
         self.user = make_user("owner@example.com")
         StoreMembership.objects.create(
             user=self.user,
@@ -215,11 +230,8 @@ class SupportTicketTests(TestCase):
     def setUp(self):
         self.client = APIClient()
         _ensure_default_plan()
-        self.store = Store.objects.create(
-            name="Tenant Store",
-            domain="tenant.local",
-            owner_name="Tenant Owner",
-            owner_email="owner2@example.com",
+        self.store = _make_store(
+            "Tenant Store", "tenant.local", owner_email="owner2@example.com"
         )
         self.owner = make_user("owner2@example.com")
         StoreMembership.objects.create(
@@ -276,6 +288,11 @@ class PublicIdGenerationTests(TestCase):
     def test_generate_public_id_uniqueness(self):
         ids = {generate_public_id("product") for _ in range(1000)}
         self.assertEqual(len(ids), 1000, "Generated IDs must all be unique")
+
+    def test_generate_public_id_domain_prefix(self):
+        pid = generate_public_id("domain")
+        self.assertTrue(pid.startswith("dom_"), pid)
+        self.assertEqual(len(pid), 24)
 
     def test_generate_public_id_prefixes(self):
         expected = [
@@ -342,11 +359,8 @@ class PublicIdApiTests(TestCase):
     def setUp(self):
         self.client = APIClient()
         _ensure_default_plan()
-        self.store = Store.objects.create(
-            name="API Test Store",
-            domain="apitest.local",
-            owner_name="API Owner",
-            owner_email="apiowner@example.com",
+        self.store = _make_store(
+            "API Test Store", "apitest.local", owner_email="apiowner@example.com"
         )
         self.user = make_user("apiuser@example.com")
         StoreMembership.objects.create(
@@ -391,10 +405,11 @@ class PublicIdApiTests(TestCase):
         stores = resp.data.get("stores", [])
         self.assertGreater(len(stores), 0)
         for s in stores:
-            store_id = s.get("id")
+            store_id = s.get("public_id")
+            self.assertIsNotNone(store_id)
             self.assertFalse(
                 str(store_id).isdigit(),
-                f"stores[].id must be public_id, not integer: {store_id}",
+                f"stores[].public_id must not be integer: {store_id}",
             )
             self.assertTrue(str(store_id).startswith("str_"))
 
@@ -421,7 +436,7 @@ class PublicIdApiTests(TestCase):
         )
         resp = self.client.post(
             "/api/v1/cart/add/",
-            {"product_id": str(product.id), "quantity": 1},
+            {"product_public_id": product.public_id, "quantity": 1},
             format="json",
             HTTP_HOST="apitest.local",
         )
@@ -488,11 +503,8 @@ class PasswordManagementTests(TestCase):
         self._mock_send_email.assert_not_called()
 
     def test_password_reset_request_store_user_sends_email(self):
-        store = Store.objects.create(
-            name="Reset Store",
-            domain="resetstore.local",
-            owner_name="Owner",
-            owner_email="owner@resetstore.local",
+        store = _make_store(
+            "Reset Store", "resetstore.local", owner_email="owner@resetstore.local"
         )
         u = make_user("store_reset@example.com", password="pass1234!")
         StoreMembership.objects.create(
@@ -664,12 +676,7 @@ class EmailVerificationTests(TestCase):
 class IdrSecurityTests(TestCase):
     def setUp(self):
         self.client = APIClient()
-        self.store = Store.objects.create(
-            name="Security Store",
-            domain="sec.local",
-            owner_name="Sec Owner",
-            owner_email="sec@example.com",
-        )
+        self.store = _make_store("Security Store", "sec.local", owner_email="sec@example.com")
         self.user_a = make_user("a@example.com")
         self.user_b = make_user("b@example.com")
         StoreMembership.objects.create(
@@ -806,8 +813,8 @@ class CrossTenantAdminIsolationTests(TestCase):
         resp = self.client.get("/api/v1/admin/products/")
         self.assertEqual(resp.status_code, 200)
         ids = self._list_ids(resp)
-        self.assertIn(str(self.product_a.id), ids)
-        self.assertNotIn(str(self.product_b.id), ids)
+        self.assertIn(self.product_a.public_id, ids)
+        self.assertNotIn(self.product_b.public_id, ids)
 
     def test_admin_product_detail_cross_store_denied(self):
         """Store A admin fetching store B's product UUID via /admin/products/ must get 404."""
@@ -825,8 +832,8 @@ class CrossTenantAdminIsolationTests(TestCase):
         resp = self.client.get("/api/v1/admin/orders/")
         self.assertEqual(resp.status_code, 200)
         ids = self._list_ids(resp)
-        self.assertIn(str(self.order_a.id), ids)
-        self.assertNotIn(str(self.order_b.id), ids)
+        self.assertIn(self.order_a.public_id, ids)
+        self.assertNotIn(self.order_b.public_id, ids)
 
     def test_admin_order_detail_cross_store_denied(self):
         """Store A admin fetching store B's order UUID returns 404."""
@@ -985,6 +992,21 @@ class TokenTamperingTests(TestCase):
         self.user_a = make_user("token-a@example.com")
         # user_a has NO membership in store_b
         _make_membership(self.user_a, self.store_a)
+
+    def test_x_store_id_numeric_internal_pk_does_not_resolve_store(self):
+        """X-Store-ID must accept store public_id only, never internal integer pk."""
+        factory = RequestFactory()
+        req = factory.get(
+            "/api/v1/admin/products/",
+            HTTP_X_STORE_ID=str(self.store_a.pk),
+        )
+        req.user = self.user_a
+        req.auth = None
+        ctx = get_active_store(req)
+        self.assertIsNone(
+            ctx.store,
+            "Internal integer pk must not resolve a store via X-Store-ID",
+        )
 
     def test_store_a_token_cannot_access_store_b_admin_resources(self):
         """
@@ -1256,9 +1278,9 @@ class FileStorageIsolationTests(TestCase):
             )
             computed_path = path_fn(fake_instance, "attachment.pdf")
             self.assertIn(
-                str(self.store_a.id),
+                self.store_a.public_id,
                 computed_path,
-                "Support ticket attachment path must include store_id for isolation",
+                "Support ticket attachment path must include store public_id for isolation",
             )
         else:
             # String upload_to — just check it contains 'support'

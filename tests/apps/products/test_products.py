@@ -1,7 +1,7 @@
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from engine.apps.stores.models import Store, StoreMembership
+from engine.apps.stores.models import Domain, Store, StoreMembership
 from engine.apps.products.models import Category, Product
 
 from django.contrib.auth import get_user_model
@@ -14,12 +14,16 @@ def make_user(email, password="pass1234", **kwargs):
 
 
 def make_store(name, domain):
-    return Store.objects.create(
+    store = Store.objects.create(
         name=name,
-        domain=domain,
+        domain=None,
         owner_name=f"{name} Owner",
         owner_email=f"owner@{domain}",
     )
+    Domain.objects.filter(store=store, is_custom=False).update(
+        domain=domain.strip().lower().split(":", 1)[0]
+    )
+    return store
 
 
 def make_membership(user, store, role=StoreMembership.Role.OWNER):
@@ -32,7 +36,7 @@ def make_category(store, name="Cat", slug=None):
     )
 
 
-def make_product(store, category, name="Product", brand="BrandA", price=10, stock=5):
+def make_product(store, category, name="Product", brand="", price=10, stock=5):
     return Product.objects.create(
         store=store,
         category=category,
@@ -66,12 +70,8 @@ class CrossTenantProductIsolationTests(TestCase):
         self.cat_a = make_category(self.store_a, "Electronics", "electronics")
         self.cat_b = make_category(self.store_b, "Electronics", "electronics")
 
-        self.product_a = make_product(
-            self.store_a, self.cat_a, name="Product Alpha", brand="AlphaBrand"
-        )
-        self.product_b = make_product(
-            self.store_b, self.cat_b, name="Product Beta", brand="BetaBrand"
-        )
+        self.product_a = make_product(self.store_a, self.cat_a, name="Product Alpha")
+        self.product_b = make_product(self.store_b, self.cat_b, name="Product Beta")
 
     # ------------------------------------------------------------------
     # 1.1 / 1.3  Product list endpoint
@@ -81,17 +81,17 @@ class CrossTenantProductIsolationTests(TestCase):
         """GET /products/ on store A's host must never include store B's products."""
         resp = self.client.get("/api/v1/products/", HTTP_HOST="store-a.local")
         self.assertEqual(resp.status_code, 200)
-        ids = [item["id"] for item in resp.data.get("results", resp.data)]
-        self.assertIn(str(self.product_a.id), ids)
-        self.assertNotIn(str(self.product_b.id), ids)
+        ids = [item["public_id"] for item in resp.data.get("results", resp.data)]
+        self.assertIn(self.product_a.public_id, ids)
+        self.assertNotIn(self.product_b.public_id, ids)
 
     def test_product_list_on_store_b_excludes_store_a(self):
         """GET /products/ on store B's host must never include store A's products."""
         resp = self.client.get("/api/v1/products/", HTTP_HOST="store-b.local")
         self.assertEqual(resp.status_code, 200)
-        ids = [item["id"] for item in resp.data.get("results", resp.data)]
-        self.assertIn(str(self.product_b.id), ids)
-        self.assertNotIn(str(self.product_a.id), ids)
+        ids = [item["public_id"] for item in resp.data.get("results", resp.data)]
+        self.assertIn(self.product_b.public_id, ids)
+        self.assertNotIn(self.product_a.public_id, ids)
 
     # ------------------------------------------------------------------
     # 1.1  Direct product detail cross-store access
@@ -136,9 +136,9 @@ class CrossTenantProductIsolationTests(TestCase):
         )
         self.assertEqual(resp.status_code, 200)
         results = resp.data.get("results", resp.data)
-        ids = [item["id"] for item in results]
+        ids = [item["public_id"] for item in results]
         self.assertNotIn(
-            str(self.product_b.id),
+            self.product_b.public_id,
             ids,
             "ProductSearchView must not return products from another store",
         )
@@ -151,16 +151,15 @@ class CrossTenantProductIsolationTests(TestCase):
         )
         self.assertEqual(resp.status_code, 200)
         results = resp.data.get("results", resp.data)
-        ids = [item["id"] for item in results]
-        self.assertIn(str(self.product_a.id), ids)
-        self.assertNotIn(str(self.product_b.id), ids)
+        ids = [item["public_id"] for item in results]
+        self.assertIn(self.product_a.public_id, ids)
+        self.assertNotIn(self.product_b.public_id, ids)
 
-    def test_product_search_without_store_context_returns_empty(self):
-        """Search with no store context (no host, no header) must not return any products."""
+    def test_product_search_without_store_context_forbidden(self):
+        """Search with no store context must not return tenant data (403)."""
         resp = self.client.get("/api/v1/products/search/?q=Product")
-        self.assertEqual(resp.status_code, 200)
-        results = resp.data.get("results", resp.data)
-        self.assertEqual(len(results), 0, "Search without store context must return empty results")
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.json().get("detail"), "Unknown tenant host.")
 
     # ------------------------------------------------------------------
     # Critical: ProductRelatedView — was missing store filter
@@ -173,42 +172,17 @@ class CrossTenantProductIsolationTests(TestCase):
         store B's product would appear in store A's related results.
         """
         resp = self.client.get(
-            f"/api/v1/products/{self.product_a.id}/related/",
+            f"/api/v1/products/{self.product_a.public_id}/related/",
             HTTP_HOST="store-a.local",
         )
         self.assertEqual(resp.status_code, 200)
         results = resp.data.get("results", resp.data)
-        ids = [item["id"] for item in results]
+        ids = [item["public_id"] for item in results]
         self.assertNotIn(
-            str(self.product_b.id),
+            self.product_b.public_id,
             ids,
             "ProductRelatedView must not return products from another store",
         )
-
-    # ------------------------------------------------------------------
-    # High: BrandListView — was missing store filter
-    # ------------------------------------------------------------------
-
-    def test_brand_list_scoped_to_current_store(self):
-        """
-        GET /brands/ on store A's host must only return store A's brands.
-        This validates the fix for the High vulnerability in BrandListView.
-        """
-        resp = self.client.get("/api/v1/brands/", HTTP_HOST="store-a.local")
-        self.assertEqual(resp.status_code, 200)
-        brands = resp.data
-        self.assertIn("AlphaBrand", brands)
-        self.assertNotIn(
-            "BetaBrand",
-            brands,
-            "BrandListView must not return brands from another store",
-        )
-
-    def test_brand_list_without_store_context_returns_empty(self):
-        """GET /brands/ with no store context must return an empty list."""
-        resp = self.client.get("/api/v1/brands/")
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.data, [], "BrandListView without store context must return empty list")
 
     # ------------------------------------------------------------------
     # Category isolation

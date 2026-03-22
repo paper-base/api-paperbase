@@ -40,7 +40,3 @@ class AdminSupportTicketViewSet(
             entity_id=public_id,
             summary=f"Support ticket deleted: {subject}" if subject else "Support ticket deleted",
         )
-
-
-# Backwards-compat alias for existing router path `contacts/`
-AdminContactSubmissionViewSet = AdminSupportTicketViewSet

@@ -1,7 +1,15 @@
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 
 from engine.core.ids import generate_public_id
+
+
+class ActiveDomainManager(models.Manager):
+    """Domains that are not soft-deleted (default for app code)."""
+
+    def get_queryset(self):
+        return super().get_queryset().filter(is_deleted=False)
 
 
 class Store(models.Model):
@@ -41,11 +49,6 @@ class Store(models.Model):
     contact_email = models.EmailField(blank=True)
     phone = models.CharField(max_length=50, blank=True)
     address = models.TextField(blank=True)
-    brand_showcase = models.JSONField(
-        blank=True,
-        default=list,
-        help_text="Homepage brand cards: name, slug, image_url, redirect_url, brand_type, order, is_active",
-    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -61,7 +64,93 @@ class Store(models.Model):
         super().save(*args, **kwargs)
 
     def __str__(self) -> str:
-        return f"{self.name}" + (f" ({self.domain})" if self.domain else "")
+        from .services import store_primary_domain_host
+
+        host = store_primary_domain_host(self)
+        return f"{self.name}" + (f" ({host})" if host else "")
+
+
+class Domain(models.Model):
+    """
+    HTTP/WebSocket tenant hostname for a store.
+
+    Each store has exactly one generated subdomain (is_custom=False) and at most one
+    custom domain (is_custom=True). Routing uses verified domains only.
+    """
+
+    objects = ActiveDomainManager()
+    all_objects = models.Manager()
+
+    public_id = models.CharField(
+        max_length=32,
+        unique=True,
+        db_index=True,
+        editable=False,
+        help_text="External identifier (e.g. dom_xxx).",
+    )
+    store = models.ForeignKey(
+        "stores.Store",
+        on_delete=models.CASCADE,
+        related_name="domains",
+    )
+    domain = models.CharField(max_length=255)
+    is_custom = models.BooleanField(default=False)
+    is_verified = models.BooleanField(default=False)
+    verification_token = models.CharField(max_length=64, null=True, blank=True)
+    is_primary = models.BooleanField(default=False)
+    is_deleted = models.BooleanField(default=False, db_index=True)
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["domain"],
+                condition=models.Q(is_deleted=False),
+                name="domain_unique_when_active",
+            ),
+            models.UniqueConstraint(
+                fields=["store"],
+                condition=models.Q(is_custom=True) & models.Q(is_deleted=False),
+                name="one_custom_domain_per_store",
+            ),
+            models.UniqueConstraint(
+                fields=["store"],
+                condition=models.Q(is_custom=False) & models.Q(is_deleted=False),
+                name="one_generated_domain_per_store",
+            ),
+            models.UniqueConstraint(
+                fields=["store"],
+                condition=models.Q(is_primary=True) & models.Q(is_deleted=False),
+                name="one_primary_domain_per_store",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["domain"]),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self.public_id:
+            self.public_id = generate_public_id("domain")
+        from .services import normalize_domain_host
+
+        if self.domain:
+            self.domain = normalize_domain_host(self.domain)
+        if self.pk:
+            prior = (
+                Domain.all_objects.filter(pk=self.pk)
+                .only("domain", "is_custom")
+                .first()
+            )
+            if prior and not prior.is_custom:
+                prior_norm = normalize_domain_host(prior.domain)
+                if prior_norm != self.domain:
+                    raise ValidationError("Generated store subdomain cannot be changed.")
+        super().save(*args, **kwargs)
+
+    def __str__(self) -> str:
+        return self.domain
 
 
 class StoreSettings(models.Model):

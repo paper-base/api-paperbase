@@ -43,7 +43,7 @@ PLATFORM_HOSTS = [
 ]
 
 # Root domain used when generating store subdomains (e.g. {slug}.{root})
-PLATFORM_ROOT_DOMAIN = os.getenv("PLATFORM_ROOT_DOMAIN", "yourplatform.com")
+PLATFORM_ROOT_DOMAIN = os.getenv("PLATFORM_ROOT_DOMAIN", "mybaas.com")
 
 # Database: simple SQLite for local development
 DATABASES = {
@@ -55,6 +55,8 @@ DATABASES = {
 
 # Applications
 INSTALLED_APPS = [
+    "daphne",
+    "channels",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -87,6 +89,89 @@ INSTALLED_APPS = [
     "engine.apps.emails",
 ]
 
+ASGI_APPLICATION = "config.asgi.application"
+
+# Redis DB 1 for Channels; Celery typically uses /0 from CELERY_BROKER_URL.
+_redis_base = os.getenv("CHANNEL_LAYER_REDIS_URL") or os.getenv(
+    "CELERY_BROKER_URL", "redis://localhost:6379/0"
+)
+if _redis_base.rstrip("/").endswith("/0"):
+    _channel_redis = _redis_base.rstrip("/0") + "/1"
+else:
+    _channel_redis = _redis_base
+
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {"hosts": [_channel_redis]},
+    },
+}
+
+if TESTING:
+    CHANNEL_LAYERS = {
+        "default": {"BACKEND": "channels.layers.InMemoryChannelLayer"},
+    }
+
+# ---------------------------------------------------------------------------
+# Cache
+#
+# - default: LocMem so DRF throttles and Django internals work without Redis.
+# - tenant_resolution: Redis only when CACHE_REDIS_URL is set (e.g. redis://host:6379/2).
+#   If unset, LocMem is used so local dev works with no Redis server.
+# ---------------------------------------------------------------------------
+TENANT_RESOLUTION_CACHE_ALIAS = "tenant_resolution"
+_tenant_cache_redis_url = os.getenv("CACHE_REDIS_URL", "").strip()
+
+if TESTING:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "default-tests",
+        },
+        TENANT_RESOLUTION_CACHE_ALIAS: {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "tenant-resolution-tests",
+        },
+    }
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "default-local",
+        },
+    }
+    if _tenant_cache_redis_url:
+        CACHES[TENANT_RESOLUTION_CACHE_ALIAS] = {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": _tenant_cache_redis_url,
+        }
+    else:
+        CACHES[TENANT_RESOLUTION_CACHE_ALIAS] = {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "tenant-resolution-local",
+        }
+
+# Verified domain → store resolution cache (seconds)
+DOMAIN_RESOLUTION_CACHE_TTL = int(os.getenv("DOMAIN_RESOLUTION_CACHE_TTL", "420"))
+
+# Tenant / WebSocket resolution rate limits (per-minute windows)
+TENANT_RESOLUTION_RATE_LIMIT_IP = int(os.getenv("TENANT_RESOLUTION_RATE_LIMIT_IP", "120"))
+TENANT_RESOLUTION_RATE_LIMIT_DOMAIN = int(os.getenv("TENANT_RESOLUTION_RATE_LIMIT_DOMAIN", "60"))
+
+# Paths skipped by tenant resolution rate limiter (prefix match)
+TENANT_RATE_LIMIT_EXEMPT_PATH_PREFIXES = (
+    "/health",
+    "/api/v1/auth/",
+    "/static/",
+    "/media/",
+)
+
+# Tenant API guard: non-platform hosts must resolve a store for these URL prefixes.
+TENANT_API_PREFIX = "/api/v1/"
+TENANT_API_EXEMPT_PREFIXES = (
+    "/api/v1/auth/",
+)
+
 # CORS: allow frontend (e.g. localhost:3000) to call API
 CORS_ALLOW_ALL_ORIGINS = True  # For local dev; restrict in production
 CORS_ALLOW_HEADERS = list(__import__("corsheaders.defaults").defaults.default_headers) + [
@@ -103,7 +188,9 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "engine.core.rate_limit.TenantResolutionRateLimitMiddleware",
     "engine.core.tenancy.TenantResolutionMiddleware",
+    "engine.core.tenancy.TenantApiGuardMiddleware",
 ]
 
 ROOT_URLCONF = "config.urls"

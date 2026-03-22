@@ -20,7 +20,7 @@ class StaffInboxNotification(models.Model):
         NEW_CUSTOMER = 'new_customer', 'New customer'
         LOW_STOCK = 'low_stock', 'Product out of stock'
         WISHLIST_ADD = 'wishlist_add', 'Product added to wishlist'
-        CONTACT_SUBMISSION = 'contact_submission', 'Contact form submitted'
+        SUPPORT_TICKET = 'support_ticket', 'Support ticket submitted'
         OTHER = 'other', 'Other'
 
     user = models.ForeignKey(
