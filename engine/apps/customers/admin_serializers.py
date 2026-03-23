@@ -25,9 +25,9 @@ class AdminCustomerAddressSerializer(serializers.ModelSerializer):
 
 
 class AdminCustomerSerializer(serializers.ModelSerializer):
-    user_public_id = serializers.CharField(source="user.public_id", read_only=True)
-    user_email = serializers.CharField(source="user.email", read_only=True)
-    user_username = serializers.CharField(source="user.username", read_only=True)
+    user_public_id = serializers.CharField(source="user.public_id", read_only=True, allow_null=True)
+    user_email = serializers.CharField(source="user.email", read_only=True, allow_null=True)
+    user_username = serializers.CharField(source="user.username", read_only=True, allow_null=True)
     default_shipping_address_public_id = serializers.CharField(
         source="default_shipping_address.public_id", read_only=True, allow_null=True
     )
@@ -43,7 +43,11 @@ class AdminCustomerSerializer(serializers.ModelSerializer):
             "user_public_id",
             "user_email",
             "user_username",
+            "name",
             "phone",
+            "email",
+            "address",
+            "total_orders",
             "marketing_opt_in",
             "default_shipping_address_public_id",
             "default_billing_address_public_id",
@@ -56,9 +60,9 @@ class AdminCustomerSerializer(serializers.ModelSerializer):
 
 
 class AdminCustomerListSerializer(serializers.ModelSerializer):
-    user_public_id = serializers.CharField(source="user.public_id", read_only=True)
-    user_email = serializers.CharField(source="user.email", read_only=True)
-    user_username = serializers.CharField(source="user.username", read_only=True)
+    user_public_id = serializers.CharField(source="user.public_id", read_only=True, allow_null=True)
+    user_email = serializers.CharField(source="user.email", read_only=True, allow_null=True)
+    user_username = serializers.CharField(source="user.username", read_only=True, allow_null=True)
 
     class Meta:
         model = Customer
@@ -67,7 +71,11 @@ class AdminCustomerListSerializer(serializers.ModelSerializer):
             "user_public_id",
             "user_email",
             "user_username",
+            "name",
             "phone",
+            "email",
+            "address",
+            "total_orders",
             "marketing_opt_in",
             "extra_data",
             "created_at",

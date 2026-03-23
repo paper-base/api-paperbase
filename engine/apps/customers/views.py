@@ -21,7 +21,12 @@ def get_or_create_customer_for_request(request):
         from rest_framework.exceptions import ValidationError
 
         raise ValidationError("No active store resolved for this request.")
-    customer, _ = Customer.objects.get_or_create(store=ctx.store, user=request.user)
+    defaults = {
+        "name": (request.user.get_full_name() or "").strip(),
+        "email": (getattr(request.user, "email", "") or "").strip() or None,
+        "phone": f"u{request.user.pk}",
+    }
+    customer, _ = Customer.objects.get_or_create(store=ctx.store, user=request.user, defaults=defaults)
     return customer
 
 

@@ -13,7 +13,7 @@ from engine.core.routing import websocket_urlpatterns
 from engine.core.ws_auth import JWTStoreWebSocketMiddleware
 from engine.core.ws_domain import DomainWebSocketMiddleware
 
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings.development")
 
 django_asgi_app = get_asgi_application()
 

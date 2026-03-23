@@ -9,7 +9,7 @@ cd core
 python3 -m venv venv
 source venv/bin/activate   # Windows: venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env       # Edit .env with your SECRET_KEY and DATABASE_URL
+cp .env.example .env       # Edit .env (defaults to config.settings.development)
 python manage.py migrate
 python manage.py createsuperuser
 python manage.py runserver
@@ -88,7 +88,19 @@ core/
 
 ## Environment variables
 
-See `.env.example` for required and optional variables (database, secret key, CORS, R2 storage, Meta Pixel).
+Use explicit settings modules:
+
+- Development: `DJANGO_SETTINGS_MODULE=config.settings.development`
+- Production: `DJANGO_SETTINGS_MODULE=config.settings.production`
+
+See `.env.example` for the full list. Production requires at least:
+
+- `SECRET_KEY`
+- `ALLOWED_HOSTS`
+- `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT`
+- `CHANNEL_LAYER_REDIS_URL`
+- `CACHE_REDIS_URL`
+- `CELERY_BROKER_URL`
 
 ## Auth
 
@@ -99,7 +111,7 @@ See `.env.example` for required and optional variables (database, secret key, CO
 
 1. Clone the repository.
 2. Create and activate a virtualenv; install dependencies from `requirements.txt`.
-3. Copy `.env.example` to `.env` and set at least `SECRET_KEY` and `DATABASE_URL` (e.g. `sqlite:///db.sqlite3` for local).
+3. Copy `.env.example` to `.env` (development profile works out of the box with sqlite).
 4. Run `python manage.py migrate` and `python manage.py createsuperuser`.
 5. Optionally configure store branding (logo, name, currency) in Django admin (Store model) and R2/Meta in `.env`.
 6. Connect any frontend to the `/api/v1/` endpoints.

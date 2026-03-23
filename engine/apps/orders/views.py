@@ -13,9 +13,11 @@ from rest_framework.permissions import IsAuthenticated
 
 from engine.apps.cart.views import get_or_create_cart
 from engine.apps.analytics.service import meta_conversions
+from engine.core.tenancy import get_active_store
 
 from .models import Order, OrderItem
 from .serializers import OrderCreateSerializer, OrderSerializer, DirectOrderCreateSerializer
+from .services import resolve_and_attach_customer
 from .utils import get_next_order_number
 from .stock import adjust_stock
 from .throttles import DirectOrderRateThrottle
@@ -87,7 +89,13 @@ class OrderCreateView(CreateAPIView):
                 {'detail': 'Stock validation failed.', 'errors': stock_errors},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+        store_ids = {p.store_id for p in locked_products.values() if p.store_id}
+        if len(store_ids) > 1:
+            return Response(
+                {"detail": "All products in a single order must belong to the same store."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         # Create order and reduce stock
         subtotal = Decimal('0.00')
         # Cart has no direct store FK; derive store from the first cart item's product.
@@ -97,13 +105,20 @@ class OrderCreateView(CreateAPIView):
                 {"detail": "No store found for this cart."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        ctx = get_active_store(request)
+        if ctx.store and ctx.store.id != store.id:
+            return Response(
+                {"detail": "Store mismatch for this checkout request."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         order = Order.objects.create(
             store=store,
             order_number=get_next_order_number(store),
             user=request.user if request.user.is_authenticated else None,
-            email=ser.validated_data['email'],
+            email=ser.validated_data.get('email', ''),
             shipping_name=ser.validated_data['shipping_name'],
             shipping_address=ser.validated_data['shipping_address'],
+            phone=ser.validated_data['phone'],
         )
         for ci in items:
             product = locked_products[ci.product_id]
@@ -150,6 +165,14 @@ class OrderCreateView(CreateAPIView):
                 "shipping_rate",
                 "total",
             ]
+        )
+        resolve_and_attach_customer(
+            order,
+            store=store,
+            name=order.shipping_name,
+            phone=order.phone,
+            email=order.email,
+            address=order.shipping_address,
         )
         cart.items.all().delete()
 
@@ -235,6 +258,12 @@ class DirectOrderCreateView(CreateAPIView):
         # Resolve store from the (now validated) locked products set.
         first_product = next(iter(locked_products.values()))
         order_store = first_product.store
+        ctx = get_active_store(request)
+        if ctx.store and ctx.store.id != order_store.id:
+            return Response(
+                {"detail": "Store mismatch for this order request."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         # Create order and reduce stock
         subtotal = Decimal('0.00')
@@ -291,6 +320,14 @@ class DirectOrderCreateView(CreateAPIView):
                 "total",
             ]
         )
+        resolve_and_attach_customer(
+            order,
+            store=order_store,
+            name=order.shipping_name,
+            phone=order.phone,
+            email=order.email,
+            address=order.shipping_address,
+        )
 
         meta_conversions.track_add_payment_info(request, {
             'email': order.email,
@@ -327,7 +364,10 @@ class OrderDetailView(RetrieveAPIView):
 
     def get_object(self):
         order_id = self.kwargs.get('id')
-        order = self.get_queryset().filter(order_number=order_id).first()
+        ctx = get_active_store(self.request)
+        if not ctx.store:
+            raise NotFound()
+        order = self.get_queryset().filter(order_number=order_id, store=ctx.store).first()
         if not order:
             raise NotFound()
         if order.user_id and (not self.request.user.is_authenticated or order.user_id != self.request.user.id):

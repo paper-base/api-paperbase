@@ -38,7 +38,7 @@ class AdminOrderViewSet(
     mixins.DestroyModelMixin,
     viewsets.GenericViewSet,
 ):
-    queryset = Order.objects.prefetch_related('items__product').all()
+    queryset = Order.objects.select_related("customer", "user").prefetch_related('items__product').all()
     lookup_field = 'public_id'
 
     def get_serializer_class(self):
@@ -79,6 +79,12 @@ class AdminOrderViewSet(
         if not ctx.store:
             return qs.none()
         return qs.filter(store=ctx.store)
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        ctx = get_active_store(self.request)
+        context["active_store"] = ctx.store
+        return context
 
     def perform_create(self, serializer):
         ctx = get_active_store(self.request)

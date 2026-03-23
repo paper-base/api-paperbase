@@ -9,6 +9,7 @@ from engine.apps.products.models import Product, ProductVariant
 from engine.apps.orders.stock import adjust_stock
 from engine.apps.shipping.models import ShippingMethod, ShippingZone
 from engine.apps.shipping.service import quote_shipping
+from engine.apps.orders.services import resolve_and_attach_customer
 
 from .models import Order, OrderItem
 
@@ -72,6 +73,7 @@ class AdminOrderItemSerializer(serializers.ModelSerializer):
 
 class AdminOrderListSerializer(serializers.ModelSerializer):
     items_count = serializers.SerializerMethodField()
+    customer = serializers.SerializerMethodField()
     delivery_area_label = serializers.CharField(
         source='get_delivery_area_display', read_only=True,
     )
@@ -81,7 +83,7 @@ class AdminOrderListSerializer(serializers.ModelSerializer):
         fields = [
             'public_id', 'order_number', 'email', 'status', 'subtotal', 'shipping_cost', 'total',
             'shipping_name', 'phone', 'district', 'delivery_area',
-            'delivery_area_label', 'items_count', 'extra_data',
+            'delivery_area_label', 'items_count', 'customer', 'extra_data',
             'courier_provider', 'courier_consignment_id', 'courier_tracking_code',
             'courier_status', 'sent_to_courier', 'customer_confirmation_sent_at',
             'created_at', 'updated_at',
@@ -89,6 +91,12 @@ class AdminOrderListSerializer(serializers.ModelSerializer):
 
     def get_items_count(self, obj):
         return obj.items.count()
+
+    def get_customer(self, obj):
+        customer = getattr(obj, "customer", None)
+        if not customer:
+            return None
+        return {"public_id": customer.public_id, "name": customer.name, "phone": customer.phone}
 
 
 class AdminOrderSerializer(serializers.ModelSerializer):
@@ -99,6 +107,7 @@ class AdminOrderSerializer(serializers.ModelSerializer):
     user_public_id = serializers.CharField(source="user.public_id", read_only=True, allow_null=True)
     shipping_zone_public_id = serializers.CharField(source="shipping_zone.public_id", read_only=True, allow_null=True)
     shipping_method_public_id = serializers.CharField(source="shipping_method.public_id", read_only=True, allow_null=True)
+    customer = serializers.SerializerMethodField()
 
     class Meta:
         model = Order
@@ -108,7 +117,7 @@ class AdminOrderSerializer(serializers.ModelSerializer):
             'shipping_zone_public_id', 'shipping_method_public_id',
             'shipping_name', 'shipping_address', 'phone',
             'delivery_area', 'delivery_area_label', 'district',
-            'tracking_number',
+            'tracking_number', 'customer',
             'courier_provider', 'courier_consignment_id', 'courier_tracking_code',
             'courier_status', 'sent_to_courier', 'customer_confirmation_sent_at',
             'extra_data', 'items', 'created_at', 'updated_at',
@@ -119,6 +128,12 @@ class AdminOrderSerializer(serializers.ModelSerializer):
             'courier_status', 'sent_to_courier', 'customer_confirmation_sent_at',
             'created_at', 'updated_at',
         ]
+
+    def get_customer(self, obj):
+        customer = getattr(obj, "customer", None)
+        if not customer:
+            return None
+        return {"public_id": customer.public_id, "name": customer.name, "phone": customer.phone}
 
 
 class AdminOrderItemUpdateSerializer(serializers.Serializer):
@@ -175,6 +190,16 @@ class AdminOrderUpdateSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = ["public_id", "order_number", "total", "created_at", "updated_at"]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        active_store = self.context.get("active_store")
+        if not active_store:
+            self.fields["shipping_zone"].queryset = ShippingZone.objects.none()
+            self.fields["shipping_method"].queryset = ShippingMethod.objects.none()
+            return
+        self.fields["shipping_zone"].queryset = ShippingZone.objects.filter(store=active_store)
+        self.fields["shipping_method"].queryset = ShippingMethod.objects.filter(store=active_store)
 
     def update(self, instance: Order, validated_data):
         try:
@@ -282,6 +307,14 @@ class AdminOrderItemWriteSerializer(serializers.Serializer):
     quantity = serializers.IntegerField(min_value=1)
     price = serializers.DecimalField(max_digits=10, decimal_places=2)
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        active_store = self.context.get("active_store")
+        if not active_store:
+            self.fields["product"].queryset = Product.objects.none()
+            return
+        self.fields["product"].queryset = Product.objects.filter(store=active_store)
+
 
 class AdminOrderCreateSerializer(serializers.ModelSerializer):
     """
@@ -301,6 +334,8 @@ class AdminOrderCreateSerializer(serializers.ModelSerializer):
         required=False,
     )
     items = AdminOrderItemWriteSerializer(many=True, write_only=True)
+    phone = serializers.CharField(max_length=20)
+    email = serializers.EmailField(required=False, allow_blank=True, allow_null=True)
 
     class Meta:
         model = Order
@@ -324,83 +359,117 @@ class AdminOrderCreateSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["public_id", "order_number", "total", "created_at", "updated_at"]
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        active_store = self.context.get("active_store")
+        if not active_store:
+            self.fields["shipping_zone"].queryset = ShippingZone.objects.none()
+            self.fields["shipping_method"].queryset = ShippingMethod.objects.none()
+            return
+        self.fields["shipping_zone"].queryset = ShippingZone.objects.filter(store=active_store)
+        self.fields["shipping_method"].queryset = ShippingMethod.objects.filter(store=active_store)
+
     def validate_items(self, items):
         if not items:
             raise serializers.ValidationError("At least one item is required.")
         return items
 
-    def create(self, validated_data):
-        items = validated_data.pop("items", [])
-        store = validated_data.pop("store")
-
-        order = Order.objects.create(store=store, **validated_data)
-
-        subtotal = Decimal("0.00")
-        for item in items:
-            product_obj = item["product"]  # Product instance resolved via SlugRelatedField
-            variant_public_id = item.get("variant_public_id")
-            quantity = item["quantity"]
-            price = item["price"]
-
-            variant_obj = None
-            if variant_public_id is not None:
-                try:
-                    variant_obj = ProductVariant.objects.select_related("product").get(
-                        public_id=variant_public_id
-                    )
-                except ProductVariant.DoesNotExist:
-                    raise serializers.ValidationError(
-                        {"items": [f"Variant {variant_public_id} does not exist."]}
-                    )
-                if variant_obj.product_id != product_obj.pk:
-                    raise serializers.ValidationError(
-                        {"items": ["Selected variant does not belong to the product."]}
-                    )
-                if variant_obj.product.store_id != store.id:
-                    raise serializers.ValidationError(
-                        {"items": ["Selected variant does not belong to your active store."]}
-                    )
-
-            order_item = OrderItem.objects.create(
-                order=order,
-                product=product_obj,
-                variant=variant_obj,
-                quantity=quantity,
-                price=price,
+    def validate_phone(self, value):
+        raw = (value or "").strip()
+        if not raw:
+            raise serializers.ValidationError("Required.")
+        digits = "".join(c for c in raw if c.isdigit())
+        if len(digits) != 11 or not digits.startswith("01"):
+            raise serializers.ValidationError(
+                "Phone must be 11 digits, start with 01, and contain only numbers."
             )
-            # Reduce stock for created order items (dashboard-created orders).
-            try:
-                adjust_stock(
-                    product_id=product_obj.pk,
-                    variant_id=variant_obj.pk if variant_obj else None,
-                    delta_qty=quantity,
-                )
-            except DjangoValidationError as e:
-                raise serializers.ValidationError(e.message_dict if hasattr(e, "message_dict") else {"detail": str(e)})
-            subtotal += Decimal(str(order_item.price)) * Decimal(order_item.quantity)
+        return digits
 
-        quote = quote_shipping(
-            store=order.store,
-            order_subtotal=subtotal,
-            delivery_area=(order.delivery_area or "").strip().lower() or None,
-            district=(order.district or "").strip() or None,
-            preferred_method_id=order.shipping_method_id,
-            preferred_zone_id=order.shipping_zone_id,
-        )
-        order.subtotal = subtotal
-        order.shipping_cost = quote.shipping_cost
-        order.shipping_zone = quote.zone
-        order.shipping_method = quote.method
-        order.shipping_rate = quote.rate
-        order.total = subtotal + quote.shipping_cost
-        order.save(
-            update_fields=[
-                "subtotal",
-                "shipping_cost",
-                "shipping_zone",
-                "shipping_method",
-                "shipping_rate",
-                "total",
-            ]
-        )
-        return order
+    def create(self, validated_data):
+        with transaction.atomic():
+            items = validated_data.pop("items", [])
+            store = validated_data.pop("store")
+
+            order = Order.objects.create(store=store, **validated_data)
+
+            subtotal = Decimal("0.00")
+            for item in items:
+                product_obj = item["product"]  # Product instance resolved via SlugRelatedField
+                if product_obj.store_id != store.id:
+                    raise serializers.ValidationError(
+                        {"items": ["Selected product does not belong to your active store."]}
+                    )
+                variant_public_id = item.get("variant_public_id")
+                quantity = item["quantity"]
+                price = item["price"]
+
+                variant_obj = None
+                if variant_public_id is not None:
+                    try:
+                        variant_obj = ProductVariant.objects.select_related("product").get(
+                            public_id=variant_public_id
+                        )
+                    except ProductVariant.DoesNotExist:
+                        raise serializers.ValidationError(
+                            {"items": [f"Variant {variant_public_id} does not exist."]}
+                        )
+                    if variant_obj.product_id != product_obj.pk:
+                        raise serializers.ValidationError(
+                            {"items": ["Selected variant does not belong to the product."]}
+                        )
+                    if variant_obj.product.store_id != store.id:
+                        raise serializers.ValidationError(
+                            {"items": ["Selected variant does not belong to your active store."]}
+                        )
+
+                order_item = OrderItem.objects.create(
+                    order=order,
+                    product=product_obj,
+                    variant=variant_obj,
+                    quantity=quantity,
+                    price=price,
+                )
+                # Reduce stock for created order items (dashboard-created orders).
+                try:
+                    adjust_stock(
+                        product_id=product_obj.pk,
+                        variant_id=variant_obj.pk if variant_obj else None,
+                        delta_qty=quantity,
+                    )
+                except DjangoValidationError as e:
+                    raise serializers.ValidationError(e.message_dict if hasattr(e, "message_dict") else {"detail": str(e)})
+                subtotal += Decimal(str(order_item.price)) * Decimal(order_item.quantity)
+
+            quote = quote_shipping(
+                store=order.store,
+                order_subtotal=subtotal,
+                delivery_area=(order.delivery_area or "").strip().lower() or None,
+                district=(order.district or "").strip() or None,
+                preferred_method_id=order.shipping_method_id,
+                preferred_zone_id=order.shipping_zone_id,
+            )
+            order.subtotal = subtotal
+            order.shipping_cost = quote.shipping_cost
+            order.shipping_zone = quote.zone
+            order.shipping_method = quote.method
+            order.shipping_rate = quote.rate
+            order.total = subtotal + quote.shipping_cost
+            order.save(
+                update_fields=[
+                    "subtotal",
+                    "shipping_cost",
+                    "shipping_zone",
+                    "shipping_method",
+                    "shipping_rate",
+                    "total",
+                ]
+            )
+            resolve_and_attach_customer(
+                order,
+                store=store,
+                name=order.shipping_name,
+                phone=order.phone,
+                email=order.email,
+                address=order.shipping_address,
+            )
+            return order

@@ -19,6 +19,7 @@ class OrderSerializer(serializers.ModelSerializer):
     delivery_area_label = serializers.CharField(source='get_delivery_area_display', read_only=True)
     shipping_zone_public_id = serializers.CharField(source='shipping_zone.public_id', read_only=True, allow_null=True)
     shipping_method_public_id = serializers.CharField(source='shipping_method.public_id', read_only=True, allow_null=True)
+    customer = serializers.SerializerMethodField()
 
     class Meta:
         model = Order
@@ -27,15 +28,37 @@ class OrderSerializer(serializers.ModelSerializer):
             'shipping_zone_public_id', 'shipping_method_public_id',
             'shipping_name', 'shipping_address',
             'phone', 'email', 'district', 'delivery_area', 'delivery_area_label',
-            'tracking_number', 'created_at', 'updated_at', 'items',
+            'tracking_number', 'customer', 'created_at', 'updated_at', 'items',
         ]
         read_only_fields = ['public_id', 'order_number']
 
+    def get_customer(self, obj):
+        customer = getattr(obj, "customer", None)
+        if not customer:
+            return None
+        return {
+            "public_id": customer.public_id,
+            "name": customer.name,
+            "phone": customer.phone,
+        }
+
 
 class OrderCreateSerializer(serializers.Serializer):
-    email = serializers.EmailField()
+    phone = serializers.CharField(max_length=20)
+    email = serializers.EmailField(required=False, allow_blank=True, default="")
     shipping_name = serializers.CharField(max_length=255)
     shipping_address = serializers.CharField()
+    def validate_phone(self, value):
+        raw = (value or '').strip()
+        if not raw:
+            raise serializers.ValidationError('Required.')
+        digits = ''.join(c for c in raw if c.isdigit())
+        if len(digits) != 11 or not digits.startswith('01'):
+            raise serializers.ValidationError(
+                'Phone must be 11 digits, start with 01, and contain only numbers.'
+            )
+        return digits
+
 
     def validate_shipping_name(self, value):
         if not (value or '').strip():

@@ -15,6 +15,7 @@ from engine.core.models import ActivityLog
 from engine.apps.support.models import SupportTicket
 from engine.apps.products.models import Product, Category
 from engine.apps.orders.models import Order
+from engine.apps.orders.services import resolve_and_attach_customer
 from engine.apps.customers.models import Customer, CustomerAddress
 from engine.apps.coupons.models import Coupon
 from engine.apps.cart.models import Cart, CartItem
@@ -70,7 +71,13 @@ def _make_order(store, email="cust@example.com"):
 
 
 def _make_customer(store, user):
-    return Customer.objects.create(store=store, user=user)
+    return Customer.objects.create(
+        store=store,
+        user=user,
+        name=(user.email if user else ""),
+        phone=f"u{user.pk}" if user else f"s{store.pk}",
+        email=(user.email if user else None),
+    )
 
 
 def _make_coupon(store, code=None):
@@ -849,6 +856,36 @@ class CrossTenantAdminIsolationTests(TestCase):
         resp = self.client.get(f"/api/v1/admin/orders/{self.order_b.pk}/")
         self.assertEqual(resp.status_code, 404)
 
+    def test_storefront_order_detail_isolated_by_store(self):
+        """Store A tenant host must not fetch Store B guest order by order_number/email."""
+        resp = self.client.get(
+            f"/api/v1/orders/{self.order_b.order_number}/",
+            {"email": "cust-b@example.com"},
+            HTTP_HOST="admin-a.local",
+        )
+        self.assertEqual(resp.status_code, 404)
+
+    def test_admin_order_create_rejects_cross_store_product(self):
+        """Store A admin must not create order using Store B product public_id."""
+        self._auth_as(self.admin_a, self.store_a)
+        payload = {
+            "shipping_name": "Cross Tenant",
+            "phone": "01799999999",
+            "email": "cross@example.com",
+            "shipping_address": "Address",
+            "district": "Dhaka",
+            "delivery_area": "inside",
+            "items": [
+                {
+                    "product": self.product_b.public_id,
+                    "quantity": 1,
+                    "price": "10.00",
+                }
+            ],
+        }
+        resp = self.client.post("/api/v1/admin/orders/", payload, format="json")
+        self.assertEqual(resp.status_code, 400)
+
     # ------------------------------------------------------------------
     # Customer isolation
     # ------------------------------------------------------------------
@@ -867,6 +904,38 @@ class CrossTenantAdminIsolationTests(TestCase):
         """Store A admin fetching store B's customer returns 404."""
         self._auth_as(self.admin_a, self.store_a)
         resp = self.client.get(f"/api/v1/admin/customers/{self.customer_b.public_id}/")
+        self.assertEqual(resp.status_code, 404)
+
+    def test_admin_customer_details_endpoint_returns_analytics(self):
+        """Customer details endpoint must return store-scoped analytics and include email key."""
+        order_1 = _make_order(self.store_a, email="cust-a@example.com")
+        order_1.customer = self.customer_a
+        order_1.total = "100.00"
+        order_1.district = "Dhaka"
+        order_1.save(update_fields=["customer", "total", "district"])
+
+        order_2 = _make_order(self.store_a, email="cust-a@example.com")
+        order_2.customer = self.customer_a
+        order_2.total = "300.00"
+        order_2.district = "Khulna"
+        order_2.save(update_fields=["customer", "total", "district"])
+
+        self._auth_as(self.admin_a, self.store_a)
+        resp = self.client.get(f"/api/v1/admin/customers/{self.customer_a.public_id}/details/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["customer"]["public_id"], self.customer_a.public_id)
+        self.assertIn("email", resp.data["customer"])
+        self.assertIn("district", resp.data["customer"])
+        self.assertEqual(resp.data["analytics"]["total_orders"], 2)
+        self.assertEqual(str(resp.data["analytics"]["total_spent"]), "400")
+        self.assertEqual(str(resp.data["analytics"]["average_order_value"]), "200")
+        self.assertEqual(resp.data["customer"]["district"], "Khulna")
+        self.assertGreaterEqual(len(resp.data.get("ordered_products", [])), 0)
+
+    def test_admin_customer_details_cross_store_denied(self):
+        """Store A admin must not access store B customer details endpoint."""
+        self._auth_as(self.admin_a, self.store_a)
+        resp = self.client.get(f"/api/v1/admin/customers/{self.customer_b.public_id}/details/")
         self.assertEqual(resp.status_code, 404)
 
     # ------------------------------------------------------------------
@@ -1352,3 +1421,229 @@ class FileStorageIsolationTests(TestCase):
             "KNOWN LOW SEVERITY: product image paths are not store-scoped. "
             "Update this test when per-store paths are implemented.",
         )
+
+
+class CustomerAggregationFromOrderTests(TestCase):
+    def setUp(self):
+        self.store_a = _make_store("Agg Store A", "agg-a.local")
+        self.store_b = _make_store("Agg Store B", "agg-b.local")
+
+    def _create_order(self, store, phone="01700000000", email=""):
+        return Order.objects.create(
+            store=store,
+            order_number=f"T{_uuid.uuid4().hex[:12].upper()}",
+            shipping_name="John Doe",
+            shipping_address="Road 1",
+            phone=phone,
+            email=email,
+        )
+
+    def test_resolve_customer_by_store_and_phone(self):
+        order1 = self._create_order(self.store_a, phone="01700000000")
+        customer1 = resolve_and_attach_customer(
+            order1,
+            store=self.store_a,
+            name=order1.shipping_name,
+            phone=order1.phone,
+            email=order1.email,
+            address=order1.shipping_address,
+        )
+        order1.refresh_from_db()
+        self.assertEqual(order1.customer_id, customer1.id)
+        self.assertEqual(customer1.total_orders, 1)
+
+        order2 = self._create_order(self.store_a, phone="01700000000", email="")
+        customer2 = resolve_and_attach_customer(
+            order2,
+            store=self.store_a,
+            name="",
+            phone=order2.phone,
+            email=order2.email,
+            address="",
+        )
+        self.assertEqual(customer1.id, customer2.id)
+        self.assertEqual(customer2.total_orders, 2)
+
+    def test_same_phone_different_store_creates_distinct_customers(self):
+        order_a = self._create_order(self.store_a, phone="01711111111")
+        customer_a = resolve_and_attach_customer(
+            order_a,
+            store=self.store_a,
+            name="A",
+            phone=order_a.phone,
+            email="",
+            address="Address A",
+        )
+
+        order_b = self._create_order(self.store_b, phone="01711111111")
+        customer_b = resolve_and_attach_customer(
+            order_b,
+            store=self.store_b,
+            name="B",
+            phone=order_b.phone,
+            email="",
+            address="Address B",
+        )
+        self.assertNotEqual(customer_a.id, customer_b.id)
+        self.assertEqual(customer_a.phone, customer_b.phone)
+
+    def test_does_not_overwrite_with_empty_values(self):
+        order1 = self._create_order(self.store_a, phone="01722222222", email="a@example.com")
+        customer = resolve_and_attach_customer(
+            order1,
+            store=self.store_a,
+            name="Existing Name",
+            phone=order1.phone,
+            email=order1.email,
+            address="Existing Address",
+        )
+        order2 = self._create_order(self.store_a, phone="01722222222", email="")
+        resolve_and_attach_customer(
+            order2,
+            store=self.store_a,
+            name="",
+            phone=order2.phone,
+            email="",
+            address="",
+        )
+        customer.refresh_from_db()
+        self.assertEqual(customer.name, "Existing Name")
+        self.assertEqual(customer.email, "a@example.com")
+        self.assertEqual(customer.address, "Existing Address")
+
+    def test_case1_same_phone_same_email_different_name_keeps_existing_name(self):
+        order1 = self._create_order(self.store_a, phone="01733333333", email="same@example.com")
+        customer = resolve_and_attach_customer(
+            order1,
+            store=self.store_a,
+            name="First Name",
+            phone=order1.phone,
+            email=order1.email,
+            address="Address 1",
+        )
+        order2 = self._create_order(self.store_a, phone="01733333333", email="same@example.com")
+        matched = resolve_and_attach_customer(
+            order2,
+            store=self.store_a,
+            name="Different Name",
+            phone=order2.phone,
+            email=order2.email,
+            address="Address 2",
+        )
+        customer.refresh_from_db()
+        self.assertEqual(customer.id, matched.id)
+        self.assertEqual(customer.name, "First Name")
+
+    def test_case2_same_phone_different_email_different_name_does_not_overwrite(self):
+        order1 = self._create_order(self.store_a, phone="01744444444", email="first@example.com")
+        customer = resolve_and_attach_customer(
+            order1,
+            store=self.store_a,
+            name="Stored Name",
+            phone=order1.phone,
+            email=order1.email,
+            address="Stored Address",
+        )
+        order2 = self._create_order(self.store_a, phone="01744444444", email="other@example.com")
+        matched = resolve_and_attach_customer(
+            order2,
+            store=self.store_a,
+            name="Other Name",
+            phone=order2.phone,
+            email=order2.email,
+            address="Other Address",
+        )
+        customer.refresh_from_db()
+        self.assertEqual(customer.id, matched.id)
+        self.assertEqual(customer.email, "first@example.com")
+        self.assertEqual(customer.name, "Stored Name")
+
+    def test_case3_same_phone_same_email_same_name_reuses_customer(self):
+        order1 = self._create_order(self.store_a, phone="01755555555", email="same3@example.com")
+        customer = resolve_and_attach_customer(
+            order1,
+            store=self.store_a,
+            name="Same Name",
+            phone=order1.phone,
+            email=order1.email,
+            address="A",
+        )
+        order2 = self._create_order(self.store_a, phone="01755555555", email="same3@example.com")
+        matched = resolve_and_attach_customer(
+            order2,
+            store=self.store_a,
+            name="Same Name",
+            phone=order2.phone,
+            email=order2.email,
+            address="A",
+        )
+        customer.refresh_from_db()
+        self.assertEqual(customer.id, matched.id)
+        self.assertEqual(customer.total_orders, 2)
+
+    def test_case4_different_phone_same_email_same_name_creates_new_customer(self):
+        order1 = self._create_order(self.store_a, phone="01766666661", email="same4@example.com")
+        customer1 = resolve_and_attach_customer(
+            order1,
+            store=self.store_a,
+            name="Same Name",
+            phone=order1.phone,
+            email=order1.email,
+            address="Address 1",
+        )
+        order2 = self._create_order(self.store_a, phone="01766666662", email="same4@example.com")
+        customer2 = resolve_and_attach_customer(
+            order2,
+            store=self.store_a,
+            name="Same Name",
+            phone=order2.phone,
+            email=order2.email,
+            address="Address 2",
+        )
+        self.assertNotEqual(customer1.id, customer2.id)
+
+    def test_case5_different_phone_different_email_different_name_creates_new_customer(self):
+        order1 = self._create_order(self.store_a, phone="01777777771", email="case5a@example.com")
+        customer1 = resolve_and_attach_customer(
+            order1,
+            store=self.store_a,
+            name="Name A",
+            phone=order1.phone,
+            email=order1.email,
+            address="Address A",
+        )
+        order2 = self._create_order(self.store_a, phone="01777777772", email="case5b@example.com")
+        customer2 = resolve_and_attach_customer(
+            order2,
+            store=self.store_a,
+            name="Name B",
+            phone=order2.phone,
+            email=order2.email,
+            address="Address B",
+        )
+        self.assertNotEqual(customer1.id, customer2.id)
+
+    def test_case7_same_phone_updates_email_when_existing_missing(self):
+        order1 = self._create_order(self.store_a, phone="01788888888", email="")
+        customer = resolve_and_attach_customer(
+            order1,
+            store=self.store_a,
+            name="No Email",
+            phone=order1.phone,
+            email=order1.email,
+            address="Address",
+        )
+        self.assertFalse(customer.email)
+
+        order2 = self._create_order(self.store_a, phone="01788888888", email="now@example.com")
+        matched = resolve_and_attach_customer(
+            order2,
+            store=self.store_a,
+            name="No Email",
+            phone=order2.phone,
+            email=order2.email,
+            address="Address",
+        )
+        customer.refresh_from_db()
+        self.assertEqual(customer.id, matched.id)
+        self.assertEqual(customer.email, "now@example.com")

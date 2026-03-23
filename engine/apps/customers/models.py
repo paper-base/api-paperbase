@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.db import models
+from django.db.models import Q
 
 from engine.apps.stores.models import Store
 from engine.core.ids import generate_public_id
@@ -18,10 +19,16 @@ class Customer(models.Model):
     )
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
         related_name="customer_profiles",
     )
-    phone = models.CharField(max_length=20, blank=True)
+    name = models.CharField(max_length=255, blank=True, default="")
+    phone = models.CharField(max_length=20)
+    email = models.EmailField(null=True, blank=True)
+    address = models.TextField(null=True, blank=True)
+    total_orders = models.PositiveIntegerField(default=0)
     marketing_opt_in = models.BooleanField(default=False)
     default_shipping_address = models.ForeignKey(
         'customers.CustomerAddress',
@@ -50,6 +57,11 @@ class Customer(models.Model):
             models.UniqueConstraint(
                 fields=["store", "user"],
                 name="uniq_customer_store_user",
+                condition=Q(user__isnull=False),
+            ),
+            models.UniqueConstraint(
+                fields=["store", "phone"],
+                name="uniq_customer_store_phone",
             ),
         ]
 
@@ -59,7 +71,11 @@ class Customer(models.Model):
         super().save(*args, **kwargs)
 
     def __str__(self):
-        return str(self.user)
+        if self.name:
+            return self.name
+        if self.user:
+            return str(self.user)
+        return self.phone
 
 
 class CustomerAddress(models.Model):
