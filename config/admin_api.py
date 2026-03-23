@@ -44,8 +44,11 @@ class DashboardStatsView(APIView):
             product_qs = product_qs.filter(store=store)
             category_qs = category_qs.filter(store=store)
             support_ticket_qs = support_ticket_qs.filter(store=store)
+            notification_qs = notification_qs.filter(store=store)
             cart_qs = cart_qs.filter(items__product__store=store)
             wishlist_qs = wishlist_qs.filter(product__store=store)
+        else:
+            notification_qs = notification_qs.none()
 
         order_counts = order_qs.aggregate(
             total_count=Count('id'),

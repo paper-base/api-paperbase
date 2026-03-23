@@ -2,6 +2,7 @@ from django.conf import settings
 from django.db import models
 from django.utils import timezone
 
+from engine.apps.stores.models import Store
 from engine.core.ids import generate_public_id
 
 
@@ -111,11 +112,17 @@ class SystemNotification(models.Model):
 
 
 class Notification(models.Model):
-    """Notification banner for frontend display."""
+    """Store-scoped notification banner for storefront / dashboard CTA management."""
 
     public_id = models.CharField(
         max_length=32, unique=True, db_index=True, editable=False,
         help_text="Non-sequential public identifier (e.g. ntf_xxx).",
+    )
+
+    store = models.ForeignKey(
+        Store,
+        on_delete=models.CASCADE,
+        related_name="cta_notifications",
     )
 
     class NotificationType(models.TextChoices):

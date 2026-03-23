@@ -3,6 +3,7 @@ from rest_framework.test import APIClient
 
 from engine.apps.stores.models import Domain, Store, StoreMembership
 from engine.apps.products.models import Category, Product
+from engine.apps.notifications.models import Notification
 
 from django.contrib.auth import get_user_model
 
@@ -72,6 +73,20 @@ class CrossTenantProductIsolationTests(TestCase):
 
         self.product_a = make_product(self.store_a, self.cat_a, name="Product Alpha")
         self.product_b = make_product(self.store_b, self.cat_b, name="Product Beta")
+
+        self.notif_a = Notification.objects.create(
+            store=self.store_a, text="Banner Store A", is_active=True
+        )
+        self.notif_b = Notification.objects.create(
+            store=self.store_b, text="Banner Store B", is_active=True
+        )
+
+    def tearDown(self):
+        from engine.core.domain_resolution_cache import invalidate_domain_host
+
+        invalidate_domain_host("store-a.local")
+        invalidate_domain_host("store-b.local")
+        super().tearDown()
 
     # ------------------------------------------------------------------
     # 1.1 / 1.3  Product list endpoint
@@ -158,6 +173,31 @@ class CrossTenantProductIsolationTests(TestCase):
     def test_product_search_without_store_context_forbidden(self):
         """Search with no store context must not return tenant data (403)."""
         resp = self.client.get("/api/v1/products/search/?q=Product")
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.json().get("detail"), "Unknown tenant host.")
+
+    # ------------------------------------------------------------------
+    # Active notifications (CTA banners) — store-scoped public list
+    # ------------------------------------------------------------------
+
+    def test_active_notifications_scoped_to_store_a_host(self):
+        resp = self.client.get("/api/v1/notifications/active/", HTTP_HOST="store-a.local")
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.data.get("results", resp.data)
+        texts = [item["text"] for item in payload]
+        self.assertIn("Banner Store A", texts)
+        self.assertNotIn("Banner Store B", texts)
+
+    def test_active_notifications_scoped_to_store_b_host(self):
+        resp = self.client.get("/api/v1/notifications/active/", HTTP_HOST="store-b.local")
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.data.get("results", resp.data)
+        texts = [item["text"] for item in payload]
+        self.assertIn("Banner Store B", texts)
+        self.assertNotIn("Banner Store A", texts)
+
+    def test_active_notifications_without_store_context_forbidden(self):
+        resp = self.client.get("/api/v1/notifications/active/")
         self.assertEqual(resp.status_code, 403)
         self.assertEqual(resp.json().get("detail"), "Unknown tenant host.")
 

@@ -40,10 +40,16 @@ class SystemNotificationAdmin(admin.ModelAdmin):
 
 @admin.register(Notification)
 class NotificationAdmin(admin.ModelAdmin):
-    list_display = ['text', 'notification_type', 'is_active', 'order', 'start_date', 'end_date', 'created_at']
-    list_filter = ['notification_type', 'is_active', 'created_at']
-    search_fields = ['text']
+    list_display = [
+        'text', 'store', 'notification_type', 'is_active', 'order', 'start_date', 'end_date', 'created_at',
+    ]
+    list_filter = ['notification_type', 'is_active', 'created_at', 'store']
+    search_fields = ['text', 'public_id']
+    autocomplete_fields = ['store']
     fieldsets = (
+        ('Store', {
+            'fields': ('store',),
+        }),
         ('Content', {
             'fields': ('text', 'notification_type', 'is_active', 'order')
         }),

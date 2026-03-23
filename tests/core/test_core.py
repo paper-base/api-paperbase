@@ -18,6 +18,7 @@ from engine.apps.orders.models import Order
 from engine.apps.customers.models import Customer, CustomerAddress
 from engine.apps.coupons.models import Coupon
 from engine.apps.cart.models import Cart, CartItem
+from engine.apps.notifications.models import Notification
 
 User = get_user_model()
 
@@ -791,6 +792,13 @@ class CrossTenantAdminIsolationTests(TestCase):
         self.coupon_a = _make_coupon(self.store_a)
         self.coupon_b = _make_coupon(self.store_b)
 
+        self.notif_a = Notification.objects.create(
+            store=self.store_a, text="CTA Store A", is_active=True
+        )
+        self.notif_b = Notification.objects.create(
+            store=self.store_b, text="CTA Store B", is_active=True
+        )
+
     def _auth_as(self, user, store):
         self.client.force_authenticate(user=user)
         self.client.credentials(HTTP_X_STORE_ID=store.public_id)
@@ -896,6 +904,36 @@ class CrossTenantAdminIsolationTests(TestCase):
         self.assertNotIn(self.coupon_b.public_id, public_ids)
 
     # ------------------------------------------------------------------
+    # Notification (CTA) isolation
+    # ------------------------------------------------------------------
+
+    def test_admin_notification_list_isolated_by_store(self):
+        """Store A admin must not see store B's dashboard CTAs (notifications)."""
+        self._auth_as(self.admin_a, self.store_a)
+        resp = self.client.get("/api/v1/admin/notifications/")
+        self.assertEqual(resp.status_code, 200)
+        results = resp.data.get("results", resp.data)
+        public_ids = [item.get("public_id") for item in results]
+        self.assertIn(self.notif_a.public_id, public_ids)
+        self.assertNotIn(self.notif_b.public_id, public_ids)
+
+    def test_admin_notification_detail_cross_store_denied(self):
+        """Store A admin must get 404 when fetching store B's notification by public_id."""
+        self._auth_as(self.admin_a, self.store_a)
+        resp = self.client.get(f"/api/v1/admin/notifications/{self.notif_b.public_id}/")
+        self.assertEqual(resp.status_code, 404)
+
+    def test_admin_notification_patch_cross_store_denied(self):
+        """Store A admin must not update store B's notification."""
+        self._auth_as(self.admin_a, self.store_a)
+        resp = self.client.patch(
+            f"/api/v1/admin/notifications/{self.notif_b.public_id}/",
+            {"text": "hijacked"},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 404)
+
+    # ------------------------------------------------------------------
     # Activity log isolation (Critical fix)
     # ------------------------------------------------------------------
 
@@ -970,6 +1008,17 @@ class CrossTenantAdminIsolationTests(TestCase):
             public_ids = [item.get("public_id") for item in results]
             self.assertNotIn(self.customer_a.public_id, public_ids)
             self.assertNotIn(self.customer_b.public_id, public_ids)
+
+    def test_admin_null_store_notifications_returns_empty(self):
+        """No store context must yield empty notifications list, never other stores' CTAs."""
+        self.client.force_authenticate(user=self.admin_a)
+        resp = self.client.get("/api/v1/admin/notifications/")
+        self.assertIn(resp.status_code, [200, 403])
+        if resp.status_code == 200:
+            results = resp.data.get("results", resp.data)
+            public_ids = [item.get("public_id") for item in results]
+            self.assertNotIn(self.notif_a.public_id, public_ids)
+            self.assertNotIn(self.notif_b.public_id, public_ids)
 
 
 # ---------------------------------------------------------------------------

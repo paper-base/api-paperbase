@@ -1,10 +1,12 @@
 from django.db.models import Q
 from rest_framework import viewsets, mixins
+from rest_framework.exceptions import ValidationError
 
 from config.permissions import IsDashboardUser
 from engine.core.activity import log_activity
 from engine.core.admin_views import StoreRolePermissionMixin
 from engine.core.models import ActivityLog
+from engine.core.tenancy import get_active_store
 from .models import Notification, StaffInboxNotification
 from .admin_serializers import AdminNotificationSerializer, AdminStaffInboxNotificationSerializer
 
@@ -33,8 +35,26 @@ class AdminNotificationViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
     queryset = Notification.objects.all()
     lookup_field = 'public_id'
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        ctx = get_active_store(self.request)
+        if not ctx.store:
+            return qs.none()
+        return qs.filter(store=ctx.store)
+
     def perform_create(self, serializer):
-        instance = serializer.save()
+        ctx = get_active_store(self.request)
+        store = ctx.store
+        if not store:
+            raise ValidationError(
+                {
+                    "detail": (
+                        "No active store resolved. Re-login, switch store, or send the "
+                        "X-Store-ID header."
+                    )
+                }
+            )
+        instance = serializer.save(store=store)
         log_activity(
             request=self.request,
             action=ActivityLog.Action.CREATE,
