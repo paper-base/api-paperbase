@@ -391,16 +391,18 @@ class OrderListView(ListAPIView):
 
 
 class OrderDetailView(RetrieveAPIView):
-    """Get order by id (for track-order). Allow by id + email for guests."""
+    """Get order by public_id (for track-order). Allow by public_id + email for guests."""
     serializer_class = OrderSerializer
     queryset = Order.objects.prefetch_related('items__product', 'items__product__images')
+    lookup_field = "public_id"
+    lookup_url_kwarg = "public_id"
 
     def get_object(self):
-        order_id = self.kwargs.get('id')
+        public_id = self.kwargs.get(self.lookup_url_kwarg)
         ctx = get_active_store(self.request)
         if not ctx.store:
             raise NotFound()
-        order = self.get_queryset().filter(order_number=order_id, store=ctx.store).first()
+        order = self.get_queryset().filter(public_id=public_id, store=ctx.store).first()
         if not order:
             raise NotFound()
         if order.user_id and (not self.request.user.is_authenticated or order.user_id != self.request.user.id):

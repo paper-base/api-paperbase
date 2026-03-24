@@ -878,9 +878,9 @@ class CrossTenantAdminIsolationTests(TestCase):
         self.assertEqual(resp.status_code, 404)
 
     def test_storefront_order_detail_isolated_by_store(self):
-        """Store A tenant host must not fetch Store B guest order by order_number/email."""
+        """Store A tenant host must not fetch Store B guest order by public_id/email."""
         resp = self.client.get(
-            f"/api/v1/orders/{self.order_b.order_number}/",
+            f"/api/v1/orders/{self.order_b.public_id}/",
             {"email": "cust-b@example.com"},
             HTTP_HOST="admin-a.local",
         )
