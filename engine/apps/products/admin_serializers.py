@@ -133,6 +133,7 @@ class AdminProductListSerializer(serializers.ModelSerializer):
 
 class AdminProductSerializer(serializers.ModelSerializer):
     images = AdminProductImageSerializer(many=True, read_only=True)
+    brand = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     category = serializers.SlugRelatedField(
         slug_field='public_id',
         queryset=Category.objects.none(),
@@ -180,6 +181,12 @@ class AdminProductSerializer(serializers.ModelSerializer):
 
             s = obj.variants.aggregate(x=SumAgg('stock_quantity'))['x']
         return int(s or 0)
+
+    def validate_brand(self, value):
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
 
 
 class AdminParentCategorySerializer(serializers.ModelSerializer):

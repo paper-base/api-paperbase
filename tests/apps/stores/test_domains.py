@@ -96,7 +96,7 @@ def make_category(store, name="Cat", slug=None):
     )
 
 
-def make_product(store, category, name="Product", brand="", price=10, stock=5):
+def make_product(store, category, name="Product", brand=None, price=10, stock=5):
     return Product.objects.create(
         store=store,
         category=category,

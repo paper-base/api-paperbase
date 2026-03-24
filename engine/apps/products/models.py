@@ -100,7 +100,7 @@ class Product(models.Model):
         help_text="Prefixed public identifier for APIs and URLs (e.g. prd_xxx).",
     )
     name = models.CharField(max_length=255)
-    brand = models.CharField(max_length=100, blank=True)
+    brand = models.CharField(max_length=100, blank=True, null=True)
     slug = models.SlugField(max_length=255)
     sku = models.CharField(max_length=100, blank=True, db_index=True, help_text="Stock keeping unit")
     price = models.DecimalField(max_digits=10, decimal_places=2)
@@ -176,6 +176,9 @@ class Product(models.Model):
     def save(self, *args, **kwargs):
         if not self.public_id:
             self.public_id = generate_public_id("product")
+        # Canonicalize optional brand: store missing/blank as NULL, not empty string.
+        if isinstance(self.brand, str):
+            self.brand = self.brand.strip() or None
         # Auto-generate slug from name - always update when name changes
         from django.utils.text import slugify
 
@@ -186,11 +189,11 @@ class Product(models.Model):
 
         self.slug = base_slug
 
-        queryset = Product.objects.all()
+        queryset = Product.objects.filter(store=self.store)
         if self.pk:
             queryset = queryset.exclude(pk=self.pk)
 
-        counter = 1
+        counter = 2
         original_slug = self.slug
         while queryset.filter(slug=self.slug).exists():
             self.slug = f"{original_slug}-{counter}"

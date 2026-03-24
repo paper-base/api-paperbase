@@ -175,10 +175,13 @@ class AdminProductViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
         normalized = slugify(raw)
         if not normalized:
             return Response({'available': True})
-        qs = Product.objects.all()
         ctx = get_active_store(request)
-        if ctx.store:
-            qs = qs.filter(store=ctx.store)
+        if not ctx.store:
+            return Response({'available': True})
+        qs = Product.objects.filter(store=ctx.store)
+        exclude_public_id = (request.query_params.get('exclude_public_id') or '').strip()
+        if exclude_public_id:
+            qs = qs.exclude(public_id=exclude_public_id)
         exists = qs.filter(slug=normalized).exists()
         return Response({'available': not exists})
 

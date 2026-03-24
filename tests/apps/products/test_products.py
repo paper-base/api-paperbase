@@ -37,7 +37,7 @@ def make_category(store, name="Cat", slug=None):
     )
 
 
-def make_product(store, category, name="Product", brand="", price=10, stock=5):
+def make_product(store, category, name="Product", brand=None, price=10, stock=5):
     return Product.objects.create(
         store=store,
         category=category,
@@ -236,3 +236,52 @@ class CrossTenantProductIsolationTests(TestCase):
         public_ids = [item["public_id"] for item in results]
         self.assertIn(self.cat_a.public_id, public_ids)
         self.assertNotIn(self.cat_b.public_id, public_ids)
+
+    def test_create_product_without_brand_defaults_to_none(self):
+        product = Product.objects.create(
+            store=self.store_a,
+            category=self.cat_a,
+            name="No Brand Product",
+            price="19.99",
+            stock=3,
+            status=Product.Status.ACTIVE,
+            is_active=True,
+        )
+        self.assertIsNone(product.brand)
+
+    def test_update_product_can_clear_brand(self):
+        product = make_product(
+            self.store_a,
+            self.cat_a,
+            name="Brand To Clear",
+            brand="BrandX",
+        )
+        product.brand = None
+        product.save(update_fields=["brand", "updated_at"])
+        product.refresh_from_db()
+        self.assertIsNone(product.brand)
+
+    def test_product_list_includes_products_without_brand(self):
+        self.product_a.brand = None
+        self.product_a.save(update_fields=["brand", "updated_at"])
+        resp = self.client.get("/api/v1/products/", HTTP_HOST="store-a.local")
+        self.assertEqual(resp.status_code, 200)
+        items = resp.data.get("results", resp.data)
+        ids = [row["public_id"] for row in items]
+        self.assertIn(self.product_a.public_id, ids)
+
+    def test_brand_filter_works_with_mixed_null_and_non_null(self):
+        self.product_a.brand = None
+        self.product_a.save(update_fields=["brand", "updated_at"])
+        branded = make_product(
+            self.store_a,
+            self.cat_a,
+            name="Branded Product",
+            brand="Acme",
+        )
+        resp = self.client.get("/api/v1/products/?brand=Acme", HTTP_HOST="store-a.local")
+        self.assertEqual(resp.status_code, 200)
+        items = resp.data.get("results", resp.data)
+        ids = [row["public_id"] for row in items]
+        self.assertIn(branded.public_id, ids)
+        self.assertNotIn(self.product_a.public_id, ids)
