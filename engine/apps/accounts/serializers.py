@@ -36,7 +36,7 @@ def _user_from_uid(uid):
 
 def _user_eligible_for_public_password_reset(email: str):
     """
-    Dashboard / tenant users only: active StoreMembership, not Django staff/superuser.
+    Public password reset eligibility: any active non-staff/non-superuser user.
     Returns None if no such user (silent — used for unauthenticated reset).
     """
     return (
@@ -45,7 +45,6 @@ def _user_eligible_for_public_password_reset(email: str):
             is_active=True,
             is_superuser=False,
             is_staff=False,
-            store_memberships__is_active=True,
         )
         .distinct()
         .first()

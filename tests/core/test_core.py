@@ -507,22 +507,51 @@ class PasswordManagementTests(TestCase):
             "/api/v1/auth/password/reset/",
             {"email": "doesnotexist@example.com"},
             format="json",
+            REMOTE_ADDR="10.0.0.1",
         )
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.data.get("message"), PASSWORD_RESET_OK_MESSAGE)
         self._mock_send_email.assert_not_called()
 
-    def test_password_reset_request_user_without_store_membership_no_email(self):
-        """Active user without tenant membership must not trigger reset (store users only)."""
+    def test_password_reset_request_user_without_store_membership_sends_email(self):
+        """Active user without tenant membership must still be able to reset password."""
         self._mock_send_email.reset_mock()
         resp = self.client.post(
             "/api/v1/auth/password/reset/",
             {"email": "pw_user@example.com"},
             format="json",
+            REMOTE_ADDR="10.0.0.2",
         )
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.data.get("message"), PASSWORD_RESET_OK_MESSAGE)
-        self._mock_send_email.assert_not_called()
+        self.assertEqual(self._mock_send_email.call_count, 1)
+
+    def test_password_reset_request_user_with_inactive_membership_sends_email(self):
+        """Password reset must not depend on store membership status."""
+        store = _make_store(
+            "Inactive Reset Store",
+            "inactive-reset.local",
+            owner_email="owner@inactive-reset.local",
+        )
+        u = make_user("inactive_store_reset@example.com", password="pass1234!")
+        m = StoreMembership.objects.create(
+            user=u,
+            store=store,
+            role=StoreMembership.Role.OWNER,
+        )
+        m.is_active = False
+        m.save(update_fields=["is_active"])
+
+        self._mock_send_email.reset_mock()
+        resp = self.client.post(
+            "/api/v1/auth/password/reset/",
+            {"email": "inactive_store_reset@example.com"},
+            format="json",
+            REMOTE_ADDR="10.0.0.3",
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data.get("message"), PASSWORD_RESET_OK_MESSAGE)
+        self.assertEqual(self._mock_send_email.call_count, 1)
 
     def test_password_reset_request_store_user_sends_email(self):
         store = _make_store(
@@ -539,6 +568,7 @@ class PasswordManagementTests(TestCase):
             "/api/v1/auth/password/reset/",
             {"email": "store_reset@example.com"},
             format="json",
+            REMOTE_ADDR="10.0.0.4",
         )
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.data.get("message"), PASSWORD_RESET_OK_MESSAGE)
@@ -554,6 +584,7 @@ class PasswordManagementTests(TestCase):
             "/api/v1/auth/password/reset/",
             {"email": "su_reset@example.com"},
             format="json",
+            REMOTE_ADDR="10.0.0.5",
         )
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.data.get("message"), PASSWORD_RESET_OK_MESSAGE)
@@ -568,6 +599,7 @@ class PasswordManagementTests(TestCase):
             "/api/v1/auth/password/reset/",
             {"email": "staff_reset@example.com"},
             format="json",
+            REMOTE_ADDR="10.0.0.6",
         )
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.data.get("message"), PASSWORD_RESET_OK_MESSAGE)
