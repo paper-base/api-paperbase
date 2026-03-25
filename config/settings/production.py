@@ -1,4 +1,5 @@
 from django.core.exceptions import ImproperlyConfigured
+from urllib.parse import urlparse
 
 from .base import *  # noqa: F403,F401
 
@@ -33,6 +34,57 @@ X_FRAME_OPTIONS = "DENY"
 CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS")  # noqa: F405
 if not CSRF_TRUSTED_ORIGINS:
     raise ImproperlyConfigured("CSRF_TRUSTED_ORIGINS must be set in production.")
+
+# Cloudflare R2 storage (S3-compatible) for production media/static assets.
+R2_ACCESS_KEY_ID = _require_env("R2_ACCESS_KEY_ID")
+R2_SECRET_ACCESS_KEY = _require_env("R2_SECRET_ACCESS_KEY")
+R2_BUCKET_NAME = _require_env("R2_BUCKET_NAME")
+R2_ENDPOINT_URL = _require_env("R2_ENDPOINT_URL")
+R2_PUBLIC_URL = _require_env("R2_PUBLIC_URL").strip().rstrip("/")
+
+_r2_public = urlparse(R2_PUBLIC_URL if "://" in R2_PUBLIC_URL else f"https://{R2_PUBLIC_URL}")
+R2_CUSTOM_DOMAIN = (_r2_public.netloc or _r2_public.path).strip().strip("/")
+if not R2_CUSTOM_DOMAIN:
+    raise ImproperlyConfigured("R2_PUBLIC_URL must be a valid URL or domain.")
+
+if "storages" not in INSTALLED_APPS:  # noqa: F405
+    INSTALLED_APPS = ["storages", *INSTALLED_APPS]  # noqa: F405
+
+AWS_ACCESS_KEY_ID = R2_ACCESS_KEY_ID
+AWS_SECRET_ACCESS_KEY = R2_SECRET_ACCESS_KEY
+AWS_STORAGE_BUCKET_NAME = R2_BUCKET_NAME
+AWS_S3_ENDPOINT_URL = R2_ENDPOINT_URL
+AWS_S3_REGION_NAME = "auto"
+AWS_S3_CUSTOM_DOMAIN = R2_CUSTOM_DOMAIN
+AWS_QUERYSTRING_AUTH = False
+AWS_DEFAULT_ACL = None
+AWS_S3_FILE_OVERWRITE = False
+AWS_S3_SIGNATURE_VERSION = "s3v4"
+AWS_S3_ADDRESSING_STYLE = "virtual"
+
+STORAGES = {
+    "default": {
+        "BACKEND": "storages.backends.s3.S3Storage",
+        "OPTIONS": {
+            "location": "media",
+            "default_acl": AWS_DEFAULT_ACL,
+            "querystring_auth": AWS_QUERYSTRING_AUTH,
+            "file_overwrite": AWS_S3_FILE_OVERWRITE,
+        },
+    },
+    "staticfiles": {
+        "BACKEND": "storages.backends.s3.S3Storage",
+        "OPTIONS": {
+            "location": "static",
+            "default_acl": AWS_DEFAULT_ACL,
+            "querystring_auth": AWS_QUERYSTRING_AUTH,
+            "file_overwrite": True,
+        },
+    },
+}
+
+MEDIA_URL = f"{R2_PUBLIC_URL}/media/"
+STATIC_URL = f"{R2_PUBLIC_URL}/static/"
 
 # Production DB: explicit Postgres configuration with strict env validation.
 DATABASES = {
