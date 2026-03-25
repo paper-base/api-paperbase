@@ -135,9 +135,7 @@ See `.env.example` for the full list. Production requires at least:
 - `SECRET_KEY`
 - `ALLOWED_HOSTS`
 - `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT`
-- `CHANNEL_LAYER_REDIS_URL`
-- `CACHE_REDIS_URL`
-- `CELERY_BROKER_URL`
+- `REDIS_URL` (single Railway Redis URL for Channels, cache, Celery broker, and Celery results)
 
 ## Auth
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from django.conf import settings
 from django.utils import timezone
 
 from engine.apps.billing.feature_gate import has_feature
@@ -273,4 +274,9 @@ def queue_generic_notification(
     ctx: dict = {"title": title, "body": body}
     if action_url:
         ctx["action_url"] = action_url
-    send_email_task.delay(GENERIC_NOTIFICATION, to_email, ctx)
+    send_email_task.delay(
+        GENERIC_NOTIFICATION,
+        to_email,
+        ctx,
+        getattr(settings, "SUPPORT_FROM_EMAIL", "support@akkho.com"),
+    )

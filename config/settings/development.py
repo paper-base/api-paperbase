@@ -24,7 +24,7 @@ CHANNEL_LAYERS = {
 }
 
 # Cache: local by default, Redis optional for tenant resolution.
-_tenant_cache_redis_url = os.getenv("CACHE_REDIS_URL", "").strip()  # noqa: F405
+_tenant_cache_redis_url = os.getenv("REDIS_URL", "").strip()  # noqa: F405
 if TESTING:  # noqa: F405
     CACHES = {
         "default": {
@@ -54,8 +54,8 @@ else:
             "LOCATION": "tenant-resolution-local",
         }
 
-CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")  # noqa: F405
-CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", CELERY_BROKER_URL)  # noqa: F405
+CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", os.getenv("REDIS_URL", ""))  # noqa: F405
+CELERY_RESULT_BACKEND = CELERY_BROKER_URL  # noqa: F405
 CELERY_TASK_ALWAYS_EAGER = env_bool("CELERY_TASK_ALWAYS_EAGER", False) or TESTING or DEBUG  # noqa: F405
 
 CORS_ALLOW_ALL_ORIGINS = True

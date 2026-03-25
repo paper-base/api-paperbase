@@ -20,12 +20,21 @@ class ResendEmailProvider(BaseEmailProvider):
             "onboarding@resend.dev"
         )
 
-    def send(self, to_email: str, subject: str, html: str, text: str | None = None):
+    def send(
+        self,
+        to_email: str,
+        subject: str,
+        html: str,
+        text: str | None = None,
+        *,
+        from_email: str | None = None,
+    ):
         if not self.api_key:
             raise RuntimeError("RESEND_API_KEY is not configured.")
+        sender = (from_email or "").strip() or self.from_email
 
         payload: dict = {
-            "from": self.from_email,
+            "from": sender,
             "to": [to_email],
             "subject": subject,
             "html": html,

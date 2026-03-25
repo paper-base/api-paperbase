@@ -98,28 +98,27 @@ DATABASES = {
     }
 }
 
-_channel_redis = _require_env("CHANNEL_LAYER_REDIS_URL")
+_redis_url = _require_env("REDIS_URL")
 CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
-        "CONFIG": {"hosts": [_channel_redis]},
+        "CONFIG": {"hosts": [_redis_url]},
     }
 }
 
-_cache_redis_url = _require_env("CACHE_REDIS_URL")
 CACHES = {
     "default": {
         "BACKEND": "django.core.cache.backends.redis.RedisCache",
-        "LOCATION": _cache_redis_url,
+        "LOCATION": _redis_url,
     },
     TENANT_RESOLUTION_CACHE_ALIAS: {  # noqa: F405
         "BACKEND": "django.core.cache.backends.redis.RedisCache",
-        "LOCATION": _cache_redis_url,
+        "LOCATION": _redis_url,
     },
 }
 
-CELERY_BROKER_URL = _require_env("CELERY_BROKER_URL")
-CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", CELERY_BROKER_URL)  # noqa: F405
+CELERY_BROKER_URL = _redis_url
+CELERY_RESULT_BACKEND = CELERY_BROKER_URL  # noqa: F405
 CELERY_TASK_ALWAYS_EAGER = False
 
 CORS_ALLOW_ALL_ORIGINS = False

@@ -26,6 +26,7 @@ def send_email(
     context: dict | None = None,
     *,
     provider: BaseEmailProvider | None = None,
+    from_email: str | None = None,
 ) -> EmailLog:
     """
     Load template by type, render bodies, persist EmailLog, send via provider.
@@ -49,7 +50,7 @@ def send_email(
 
     mailer = provider or get_email_provider()
     try:
-        mailer.send(to_email, subject, html, text)
+        mailer.send(to_email, subject, html, text, from_email=from_email)
     except Exception as exc:  # noqa: BLE001 — record any failure on the log
         err = str(exc)[:_ERROR_MAX_LEN]
         log.status = EmailLog.Status.FAILED
