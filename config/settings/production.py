@@ -1,5 +1,6 @@
 from django.core.exceptions import ImproperlyConfigured
 from urllib.parse import urlparse
+import dj_database_url
 
 from .base import *  # noqa: F403,F401
 
@@ -86,16 +87,9 @@ STORAGES = {
 MEDIA_URL = f"{R2_PUBLIC_URL}/media/"
 STATIC_URL = f"{R2_PUBLIC_URL}/static/"
 
-# Production DB: explicit Postgres configuration with strict env validation.
+# Database
 DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.postgresql",
-        "NAME": _require_env("DB_NAME"),
-        "USER": _require_env("DB_USER"),
-        "PASSWORD": _require_env("DB_PASSWORD"),
-        "HOST": _require_env("DB_HOST"),
-        "PORT": _require_env("DB_PORT"),
-    }
+    "default": dj_database_url.parse(os.environ["DATABASE_URL"], conn_max_age=600)  # noqa: F405
 }
 
 _redis_url = _require_env("REDIS_URL")
