@@ -31,11 +31,19 @@ def env_list(name: str, default: list[str] | None = None) -> list[str]:
 TESTING = any(arg == "test" or arg.startswith("test") for arg in sys.argv)
 
 # Multi-tenant platform host routing
-PLATFORM_HOSTS = [
+PLATFORM_ROOT_DOMAIN = os.getenv("PLATFORM_ROOT_DOMAIN", "akkho.com").strip().lower()
+_default_platform_hosts = [
     "localhost",
     "127.0.0.1",
+    f"api.{PLATFORM_ROOT_DOMAIN}",
 ]
-PLATFORM_ROOT_DOMAIN = os.getenv("PLATFORM_ROOT_DOMAIN", "akkho.com")
+PLATFORM_HOSTS = sorted(
+    {
+        h.strip().lower()
+        for h in [*_default_platform_hosts, *env_list("PLATFORM_HOSTS")]
+        if h and h.strip()
+    }
+)
 
 # Applications
 INSTALLED_APPS = [
