@@ -1,7 +1,3 @@
-import base64
-from urllib.parse import urlencode
-
-from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.tokens import default_token_generator
@@ -10,11 +6,14 @@ from django.utils.encoding import force_bytes, force_str
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from rest_framework import serializers
 
-from engine.apps.emails.constants import EMAIL_VERIFICATION, PASSWORD_RESET
-from engine.apps.emails.tasks import send_email_task
 from engine.apps.stores.models import StoreMembership
 from engine.apps.stores.services import store_primary_domain_host
-from .services import change_user_password, reset_user_password, send_verification_email
+from .services import (
+    change_user_password,
+    request_password_reset,
+    reset_user_password,
+    send_verification_email,
+)
 from .two_factor_service import disable_2fa
 
 User = get_user_model()
@@ -34,50 +33,6 @@ def _user_from_uid(uid):
         return User.objects.get(pk=pk)
     except (User.DoesNotExist, ValueError, TypeError, OverflowError):
         return None
-
-
-def _user_eligible_for_public_password_reset(email: str):
-    """
-    Public password reset eligibility: any active non-staff/non-superuser user.
-    Returns None if no such user (silent — used for unauthenticated reset).
-    """
-    return (
-        User.objects.filter(
-            email__iexact=email.strip().lower(),
-            is_active=True,
-            is_superuser=False,
-            is_staff=False,
-        )
-        .distinct()
-        .first()
-    )
-
-
-def _send_verification_email(user, request=None):
-    send_verification_email(user)
-
-
-def _send_password_reset_email(user, logout_all_devices: bool = False):
-    uid = _uid_for(user)
-    token = default_token_generator.make_token(user)
-    frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:3000")
-    query = urlencode(
-        {
-            "uid": uid,
-            "token": token,
-            "logout_all_devices": "1" if logout_all_devices else "0",
-        }
-    )
-    link = f"{frontend_url}/auth/password-reset/confirm?{query}"
-    send_email_task.delay(
-        PASSWORD_RESET,
-        user.email,
-        {
-            "user_name": user.get_short_name() or user.email,
-            "user_email": user.email,
-            "reset_link": link,
-        },
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -128,7 +83,7 @@ class RegisterSerializer(serializers.Serializer):
             is_verified=False,
             **validated_data,
         )
-        _send_verification_email(user)
+        send_verification_email(user)
         return user
 
 
@@ -265,13 +220,10 @@ class PasswordResetSerializer(serializers.Serializer):
     logout_all_devices = serializers.BooleanField(required=False, default=False)
 
     def save(self, **kwargs):
-        email = self.validated_data["email"].strip().lower()
-        user = _user_eligible_for_public_password_reset(email)
-        if user is not None:
-            _send_password_reset_email(
-                user,
-                logout_all_devices=self.validated_data.get("logout_all_devices", False),
-            )
+        request_password_reset(
+            email=self.validated_data["email"],
+            logout_all_devices=self.validated_data.get("logout_all_devices", False),
+        )
 
 
 class PasswordResetConfirmSerializer(serializers.Serializer):

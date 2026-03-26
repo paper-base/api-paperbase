@@ -14,6 +14,7 @@ from rest_framework_simplejwt.views import TokenRefreshView
 from engine.apps.billing.feature_gate import get_feature_config
 from engine.apps.emails.triggers import queue_two_fa_disabled_email
 from engine.apps.stores.models import StoreMembership
+from engine.core.rate_limit_service import RateLimitExceeded
 from config.permissions import IsVerifiedUser
 from .models import UserTwoFactor
 from .two_factor_service import (
@@ -389,7 +390,10 @@ class TwoFactorRecoveryRequestView(views.APIView):
     throttle_classes = [OTPManageRateThrottle]
 
     def post(self, request):
-        ok, err = request_recovery_code(request.user)
+        try:
+            ok, err = request_recovery_code(request.user)
+        except RateLimitExceeded as exc:
+            return Response(exc.as_response_data(), status=status.HTTP_429_TOO_MANY_REQUESTS)
         if not ok:
             return Response({"detail": err}, status=status.HTTP_400_BAD_REQUEST)
         return Response(
@@ -493,7 +497,10 @@ class PasswordResetRequestView(views.APIView):
         serializer = PasswordResetSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        serializer.save()
+        try:
+            serializer.save()
+        except RateLimitExceeded as exc:
+            return Response(exc.as_response_data(), status=status.HTTP_429_TOO_MANY_REQUESTS)
         return Response(
             {"message": "If an account exists, we've sent a password reset link."},
             status=status.HTTP_200_OK,
@@ -557,7 +564,10 @@ class ResendVerificationView(views.APIView):
         serializer = ResendVerificationSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        resend_verification_email_for_email(serializer.validated_data["email"])
+        try:
+            resend_verification_email_for_email(serializer.validated_data["email"])
+        except RateLimitExceeded as exc:
+            return Response(exc.as_response_data(), status=status.HTTP_429_TOO_MANY_REQUESTS)
         return Response(
             {"message": RESEND_VERIFICATION_NEUTRAL_MESSAGE},
             status=status.HTTP_200_OK,

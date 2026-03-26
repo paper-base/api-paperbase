@@ -17,6 +17,7 @@ from engine.apps.accounts.models import (
 )
 from engine.apps.emails.constants import TWO_FA_RECOVERY
 from engine.apps.emails.tasks import send_email_task
+from engine.core.rate_limit_service import enforce_rate_limit, record_action
 
 
 TWO_FACTOR_OTP_DIGITS = 6
@@ -129,7 +130,11 @@ def disable_2fa(user, otp_code: str):
 def request_recovery_code(user):
     """
     Issue a single-use recovery code (emailed in plaintext once). Invalidates prior unused codes.
+
+    Raises ``RateLimitExceeded`` if the cooldown from a previous request is still active.
     """
+    enforce_rate_limit(None, "2fa_recovery_request", user.email)
+
     profile = get_or_create_profile(user)
     if not profile.is_enabled:
         return False, "Two-factor authentication is not enabled."
@@ -155,6 +160,7 @@ def request_recovery_code(user):
             "expires_at": expires_at.isoformat(),
         },
     )
+    record_action(None, "2fa_recovery_request", user.email)
     return True, None
 
 
