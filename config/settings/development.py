@@ -37,21 +37,27 @@ if TESTING:  # noqa: F405
         },
     }
 else:
-    CACHES = {
-        "default": {
-            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
-            "LOCATION": "default-local",
-        },
-    }
     if _tenant_cache_redis_url:
-        CACHES[TENANT_RESOLUTION_CACHE_ALIAS] = {  # noqa: F405
-            "BACKEND": "django.core.cache.backends.redis.RedisCache",
-            "LOCATION": _tenant_cache_redis_url,
+        CACHES = {
+            "default": {
+                "BACKEND": "django.core.cache.backends.redis.RedisCache",
+                "LOCATION": _tenant_cache_redis_url,
+            },
+            TENANT_RESOLUTION_CACHE_ALIAS: {  # noqa: F405
+                "BACKEND": "django.core.cache.backends.redis.RedisCache",
+                "LOCATION": _tenant_cache_redis_url,
+            },
         }
     else:
-        CACHES[TENANT_RESOLUTION_CACHE_ALIAS] = {  # noqa: F405
-            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
-            "LOCATION": "tenant-resolution-local",
+        CACHES = {
+            "default": {
+                "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+                "LOCATION": "default-local",
+            },
+            TENANT_RESOLUTION_CACHE_ALIAS: {  # noqa: F405
+                "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+                "LOCATION": "tenant-resolution-local",
+            },
         }
 
 CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", os.getenv("REDIS_URL", ""))  # noqa: F405

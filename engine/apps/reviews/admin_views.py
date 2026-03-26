@@ -8,6 +8,7 @@ from engine.core.tenancy import get_active_store
 
 from .models import Review
 from .admin_serializers import AdminReviewSerializer
+from .services import invalidate_review_cache
 
 
 class AdminReviewViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
@@ -24,6 +25,11 @@ class AdminReviewViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         instance = serializer.save()
+        ctx = get_active_store(self.request)
+        if ctx.store:
+            invalidate_review_cache(
+                ctx.store.public_id, instance.product.public_id
+            )
         log_activity(
             request=self.request,
             action=ActivityLog.Action.UPDATE,
@@ -35,7 +41,11 @@ class AdminReviewViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
     def perform_destroy(self, instance):
         public_id = instance.public_id
         product_name = instance.product.name
+        product_public_id = instance.product.public_id
+        ctx = get_active_store(self.request)
         super().perform_destroy(instance)
+        if ctx.store:
+            invalidate_review_cache(ctx.store.public_id, product_public_id)
         log_activity(
             request=self.request,
             action=ActivityLog.Action.DELETE,

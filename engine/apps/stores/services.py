@@ -10,6 +10,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from engine.apps.billing.feature_gate import has_feature
+from engine.core import cache_service
 
 from .models import Domain, Store, StoreMembership, StoreSettings
 
@@ -122,6 +123,29 @@ def sync_store_owner_to_user(store: Store) -> None:
     owner.first_name = first
     owner.last_name = last
     owner.save(update_fields=["first_name", "last_name"])
+
+
+# ---------------------------------------------------------------------------
+# Store settings cache
+# ---------------------------------------------------------------------------
+
+def get_cached_store_settings(store_public_id: str):
+    """Return cached settings response data, or ``None`` on miss."""
+    key = cache_service.build_key(store_public_id, "store_settings", "current")
+    return cache_service.get(key)
+
+
+def set_cached_store_settings(store_public_id: str, data) -> None:
+    """Cache settings response data."""
+    key = cache_service.build_key(store_public_id, "store_settings", "current")
+    cache_service.set(key, data, settings.CACHE_TTL_STORE_SETTINGS)
+
+
+def invalidate_store_settings_cache(store_public_id: str) -> None:
+    """Clear settings cache for a store."""
+    cache_service.delete(
+        cache_service.build_key(store_public_id, "store_settings", "current")
+    )
 
 
 def sync_order_email_notification_settings_for_user(user) -> None:

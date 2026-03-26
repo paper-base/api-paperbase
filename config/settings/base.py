@@ -101,6 +101,21 @@ TENANT_API_EXEMPT_PREFIXES = (
     "/api/v1/auth/",
 )
 
+# ---------------------------------------------------------------------------
+# Data cache TTLs (seconds) — used by engine.core.cache_service
+# ---------------------------------------------------------------------------
+CACHE_TTL_PRODUCT_LIST = int(os.getenv("CACHE_TTL_PRODUCT_LIST", "120"))
+CACHE_TTL_PRODUCT_DETAIL = int(os.getenv("CACHE_TTL_PRODUCT_DETAIL", "180"))
+CACHE_TTL_RELATED_PRODUCTS = int(os.getenv("CACHE_TTL_RELATED_PRODUCTS", "180"))
+CACHE_TTL_CATEGORIES = int(os.getenv("CACHE_TTL_CATEGORIES", "300"))
+CACHE_TTL_BANNERS = int(os.getenv("CACHE_TTL_BANNERS", "300"))
+CACHE_TTL_NOTIFICATIONS = int(os.getenv("CACHE_TTL_NOTIFICATIONS", "300"))
+CACHE_TTL_STORE_SETTINGS = int(os.getenv("CACHE_TTL_STORE_SETTINGS", "300"))
+CACHE_TTL_FEATURE_CONFIG = int(os.getenv("CACHE_TTL_FEATURE_CONFIG", "600"))
+CACHE_TTL_REVIEWS = int(os.getenv("CACHE_TTL_REVIEWS", "120"))
+CACHE_TTL_REVIEW_SUMMARY = int(os.getenv("CACHE_TTL_REVIEW_SUMMARY", "120"))
+CACHE_TTL_SHIPPING_OPTIONS = int(os.getenv("CACHE_TTL_SHIPPING_OPTIONS", "300"))
+
 # CORS shared pieces
 CORS_ALLOW_HEADERS = list(__import__("corsheaders.defaults").defaults.default_headers) + [
     "x-store-public-id",

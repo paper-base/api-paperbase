@@ -32,6 +32,7 @@ from .admin_serializers import (
     AdminProductSerializer,
     AdminProductVariantSerializer,
 )
+from .services import invalidate_category_cache, invalidate_product_cache
 from .stock_sync import sync_product_stock_from_variants
 
 
@@ -136,6 +137,7 @@ class AdminProductViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
                 }
             )
         instance = serializer.save(store=store)
+        invalidate_product_cache(store.public_id)
         log_activity(
             request=self.request,
             action=ActivityLog.Action.CREATE,
@@ -146,6 +148,9 @@ class AdminProductViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         instance = serializer.save()
+        ctx = get_active_store(self.request)
+        if ctx.store:
+            invalidate_product_cache(ctx.store.public_id)
         log_activity(
             request=self.request,
             action=ActivityLog.Action.UPDATE,
@@ -157,7 +162,10 @@ class AdminProductViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
     def perform_destroy(self, instance):
         name = getattr(instance, "name", "")
         public_id = instance.public_id
+        ctx = get_active_store(self.request)
         super().perform_destroy(instance)
+        if ctx.store:
+            invalidate_product_cache(ctx.store.public_id)
         log_activity(
             request=self.request,
             action=ActivityLog.Action.DELETE,
@@ -217,6 +225,7 @@ class AdminProductImageViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
                 {'product': 'This product does not belong to your active store.'}
             )
         serializer.save()
+        invalidate_product_cache(store.public_id)
 
 
 class AdminParentCategoryViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
@@ -246,6 +255,7 @@ class AdminParentCategoryViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet
                 }
             )
         instance = serializer.save(parent=None, store=store)
+        invalidate_category_cache(store.public_id)
         log_activity(
             request=self.request,
             action=ActivityLog.Action.CREATE,
@@ -256,6 +266,9 @@ class AdminParentCategoryViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet
 
     def perform_update(self, serializer):
         instance = serializer.save(parent=None)
+        ctx = get_active_store(self.request)
+        if ctx.store:
+            invalidate_category_cache(ctx.store.public_id)
         log_activity(
             request=self.request,
             action=ActivityLog.Action.UPDATE,
@@ -267,7 +280,10 @@ class AdminParentCategoryViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet
     def perform_destroy(self, instance):
         name = getattr(instance, "name", "")
         public_id = instance.public_id
+        ctx = get_active_store(self.request)
         super().perform_destroy(instance)
+        if ctx.store:
+            invalidate_category_cache(ctx.store.public_id)
         log_activity(
             request=self.request,
             action=ActivityLog.Action.DELETE,
@@ -311,6 +327,7 @@ class AdminCategoryViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
                 }
             )
         instance = serializer.save(store=store)
+        invalidate_category_cache(store.public_id)
         log_activity(
             request=self.request,
             action=ActivityLog.Action.CREATE,
@@ -321,6 +338,9 @@ class AdminCategoryViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         instance = serializer.save()
+        ctx = get_active_store(self.request)
+        if ctx.store:
+            invalidate_category_cache(ctx.store.public_id)
         log_activity(
             request=self.request,
             action=ActivityLog.Action.UPDATE,
@@ -332,7 +352,10 @@ class AdminCategoryViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
     def perform_destroy(self, instance):
         name = getattr(instance, "name", "")
         public_id = instance.public_id
+        ctx = get_active_store(self.request)
         super().perform_destroy(instance)
+        if ctx.store:
+            invalidate_category_cache(ctx.store.public_id)
         log_activity(
             request=self.request,
             action=ActivityLog.Action.DELETE,
@@ -391,6 +414,9 @@ class AdminProductVariantViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet
         self._ensure_product_in_store(product)
         instance = serializer.save()
         sync_product_stock_from_variants(instance.product_id)
+        ctx = get_active_store(self.request)
+        if ctx.store:
+            invalidate_product_cache(ctx.store.public_id)
         log_activity(
             request=self.request,
             action=ActivityLog.Action.CREATE,
@@ -404,6 +430,9 @@ class AdminProductVariantViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet
         self._ensure_product_in_store(product)
         instance = serializer.save()
         sync_product_stock_from_variants(instance.product_id)
+        ctx = get_active_store(self.request)
+        if ctx.store:
+            invalidate_product_cache(ctx.store.public_id)
         log_activity(
             request=self.request,
             action=ActivityLog.Action.UPDATE,
@@ -417,8 +446,11 @@ class AdminProductVariantViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet
         pid = instance.product_id
         sku = instance.sku
         variant_public_id = instance.public_id
+        ctx = get_active_store(self.request)
         super().perform_destroy(instance)
         sync_product_stock_from_variants(pid)
+        if ctx.store:
+            invalidate_product_cache(ctx.store.public_id)
         log_activity(
             request=self.request,
             action=ActivityLog.Action.DELETE,

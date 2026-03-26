@@ -3,9 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
 
 from engine.apps.stores.models import Store
+from engine.core import cache_service
 
 from .models import ShippingMethod, ShippingRate, ShippingZone
 
@@ -85,4 +87,73 @@ def quote_shipping(
             break
 
     return best or ShippingQuote(shipping_cost=Decimal("0.00"), zone=zone)
+
+
+# ---------------------------------------------------------------------------
+# Storefront shipping options (cached)
+# ---------------------------------------------------------------------------
+
+def get_shipping_options(store, zone_public_id: str, order_total_str: str | None):
+    """
+    Return cached shipping options for a zone, falling back to DB.
+    Returns a list of option dicts ready for serialization.
+    """
+    from .serializers import ShippingOptionSerializer
+
+    params = {"zone": zone_public_id, "order_total": order_total_str or ""}
+    key = cache_service.build_key(
+        store.public_id,
+        "shipping_options",
+        cache_service.hash_params(params),
+    )
+
+    def fetcher():
+        try:
+            order_total = Decimal(order_total_str) if order_total_str else None
+        except Exception:
+            order_total = None
+
+        zone = ShippingZone.objects.filter(
+            store=store, is_active=True, public_id=zone_public_id
+        ).first()
+        if zone is None:
+            return []
+
+        methods = ShippingMethod.objects.filter(
+            store=store, is_active=True
+        ).prefetch_related("rates__shipping_zone").distinct()
+
+        options = []
+        for method in methods:
+            method_zone_ids = set(method.zones.values_list("id", flat=True))
+            if method_zone_ids and zone.id not in method_zone_ids:
+                continue
+            for rate in method.rates.filter(
+                store=store, is_active=True
+            ).select_related("shipping_zone"):
+                if rate.shipping_zone_id != zone.id:
+                    continue
+                if order_total is not None:
+                    if rate.min_order_total and order_total < rate.min_order_total:
+                        continue
+                    if rate.max_order_total and order_total > rate.max_order_total:
+                        continue
+                options.append(
+                    {
+                        "method_public_id": method.public_id,
+                        "method_name": method.name,
+                        "zone_public_id": rate.shipping_zone.public_id,
+                        "zone_name": rate.shipping_zone.name,
+                        "price": rate.price,
+                        "rate_type": rate.rate_type,
+                    }
+                )
+        return ShippingOptionSerializer(options, many=True).data
+
+    return cache_service.get_or_set(key, fetcher, settings.CACHE_TTL_SHIPPING_OPTIONS)
+
+
+def invalidate_shipping_cache(store_public_id: str) -> None:
+    """Clear shipping option caches for a store."""
+    cache_service.invalidate_store_resource(store_public_id, "shipping_options")
 

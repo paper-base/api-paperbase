@@ -137,6 +137,9 @@ def activate_subscription(
 
     sync_order_email_notification_settings_for_user(user)
 
+    from .feature_gate import invalidate_feature_config_cache
+    invalidate_feature_config_cache(user)
+
     return subscription
 
 
@@ -166,4 +169,8 @@ def extend_subscription(subscription, days):
 
     subscription.end_date = new_end
     subscription.save(update_fields=["end_date", "updated_at"])
+
+    from .feature_gate import invalidate_feature_config_cache
+    invalidate_feature_config_cache(subscription.user)
+
     return subscription

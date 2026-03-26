@@ -9,6 +9,7 @@ from engine.core.models import ActivityLog
 from engine.core.tenancy import get_active_store
 from .admin_serializers import AdminNotificationSerializer, AdminStaffNotificationSerializer
 from .models import StaffNotification, StorefrontCTA
+from .services import invalidate_notification_cache
 
 
 class AdminStaffNotificationViewSet(
@@ -55,6 +56,7 @@ class AdminNotificationViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
                 }
             )
         instance = serializer.save(store=store)
+        invalidate_notification_cache(store.public_id)
         log_activity(
             request=self.request,
             action=ActivityLog.Action.CREATE,
@@ -66,6 +68,9 @@ class AdminNotificationViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         instance = serializer.save()
+        ctx = get_active_store(self.request)
+        if ctx.store:
+            invalidate_notification_cache(ctx.store.public_id)
         log_activity(
             request=self.request,
             action=ActivityLog.Action.UPDATE,
@@ -78,7 +83,10 @@ class AdminNotificationViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
     def perform_destroy(self, instance):
         public_id = instance.public_id
         text = getattr(instance, "cta_text", "")
+        ctx = get_active_store(self.request)
         super().perform_destroy(instance)
+        if ctx.store:
+            invalidate_notification_cache(ctx.store.public_id)
         log_activity(
             request=self.request,
             action=ActivityLog.Action.DELETE,

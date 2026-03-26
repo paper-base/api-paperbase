@@ -9,6 +9,7 @@ from engine.core.tenancy import get_active_store
 
 from .models import Banner
 from .admin_serializers import AdminBannerSerializer
+from .services import invalidate_banner_cache
 
 
 class AdminBannerViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
@@ -37,6 +38,7 @@ class AdminBannerViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
                 }
             )
         instance = serializer.save(store=store)
+        invalidate_banner_cache(store.public_id)
         log_activity(
             request=self.request,
             action=ActivityLog.Action.CREATE,
@@ -47,6 +49,9 @@ class AdminBannerViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         instance = serializer.save()
+        ctx = get_active_store(self.request)
+        if ctx.store:
+            invalidate_banner_cache(ctx.store.public_id)
         log_activity(
             request=self.request,
             action=ActivityLog.Action.UPDATE,
@@ -58,7 +63,10 @@ class AdminBannerViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
     def perform_destroy(self, instance):
         title = instance.title or instance.public_id
         public_id = instance.public_id
+        ctx = get_active_store(self.request)
         super().perform_destroy(instance)
+        if ctx.store:
+            invalidate_banner_cache(ctx.store.public_id)
         log_activity(
             request=self.request,
             action=ActivityLog.Action.DELETE,

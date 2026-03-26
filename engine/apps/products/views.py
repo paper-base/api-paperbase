@@ -1,16 +1,19 @@
-from django.db.models import Count, Prefetch, Q, Sum
-from django.shortcuts import get_object_or_404
+from types import SimpleNamespace
+
+from django.db.models import Q
 from rest_framework.generics import ListAPIView, RetrieveAPIView
+from rest_framework.response import Response
 
 from engine.apps.analytics.service import meta_conversions
 from engine.core.tenancy import get_active_store, require_resolved_store
 
-from .models import Category, Product, ProductVariant, ProductVariantAttribute
+from .models import Product
 from .serializers import (
     CategorySerializer,
     ProductDetailSerializer,
     ProductListSerializer,
 )
+from . import services
 
 
 class StorefrontTenantMixin:
@@ -27,119 +30,50 @@ class ProductListView(StorefrontTenantMixin, ListAPIView):
 
     def get_queryset(self):
         ctx = get_active_store(self.request)
-        qs = Product.objects.filter(
-            store=ctx.store,
-            is_active=True,
-            status=Product.Status.ACTIVE,
-        ).select_related("category").prefetch_related("images").annotate(
-            _pub_variant_count=Count("variants", filter=Q(variants__is_active=True)),
-            _pub_variant_stock_sum=Sum(
-                "variants__stock_quantity", filter=Q(variants__is_active=True)
-            ),
+        return services.build_product_list_queryset(ctx.store, self.request.query_params)
+
+    def list(self, request, *args, **kwargs):
+        ctx = get_active_store(request)
+        cached = services.get_cached_product_list(
+            ctx.store.public_id, request.query_params
         )
-        category = self.request.query_params.get('category')
-        brand = self.request.query_params.get('brand')
-
-        if category:
-            # Support comma-separated category slugs
-            category_slugs = [c.strip() for c in category.split(',') if c.strip()]
-            if category_slugs:
-                qs = qs.filter(category__slug__in=category_slugs)
-
-        if brand:
-            brands = [b.strip() for b in brand.split(',') if b.strip()]
-            if brands:
-                qs = qs.filter(brand__in=brands)
-
-        featured = self.request.query_params.get('featured')
-        if featured and featured.lower() == 'true':
-            qs = qs.filter(is_featured=True)
-
-        hot_deals = self.request.query_params.get('hot_deals')
-        if hot_deals and hot_deals.lower() == 'true':
-            qs = qs.filter(badge='sale')
-
-        return qs.order_by("-created_at", "id")
+        if cached is not None:
+            return Response(cached)
+        response = super().list(request, *args, **kwargs)
+        services.set_cached_product_list(
+            ctx.store.public_id, request.query_params, response.data
+        )
+        return response
 
 
 class ProductDetailView(StorefrontTenantMixin, RetrieveAPIView):
     """Get single product by public_id (prd_xxx) or slug."""
     serializer_class = ProductDetailSerializer
-    def get_queryset(self):
-        ctx = get_active_store(self.request)
-        active_variant_qs = ProductVariant.objects.filter(is_active=True).prefetch_related(
-            Prefetch(
-                "attribute_values",
-                queryset=ProductVariantAttribute.objects.select_related(
-                    "attribute_value__attribute"
-                ),
-            )
-        )
-        return (
-            Product.objects.filter(
-                store=ctx.store,
-                is_active=True,
-                status=Product.Status.ACTIVE,
-            )
-            .select_related("category")
-            .prefetch_related("images", Prefetch("variants", queryset=active_variant_qs))
-            .annotate(
-                _pub_variant_count=Count("variants", filter=Q(variants__is_active=True)),
-                _pub_variant_stock_sum=Sum(
-                    "variants__stock_quantity", filter=Q(variants__is_active=True)
-                ),
-            )
-        )
     lookup_url_kwarg = 'identifier'
 
-    def get_object(self):
-        # Do NOT accept internal UUID/integer PKs — use public_id or slug only
-        identifier = self.kwargs.get(self.lookup_url_kwarg)
-        qs = self.get_queryset()
-        if identifier and identifier.startswith('prd_'):
-            return get_object_or_404(qs, public_id=identifier)
-        return get_object_or_404(qs, slug=identifier)
-
     def retrieve(self, request, *args, **kwargs):
-        response = super().retrieve(request, *args, **kwargs)
-        product = self.get_object()
-        meta_conversions.track_view_content(request, product)
-        return response
+        ctx = get_active_store(request)
+        identifier = self.kwargs.get(self.lookup_url_kwarg)
+        data = services.get_product_detail(ctx.store, identifier, request)
+        product_proxy = SimpleNamespace(
+            public_id=data.get("public_id"),
+            name=data.get("name"),
+            price=data.get("price"),
+        )
+        meta_conversions.track_view_content(request, product_proxy)
+        return Response(data)
 
 
 class ProductRelatedView(StorefrontTenantMixin, ListAPIView):
     """Related products for a given product (same category, excluding self)."""
     serializer_class = ProductListSerializer
+    pagination_class = None
 
-    def get_queryset(self):
-        ctx = get_active_store(self.request)
+    def list(self, request, *args, **kwargs):
+        ctx = get_active_store(request)
         identifier = self.kwargs.get('identifier')
-        base_qs = Product.objects.filter(
-            is_active=True, status=Product.Status.ACTIVE, store=ctx.store
-        )
-        # Do NOT accept internal UUID/integer PKs — use public_id or slug only
-        if identifier and identifier.startswith('prd_'):
-            product = get_object_or_404(base_qs, public_id=identifier)
-        else:
-            product = get_object_or_404(base_qs, slug=identifier)
-        return (
-            Product.objects.filter(
-                is_active=True,
-                status=Product.Status.ACTIVE,
-                store=ctx.store,
-                category=product.category,
-            )
-            .exclude(id=product.id)
-            .select_related("category")
-            .prefetch_related("images")
-            .annotate(
-                _pub_variant_count=Count("variants", filter=Q(variants__is_active=True)),
-                _pub_variant_stock_sum=Sum(
-                    "variants__stock_quantity", filter=Q(variants__is_active=True)
-                ),
-            )
-            .order_by("-created_at", "id")[:4]
-        )
+        data = services.get_related_products(ctx.store, identifier, request)
+        return Response(data)
 
 
 class CategoryListView(StorefrontTenantMixin, ListAPIView):
@@ -148,20 +82,22 @@ class CategoryListView(StorefrontTenantMixin, ListAPIView):
 
     def get_queryset(self):
         ctx = get_active_store(self.request)
-        qs = Category.objects.filter(
-            store=ctx.store,
-            is_active=True,
+        return services.build_category_list_queryset(
+            ctx.store, self.request.query_params
         )
-        parent_slug = self.request.query_params.get('parent')
-        if parent_slug:
-            parent = get_object_or_404(
-                Category.objects.filter(store=ctx.store, is_active=True),
-                slug=parent_slug,
-            )
-            qs = qs.filter(parent=parent)
-        else:
-            qs = qs.filter(parent__isnull=True)
-        return qs
+
+    def list(self, request, *args, **kwargs):
+        ctx = get_active_store(request)
+        cached = services.get_cached_category_list(
+            ctx.store.public_id, request.query_params
+        )
+        if cached is not None:
+            return Response(cached)
+        response = super().list(request, *args, **kwargs)
+        services.set_cached_category_list(
+            ctx.store.public_id, request.query_params, response.data
+        )
+        return response
 
 
 class CategoryDetailView(StorefrontTenantMixin, RetrieveAPIView):
@@ -169,18 +105,18 @@ class CategoryDetailView(StorefrontTenantMixin, RetrieveAPIView):
     serializer_class = CategorySerializer
     lookup_field = 'slug'
 
-    def get_queryset(self):
-        ctx = get_active_store(self.request)
-        return Category.objects.filter(
-            store=ctx.store,
-            is_active=True,
-        )
+    def retrieve(self, request, *args, **kwargs):
+        ctx = get_active_store(request)
+        slug = self.kwargs.get('slug')
+        data = services.get_category_detail(ctx.store, slug, request)
+        return Response(data)
 
 
 class ProductSearchView(StorefrontTenantMixin, ListAPIView):
     """
     Real-time product search endpoint.
     Searches product name, brand, and description fields.
+    Not cached — dynamic user input makes cache hit rates too low.
     """
     serializer_class = ProductListSerializer
 

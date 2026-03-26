@@ -15,6 +15,11 @@ from .serializers import (
     StoreMembershipSerializer,
     StoreSettingsSerializer,
 )
+from .services import (
+    get_cached_store_settings,
+    invalidate_store_settings_cache,
+    set_cached_store_settings,
+)
 
 User = get_user_model()
 
@@ -190,13 +195,24 @@ class StoreSettingsViewSet(
     @action(detail=False, methods=["get", "patch"])
     def current(self, request):
         """GET/PATCH store settings for the active store (no pk required)."""
-        obj = self.get_object()
+        ctx = get_active_store(request)
         if request.method == "GET":
+            if ctx.store:
+                cached = get_cached_store_settings(ctx.store.public_id)
+                if cached is not None:
+                    return Response(cached)
+            obj = self.get_object()
             serializer = self.get_serializer(obj)
-            return Response(serializer.data)
+            data = serializer.data
+            if ctx.store:
+                set_cached_store_settings(ctx.store.public_id, data)
+            return Response(data)
+        obj = self.get_object()
         serializer = self.get_serializer(obj, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
+        if ctx.store:
+            invalidate_store_settings_cache(ctx.store.public_id)
         return Response(serializer.data)
 
     @action(detail=False, methods=["post"], url_path="delete")

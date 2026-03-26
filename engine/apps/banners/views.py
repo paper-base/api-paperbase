@@ -1,13 +1,12 @@
-from django.db.models import Q
-from django.utils import timezone
 from rest_framework.generics import ListAPIView
 from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
 
 from engine.apps.products.views import StorefrontTenantMixin
 from engine.core.tenancy import get_active_store
 
-from .models import Banner
 from .serializers import PublicBannerSerializer
+from . import services
 
 
 class PublicBannerListView(StorefrontTenantMixin, ListAPIView):
@@ -19,12 +18,7 @@ class PublicBannerListView(StorefrontTenantMixin, ListAPIView):
     serializer_class = PublicBannerSerializer
     pagination_class = None
 
-    def get_queryset(self):
-        ctx = get_active_store(self.request)
-        now = timezone.now()
-        return (
-            Banner.objects.filter(store=ctx.store, is_active=True)
-            .filter(Q(start_at__isnull=True) | Q(start_at__lte=now))
-            .filter(Q(end_at__isnull=True) | Q(end_at__gte=now))
-            .order_by("order", "id")
-        )
+    def list(self, request, *args, **kwargs):
+        ctx = get_active_store(request)
+        data = services.get_active_banners(ctx.store, request)
+        return Response(data)

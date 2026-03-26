@@ -12,6 +12,7 @@ from .admin_serializers import (
     AdminShippingMethodSerializer,
     AdminShippingRateSerializer,
 )
+from .service import invalidate_shipping_cache
 
 
 class _AdminStoreScopedViewSet(StoreRolePermissionMixin, viewsets.GenericViewSet):
@@ -55,6 +56,7 @@ class AdminShippingZoneViewSet(
             serializer.save(store=store)
         except IntegrityError:
             raise ValidationError({"detail": "Could not save shipping zone due to a conflicting rule."})
+        invalidate_shipping_cache(store.public_id)
 
     def perform_update(self, serializer):
         store = self._get_store_or_error()
@@ -69,6 +71,7 @@ class AdminShippingZoneViewSet(
             serializer.save()
         except IntegrityError:
             raise ValidationError({"detail": "Could not update shipping zone due to a conflicting rule."})
+        invalidate_shipping_cache(store.public_id)
 
 
 class AdminShippingMethodViewSet(
@@ -103,6 +106,7 @@ class AdminShippingMethodViewSet(
             serializer.save(store=store)
         except IntegrityError:
             raise ValidationError({"detail": "Could not save shipping method due to a conflicting rule."})
+        invalidate_shipping_cache(store.public_id)
 
     def perform_update(self, serializer):
         store = self._get_store_or_error()
@@ -117,6 +121,7 @@ class AdminShippingMethodViewSet(
             serializer.save()
         except IntegrityError:
             raise ValidationError({"detail": "Could not update shipping method due to a conflicting rule."})
+        invalidate_shipping_cache(store.public_id)
 
 
 class AdminShippingRateViewSet(
@@ -157,8 +162,10 @@ class AdminShippingRateViewSet(
                     )
                 }
             )
+        invalidate_shipping_cache(store.public_id)
 
     def perform_update(self, serializer):
+        store = self._get_store_or_error()
         try:
             serializer.save()
         except IntegrityError:
@@ -169,4 +176,5 @@ class AdminShippingRateViewSet(
                     )
                 }
             )
+        invalidate_shipping_cache(store.public_id)
 

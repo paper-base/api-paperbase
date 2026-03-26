@@ -1,10 +1,10 @@
-from django.db import models
 from rest_framework.generics import ListAPIView
+from rest_framework.response import Response
 
 from engine.core.tenancy import get_active_store, require_resolved_store
 
-from .models import StorefrontCTA
 from .serializers import NotificationSerializer
+from . import services
 
 
 class _StorefrontTenantMixin:
@@ -21,14 +21,7 @@ class ActiveNotificationListView(_StorefrontTenantMixin, ListAPIView):
     permission_classes = []  # Public endpoint
     authentication_classes = []
 
-    def get_queryset(self):
-        ctx = get_active_store(self.request)
-        qs = StorefrontCTA.objects.filter(store=ctx.store, is_active=True)
-        from django.utils import timezone
-
-        now = timezone.now()
-        qs = qs.filter(
-            models.Q(start_date__isnull=True) | models.Q(start_date__lte=now),
-            models.Q(end_date__isnull=True) | models.Q(end_date__gte=now),
-        )
-        return qs
+    def list(self, request, *args, **kwargs):
+        ctx = get_active_store(request)
+        data = services.get_active_notifications(ctx.store, request)
+        return Response(data)

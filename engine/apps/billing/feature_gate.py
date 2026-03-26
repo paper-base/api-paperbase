@@ -3,9 +3,14 @@ Feature gate service. All feature/limit checks MUST go through these functions.
 
 Resolves: user -> subscription -> plan -> features JSON.
 Fallback when no subscription: use default plan (is_default=True).
+
+Results are cached per-user to avoid repeated subscription/plan lookups.
 """
 
+from django.conf import settings
 from rest_framework.exceptions import PermissionDenied
+
+from engine.core import cache_service
 
 from .models import Plan
 
@@ -45,8 +50,19 @@ def get_feature_config(user):
         {"features": {...}, "limits": {...}}
         Empty dicts if no plan.
     """
-    plan = _get_effective_plan(user)
-    return _get_plan_features(plan)
+    public_id = getattr(user, "public_id", None)
+    if not public_id:
+        plan = _get_effective_plan(user)
+        return _get_plan_features(plan)
+
+    key = cache_service.build_user_key(public_id, "feature_config")
+    ttl = getattr(settings, "CACHE_TTL_FEATURE_CONFIG", 600)
+
+    def fetcher():
+        plan = _get_effective_plan(user)
+        return _get_plan_features(plan)
+
+    return cache_service.get_or_set(key, fetcher, ttl)
 
 
 def has_feature(user, feature_key):
@@ -77,3 +93,10 @@ def require_feature(user, feature_key):
         raise PermissionDenied(
             detail=f"This feature ({feature_key}) is not available on your plan. Please upgrade."
         )
+
+
+def invalidate_feature_config_cache(user) -> None:
+    """Clear cached feature config for a user (call on subscription changes)."""
+    public_id = getattr(user, "public_id", None)
+    if public_id:
+        cache_service.invalidate_user_resource(public_id, "feature_config")

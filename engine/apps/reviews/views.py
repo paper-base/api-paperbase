@@ -1,16 +1,14 @@
-from django.db.models import Avg, Count
 from rest_framework import status
 from rest_framework.exceptions import NotFound
-from rest_framework.generics import ListAPIView, CreateAPIView, RetrieveAPIView
+from rest_framework.generics import ListAPIView, CreateAPIView
 from rest_framework.permissions import IsAuthenticatedOrReadOnly
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from engine.core.tenancy import get_active_store
 
-from .models import Review
 from .serializers import ReviewSerializer, ReviewCreateSerializer
-from engine.apps.products.models import Product
+from . import services
 
 
 class ReviewListByProductView(ListAPIView):
@@ -21,15 +19,26 @@ class ReviewListByProductView(ListAPIView):
     def get_queryset(self):
         ctx = get_active_store(self.request)
         if not ctx.store:
+            from .models import Review
             return Review.objects.none()
-        product_public_id = self.request.query_params.get('product_public_id')
-        if not product_public_id:
-            return Review.objects.none()
-        return Review.objects.filter(
-            product__public_id=product_public_id,
-            product__store=ctx.store,
-            status=Review.Status.APPROVED,
-        ).select_related('user').order_by('-created_at')
+        return services.build_review_list_queryset(
+            ctx.store, self.request.query_params
+        )
+
+    def list(self, request, *args, **kwargs):
+        ctx = get_active_store(request)
+        if not ctx.store:
+            return Response({"count": 0, "results": []})
+        cached = services.get_cached_review_list(
+            ctx.store.public_id, request.query_params
+        )
+        if cached is not None:
+            return Response(cached)
+        response = super().list(request, *args, **kwargs)
+        services.set_cached_review_list(
+            ctx.store.public_id, request.query_params, response.data
+        )
+        return response
 
 
 class ReviewCreateView(CreateAPIView):
@@ -50,22 +59,7 @@ class ReviewRatingSummaryView(APIView):
         if not ctx.store:
             raise NotFound()
         product_public_id = request.query_params.get('product_public_id')
-        if not product_public_id:
-            return Response({'average_rating': None, 'count': 0})
-        product_exists = Product.objects.filter(
-            public_id=product_public_id,
-            store=ctx.store,
-            is_active=True,
-            status=Product.Status.ACTIVE,
-        ).exists()
-        if not product_exists:
+        data = services.get_review_summary(ctx.store, product_public_id)
+        if data is None:
             raise NotFound()
-        agg = Review.objects.filter(
-            product__public_id=product_public_id,
-            product__store=ctx.store,
-            status=Review.Status.APPROVED,
-        ).aggregate(avg=Avg('rating'), count=Count('id'))
-        return Response({
-            'average_rating': round(agg['avg'], 2) if agg['avg'] is not None else None,
-            'count': agg['count'] or 0,
-        })
+        return Response(data)
