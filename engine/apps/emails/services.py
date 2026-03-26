@@ -6,6 +6,7 @@ from django.template import Context, Template
 from django.utils import timezone
 
 from .models import EmailLog, EmailTemplate
+from .template_catalog import DEFAULT_EMAIL_TEMPLATES
 from .providers.base import BaseEmailProvider
 from .providers.resend import ResendEmailProvider
 
@@ -34,7 +35,24 @@ def send_email(
     Intended to be called from Celery tasks (not from HTTP views directly).
     """
     ctx = copy.deepcopy(context) if context else {}
-    template = EmailTemplate.objects.get(type=email_type, is_active=True)
+    try:
+        template = EmailTemplate.objects.get(type=email_type, is_active=True)
+    except EmailTemplate.DoesNotExist:
+        default = DEFAULT_EMAIL_TEMPLATES.get(email_type)
+        if not default:
+            raise
+        template, _ = EmailTemplate.objects.get_or_create(
+            type=email_type,
+            defaults={
+                "subject": default["subject"],
+                "html_body": default["html_body"],
+                "text_body": default["text_body"],
+                "is_active": True,
+            },
+        )
+        if not template.is_active:
+            template.is_active = True
+            template.save(update_fields=["is_active", "updated_at"])
 
     subject = _render(template.subject, ctx)
     html = _render(template.html_body, ctx)

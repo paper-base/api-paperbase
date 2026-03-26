@@ -125,7 +125,12 @@ class RegisterSerializer(serializers.Serializer):
     def create(self, validated_data):
         validated_data.pop("password_confirm")
         password = validated_data.pop("password")
-        user = User.objects.create_user(password=password, **validated_data)
+        user = User.objects.create_user(
+            password=password,
+            is_active=False,
+            is_verified=False,
+            **validated_data,
+        )
         _send_verification_email(user)
         return user
 
@@ -316,7 +321,7 @@ class EmailVerificationSerializer(serializers.Serializer):
 
     def validate(self, attrs):
         user = _user_from_uid(attrs["uid"])
-        if user is None or not user.is_active:
+        if user is None:
             raise serializers.ValidationError({"uid": "Invalid verification link."})
 
         if not default_token_generator.check_token(user, attrs["token"]):
@@ -331,7 +336,8 @@ class EmailVerificationSerializer(serializers.Serializer):
     def save(self, **kwargs):
         user = self.validated_data["_user"]
         user.is_verified = True
-        user.save(update_fields=["is_verified", "updated_at"])
+        user.is_active = True
+        user.save(update_fields=["is_verified", "is_active", "updated_at"])
         return user
 
 

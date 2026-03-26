@@ -2,13 +2,19 @@ from django.contrib.auth import authenticate
 from django.contrib.auth import get_user_model
 from django.conf import settings
 from rest_framework import permissions, views, status
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
+from rest_framework_simplejwt.exceptions import InvalidToken
+from rest_framework_simplejwt.settings import api_settings
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.views import TokenRefreshView
 
 from engine.apps.billing.feature_gate import get_feature_config
 from engine.apps.emails.triggers import queue_two_fa_disabled_email
 from engine.apps.stores.models import StoreMembership
+from config.permissions import IsVerifiedUser
 from .models import UserTwoFactor
 from .two_factor_service import (
     begin_setup,
@@ -104,6 +110,51 @@ def _issue_tokens(user, store_public_id=None):
     }
 
 
+def _email_not_verified_response():
+    return Response(
+        {
+            "detail": "Email verification is required.",
+            "code": "email_not_verified",
+        },
+        status=status.HTTP_403_FORBIDDEN,
+    )
+
+
+class StrictTokenRefreshSerializer(TokenRefreshSerializer):
+    """
+    Harden refresh flow:
+    - Never crash if token points to a missing user
+    - Block refresh for unverified users
+    """
+
+    def validate(self, attrs):
+        try:
+            data = super().validate(attrs)
+        except User.DoesNotExist as exc:
+            raise InvalidToken("Token is invalid or expired.") from exc
+
+        refresh = RefreshToken(attrs["refresh"])
+        user_public_id = refresh.get(api_settings.USER_ID_CLAIM)
+        if not user_public_id:
+            raise InvalidToken("Token is invalid or expired.")
+
+        user = User.objects.filter(public_id=user_public_id).first()
+        if user is None or not user.is_active:
+            raise InvalidToken("Token is invalid or expired.")
+        if not user.is_verified:
+            raise PermissionDenied(
+                {
+                    "detail": "Email verification is required.",
+                    "code": "email_not_verified",
+                }
+            )
+        return data
+
+
+class StrictTokenRefreshView(TokenRefreshView):
+    serializer_class = StrictTokenRefreshSerializer
+
+
 class StoreAwareTokenObtainPairView(views.APIView):
     permission_classes = [permissions.AllowAny]
     throttle_classes = [] if getattr(settings, "TESTING", False) else [LoginRateThrottle]
@@ -117,6 +168,8 @@ class StoreAwareTokenObtainPairView(views.APIView):
         user = authenticate(request, username=email, password=password)
         if not user:
             return Response({"detail": "No active account found with the given credentials"}, status=status.HTTP_401_UNAUTHORIZED)
+        if not user.is_verified:
+            return _email_not_verified_response()
 
         profile = get_or_create_profile(user)
         if profile.is_enabled:
@@ -140,7 +193,7 @@ class StoreAwareTokenObtainPairView(views.APIView):
 class RegisterView(views.APIView):
     """
     POST /auth/register/
-    Create a new user account. Returns JWT tokens for immediate login.
+    Create a new user account.
     A verification email is sent automatically.
     """
 
@@ -163,7 +216,13 @@ class RegisterView(views.APIView):
                 },
                 status=status.HTTP_202_ACCEPTED,
             )
-        return Response(_issue_tokens(user), status=status.HTTP_201_CREATED)
+        return Response(
+            {
+                "detail": "Registration successful. Please verify your email before signing in.",
+                "email_verification_required": True,
+            },
+            status=status.HTTP_201_CREATED,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -176,7 +235,7 @@ class MeView(views.APIView):
     PATCH /auth/me/ — update first_name, last_name, phone, avatar
     """
 
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsVerifiedUser]
 
     def get(self, request):
         serializer = MeSerializer(request.user, context={"request": request})
@@ -199,7 +258,7 @@ class MeView(views.APIView):
 class FeaturesView(views.APIView):
     """GET /auth/features/ — feature flags and limits for the authenticated user."""
 
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsVerifiedUser]
 
     def get(self, request):
         config = get_feature_config(request.user)
@@ -217,7 +276,7 @@ class SwitchStoreView(views.APIView):
     Requires `store_public_id` (public_id of the target store) in the request body.
     """
 
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsVerifiedUser]
 
     def post(self, request):
         store_public_id = request.data.get("store_public_id")
@@ -260,7 +319,7 @@ class SwitchStoreView(views.APIView):
 
 
 class TwoFactorStatusView(views.APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsVerifiedUser]
 
     def get(self, request):
         profile = get_or_create_profile(request.user)
@@ -274,7 +333,7 @@ class TwoFactorStatusView(views.APIView):
 
 
 class TwoFactorSetupView(views.APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsVerifiedUser]
     throttle_classes = [OTPManageRateThrottle]
 
     def get(self, request):
@@ -293,7 +352,7 @@ class TwoFactorSetupView(views.APIView):
 
 
 class TwoFactorVerifyEnableView(views.APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsVerifiedUser]
     throttle_classes = [OTPManageRateThrottle]
 
     def post(self, request):
@@ -307,7 +366,7 @@ class TwoFactorVerifyEnableView(views.APIView):
 
 
 class TwoFactorDisableView(views.APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsVerifiedUser]
     throttle_classes = [OTPManageRateThrottle]
 
     def post(self, request):
@@ -322,7 +381,7 @@ class TwoFactorDisableView(views.APIView):
 class TwoFactorRecoveryRequestView(views.APIView):
     """POST /auth/2fa/recovery/request/ — email a one-time recovery code (2FA must be enabled)."""
 
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsVerifiedUser]
     throttle_classes = [OTPManageRateThrottle]
 
     def post(self, request):
@@ -338,7 +397,7 @@ class TwoFactorRecoveryRequestView(views.APIView):
 class TwoFactorRecoveryVerifyView(views.APIView):
     """POST /auth/2fa/recovery/verify/ — verify recovery code and disable 2FA."""
 
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsVerifiedUser]
     throttle_classes = [OTPManageRateThrottle]
 
     def post(self, request):
@@ -372,6 +431,8 @@ class TwoFactorChallengeVerifyView(views.APIView):
             return Response({"detail": err}, status=status.HTTP_400_BAD_REQUEST)
 
         user = challenge.user
+        if not user.is_verified:
+            return _email_not_verified_response()
         store_public_id = None
         if challenge.flow == "switch_store":
             store_public_id = challenge.payload.get("store_public_id")
@@ -390,7 +451,7 @@ class PasswordChangeView(views.APIView):
     Invalidates all existing sessions (password change updates last_login hash).
     """
 
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsVerifiedUser]
 
     def post(self, request):
         serializer = PasswordChangeSerializer(
