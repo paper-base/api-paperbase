@@ -159,14 +159,14 @@ def _activate_plan_for_users(modeladmin, request, queryset, plan_name, duration_
         modeladmin.message_user(request, f"{label} for {success} user(s).", messages.SUCCESS)
 
 
-@admin.action(description="Grant Basic plan (30 days)")
+@admin.action(description="Grant Essential plan (30 days)")
 def grant_basic_action(modeladmin, request, queryset):
     _activate_plan_for_users(
         modeladmin, request, queryset,
         plan_name=PLAN_ESSENTIAL,
         duration_days=30,
         source="manual",
-        label="Basic plan activated",
+        label="Essential plan activated",
     )
 
 
