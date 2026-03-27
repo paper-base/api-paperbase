@@ -1,6 +1,7 @@
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from django.db.models import F, Q
 
 from config.permissions import IsDashboardUser
 from engine.core.admin_views import StoreRolePermissionMixin
@@ -24,7 +25,38 @@ class AdminInventoryViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
         ctx = get_active_store(self.request)
         if not ctx.store:
             return qs.none()
-        return qs.filter(product__store=ctx.store)
+        qs = qs.filter(product__store=ctx.store)
+
+        stock_filter = (self.request.query_params.get("stock") or "").strip().lower()
+        if stock_filter == "in_stock":
+            qs = qs.filter(quantity__gt=0)
+        elif stock_filter == "out_of_stock":
+            qs = qs.filter(quantity=0)
+        elif stock_filter == "low_stock":
+            qs = qs.filter(quantity__lte=F("low_stock_threshold"))
+
+        tracked_filter = (self.request.query_params.get("tracked") or "").strip().lower()
+        if tracked_filter == "tracked":
+            qs = qs.filter(is_tracked=True)
+        elif tracked_filter == "untracked":
+            qs = qs.filter(is_tracked=False)
+
+        record_type = (self.request.query_params.get("type") or "").strip().lower()
+        if record_type == "variant":
+            qs = qs.filter(variant__isnull=False)
+        elif record_type == "product":
+            qs = qs.filter(variant__isnull=True)
+
+        search = (self.request.query_params.get("search") or "").strip()
+        if search:
+            qs = qs.filter(
+                Q(product__name__icontains=search)
+                | Q(product__public_id__icontains=search)
+                | Q(variant__sku__icontains=search)
+                | Q(variant__public_id__icontains=search)
+            )
+
+        return qs
 
     @action(detail=True, methods=['post'])
     def adjust(self, request, public_id=None):
