@@ -10,7 +10,7 @@ from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 
 from rest_framework.exceptions import PermissionDenied
 
-from config.permissions import IsDashboardUser, IsStoreAdmin
+from config.permissions import DenyAPIKeyAccess, IsAdminUser, IsStoreAdmin
 from engine.core.tenancy import get_active_store
 from engine.apps.stores.models import Store
 from engine.apps.orders.models import Order
@@ -25,7 +25,7 @@ from engine.apps.analytics.models import StoreDashboardStatsSnapshot
 
 
 class DashboardStatsView(APIView):
-    permission_classes = [IsDashboardUser]
+    permission_classes = [DenyAPIKeyAccess, IsAdminUser]
 
     def get(self, request):
         ctx = get_active_store(request)
@@ -102,7 +102,7 @@ class DashboardStatsOverviewView(APIView):
       - meta { start_date, end_date, bucket }
     """
 
-    permission_classes = [IsDashboardUser]
+    permission_classes = [DenyAPIKeyAccess, IsAdminUser]
 
     def _parse_date_range(self, request) -> tuple[date, date]:
         today = timezone.localdate()
@@ -295,7 +295,7 @@ class DashboardAnalyticsView(APIView):
     existing global counters used in the UI navigation.
     """
 
-    permission_classes = [IsDashboardUser]
+    permission_classes = [DenyAPIKeyAccess, IsAdminUser]
 
     def _parse_date_range(self, request) -> tuple[date, date]:
         """Parse start/end date from query params, defaulting to the last 30 days."""
@@ -477,8 +477,8 @@ class BrandingView(APIView):
 
     def get_permissions(self):
         if self.request.method in ("PATCH", "PUT"):
-            return [IsStoreAdmin()]
-        return [IsDashboardUser()]
+            return [DenyAPIKeyAccess(), IsStoreAdmin()]
+        return [DenyAPIKeyAccess(), IsAdminUser()]
 
     def _get_store(self, request):
         ctx = get_active_store(request)

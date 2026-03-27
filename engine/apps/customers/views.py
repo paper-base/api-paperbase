@@ -3,6 +3,7 @@ from rest_framework.generics import RetrieveAPIView, UpdateAPIView, ListCreateAP
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from config.permissions import DenyAPIKeyAccess
 from engine.core.tenancy import get_active_store
 
 from .models import Customer, CustomerAddress
@@ -32,7 +33,7 @@ def get_or_create_customer_for_request(request):
 
 class CustomerProfileView(RetrieveAPIView, UpdateAPIView):
     """GET/PATCH /api/v1/customers/me/ - current user's profile."""
-    permission_classes = [IsAuthenticated]
+    permission_classes = [DenyAPIKeyAccess, IsAuthenticated]
     serializer_class = CustomerProfileSerializer
 
     def get_object(self):
@@ -41,7 +42,7 @@ class CustomerProfileView(RetrieveAPIView, UpdateAPIView):
 
 class CustomerAddressListCreateView(ListCreateAPIView):
     """GET/POST /api/v1/customers/addresses/ - list and create addresses."""
-    permission_classes = [IsAuthenticated]
+    permission_classes = [DenyAPIKeyAccess, IsAuthenticated]
     serializer_class = CustomerAddressSerializer
 
     def get_queryset(self):
@@ -55,7 +56,7 @@ class CustomerAddressListCreateView(ListCreateAPIView):
 
 class CustomerAddressDetailView(RetrieveUpdateDestroyAPIView):
     """GET/PUT/PATCH/DELETE /api/v1/customers/addresses/<public_id>/"""
-    permission_classes = [IsAuthenticated]
+    permission_classes = [DenyAPIKeyAccess, IsAuthenticated]
     serializer_class = CustomerAddressSerializer
     lookup_field = 'public_id'
 

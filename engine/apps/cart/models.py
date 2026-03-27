@@ -2,11 +2,13 @@ from django.conf import settings
 from django.db import models
 
 from engine.apps.products.models import Product
+from engine.apps.stores.models import Store
 from engine.core.ids import generate_public_id
+from engine.core.tenant_queryset import TenantAwareManager
 
 
 class Cart(models.Model):
-    """Cart: for authenticated user or anonymous (session_key)."""
+    """Cart: for authenticated user or anonymous, scoped by store_session_id."""
     public_id = models.CharField(
         max_length=32, unique=True, db_index=True, editable=False,
         help_text="Non-sequential public identifier (e.g. crt_xxx).",
@@ -15,12 +17,19 @@ class Cart(models.Model):
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, null=True, blank=True,
         related_name='carts'
     )
-    session_key = models.CharField(max_length=40, blank=True, db_index=True)
+    store = models.ForeignKey(
+        Store,
+        on_delete=models.CASCADE,
+        related_name="carts",
+    )
+    store_session_id = models.CharField(max_length=255, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ['-updated_at']
+
+    objects = TenantAwareManager()
 
     def save(self, *args, **kwargs):
         if not self.public_id:
@@ -28,7 +37,7 @@ class Cart(models.Model):
         super().save(*args, **kwargs)
 
     def __str__(self):
-        return f"Cart {self.pk} ({self.user or self.session_key or 'anon'})"
+        return f"Cart {self.pk} ({self.user or self.store_session_id or 'anon'})"
 
 
 class CartItem(models.Model):

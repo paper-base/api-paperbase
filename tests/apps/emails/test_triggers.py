@@ -10,7 +10,7 @@ from django.utils import timezone
 
 from engine.apps.billing.models import Plan, Subscription
 from engine.apps.billing.services import activate_subscription
-from engine.apps.stores.models import Domain, Store, StoreMembership, StoreSettings
+from engine.apps.stores.models import Store, StoreMembership, StoreSettings
 from engine.apps.emails.constants import (
     ORDER_CONFIRMED,
     ORDER_RECEIVED,
@@ -37,11 +37,9 @@ def _store():
     d = f"t{_uuid.uuid4().hex[:12]}.local"
     store = Store.objects.create(
         name="S",
-        domain=None,
         owner_name="O",
         owner_email=f"owner@{d}",
     )
-    Domain.objects.filter(store=store, is_custom=False).update(domain=d)
     return store
 
 
@@ -164,9 +162,16 @@ class CustomerConfirmationSendToCourierTests(TestCase):
 class SubscriptionPaymentEmailTests(TestCase):
     def setUp(self):
         _ensure_default_plan()
-        self.user = User.objects.create_user(email="sub@example.com", password="pass")
+        self.user = User.objects.create_user(email="sub@example.com", password="pass", is_verified=True)
         self.plan = Plan.objects.filter(name="premium").first()
-        self.assertIsNotNone(self.plan, "premium plan must exist from migrations")
+        if not self.plan:
+            self.plan = Plan.objects.create(
+                name="premium",
+                price="999.00",
+                billing_cycle="monthly",
+                is_active=True,
+                features={"limits": {"max_stores": 3}, "features": {"advanced_analytics": True}},
+            )
 
     @patch("engine.apps.emails.tasks.send_email_task.delay")
     def test_manual_zero_sends_activation_not_payment(self, mock_delay):
@@ -218,8 +223,16 @@ class PlatformNewSubscriptionEmailTests(TestCase):
     @patch("engine.apps.emails.tasks.send_email_task.delay")
     def test_platform_email_when_superuser_exists(self, mock_delay):
         User.objects.create_superuser(email="admin@example.com", password="adminpass")
-        user = User.objects.create_user(email="u@example.com", password="pass")
+        user = User.objects.create_user(email="u@example.com", password="pass", is_verified=True)
         plan = Plan.objects.filter(name="premium").first()
+        if not plan:
+            plan = Plan.objects.create(
+                name="premium",
+                price="999.00",
+                billing_cycle="monthly",
+                is_active=True,
+                features={"limits": {"max_stores": 3}, "features": {"advanced_analytics": True}},
+            )
         activate_subscription(user, plan, source="manual", amount=0, provider="manual")
         types_queued = [c.args[0] for c in mock_delay.call_args_list]
         self.assertIn(PLATFORM_NEW_SUBSCRIPTION, types_queued)

@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 
 from django.conf import settings
 from django.core.cache import caches
 from django.http import HttpRequest, JsonResponse
+from django.urls import URLPattern, URLResolver, get_resolver
 from django.utils.deprecation import MiddlewareMixin
 
+from config.permissions import IsStorefrontAPIKey
 from engine.apps.stores.services import (
     resolve_active_store_api_key,
     touch_store_api_key_last_used,
 )
+from engine.core.store_session import attach_store_session_to_response
 
 API_KEY_EXEMPT_PATHS = (
     "/api/v1/auth/",
@@ -23,6 +27,24 @@ API_KEY_EXACT_EXEMPT_PATHS = (
     "/api/v1/health",
     "/api/v1/health/",
 )
+
+# Kept for tests/documentation only; authorization is enforced via permission classes.
+STORE_FRONTEND_ROUTE_POLICY = (
+    ("/api/v1/products/", {"GET"}),
+    ("/api/v1/categories/", {"GET"}),
+    ("/api/v1/banners/", {"GET"}),
+    ("/api/v1/reviews/", {"GET", "POST"}),
+    ("/api/v1/cart/", {"GET", "POST", "PATCH"}),
+    ("/api/v1/wishlist/", {"GET", "POST"}),
+    ("/api/v1/shipping/options/", {"GET"}),
+    ("/api/v1/orders/direct/", {"POST"}),
+    ("/api/v1/orders/initiate-checkout/", {"POST"}),
+    ("/api/v1/orders/", {"POST"}),
+    ("/api/v1/orders/my/", {"GET"}),
+    ("/api/v1/support/tickets/", {"POST"}),
+)
+_API_KEY_VIEW_SCAN_DONE = False
+logger = logging.getLogger(__name__)
 
 
 def _normalized_path(path: str) -> str:
@@ -86,6 +108,20 @@ def resolve_request_api_key(request: HttpRequest):
     return resolve_active_store_api_key(raw_api_key)
 
 
+def _is_api_key_token(raw_token: str | None) -> bool:
+    token = (raw_token or "").strip()
+    return token.startswith("ak_live_")
+
+
+def _is_admin_order_read_path(path: str, method: str) -> bool:
+    normalized_path = _normalized_path(path)
+    if (method or "GET").upper() != "GET":
+        return False
+    if normalized_path in {"/api/v1/orders", "/api/v1/orders/"}:
+        return True
+    return _path_starts_with_prefix(normalized_path, "/api/v1/orders/")
+
+
 def requires_tenant_api_key(path: str) -> bool:
     normalized_path = _normalized_path(path)
     if normalized_path in API_KEY_EXACT_EXEMPT_PATHS:
@@ -96,6 +132,52 @@ def requires_tenant_api_key(path: str) -> bool:
     if not _path_starts_with_prefix(normalized_path, prefix):
         return False
     return True
+
+
+def _iter_urlpatterns(patterns):
+    for pattern in patterns:
+        if isinstance(pattern, URLResolver):
+            yield from _iter_urlpatterns(pattern.url_patterns)
+        elif isinstance(pattern, URLPattern):
+            yield pattern
+
+
+def validate_storefront_api_key_view_flags(*, patterns=None) -> None:
+    url_patterns = patterns if patterns is not None else get_resolver().url_patterns
+    missing_allow_flag = []
+    for pattern in _iter_urlpatterns(url_patterns):
+        callback = getattr(pattern, "callback", None)
+        view_class = getattr(callback, "view_class", None) or getattr(callback, "cls", None)
+        if not view_class:
+            continue
+        permission_classes = getattr(view_class, "permission_classes", []) or []
+        if IsStorefrontAPIKey not in permission_classes:
+            continue
+        if not getattr(view_class, "allow_api_key", False):
+            missing_allow_flag.append(view_class.__name__)
+    if missing_allow_flag:
+        names = ", ".join(sorted(set(missing_allow_flag)))
+        raise RuntimeError(
+            "Storefront API key views must declare allow_api_key=True. "
+            f"Missing on: {names}"
+        )
+
+
+def maybe_validate_storefront_api_key_view_flags() -> None:
+    global _API_KEY_VIEW_SCAN_DONE
+    if _API_KEY_VIEW_SCAN_DONE:
+        return
+    is_test = bool(getattr(settings, "TESTING", False))
+    is_debug = bool(getattr(settings, "DEBUG", False))
+    if not (is_test or is_debug):
+        return
+    try:
+        validate_storefront_api_key_view_flags()
+    except RuntimeError as exc:
+        if is_test:
+            raise
+        logger.warning("Storefront API key allow-list validation warning: %s", exc)
+    _API_KEY_VIEW_SCAN_DONE = True
 
 
 class TenantApiKeyMiddleware(MiddlewareMixin):
@@ -110,12 +192,15 @@ class TenantApiKeyMiddleware(MiddlewareMixin):
             return None
 
         path = request.path
+        raw_api_key = _extract_bearer_token(request)
+        if _is_admin_order_read_path(path, request.method) and not _is_api_key_token(raw_api_key):
+            return None
+
         if not requires_tenant_api_key(path):
             return None
 
         key_row = resolve_request_api_key(request)
         if key_row is None:
-            raw_api_key = _extract_bearer_token(request)
             if _throttle_invalid_api_key(raw_api_key):
                 response = JsonResponse({"detail": "Too many invalid API key attempts."}, status=429)
                 response["Retry-After"] = "60"
@@ -126,3 +211,18 @@ class TenantApiKeyMiddleware(MiddlewareMixin):
         request.store = key_row.store
         touch_store_api_key_last_used(key_row)
         return None
+
+    def process_view(self, request: HttpRequest, view_func, view_args, view_kwargs):
+        maybe_validate_storefront_api_key_view_flags()
+        if not getattr(request, "api_key", None):
+            return None
+        view_class = getattr(view_func, "view_class", None) or getattr(view_func, "cls", None)
+        allow_api_key = bool(getattr(view_class, "allow_api_key", False))
+        if allow_api_key:
+            return None
+        return JsonResponse({"detail": "API key cannot access this endpoint."}, status=403)
+
+    def process_response(self, request: HttpRequest, response):
+        if getattr(request, "api_key", None):
+            attach_store_session_to_response(request, response)
+        return response

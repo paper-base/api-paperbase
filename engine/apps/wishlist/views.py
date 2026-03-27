@@ -1,10 +1,10 @@
 from rest_framework import status
 from rest_framework.exceptions import NotFound
 from rest_framework.generics import ListAPIView
-from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from config.permissions import IsStorefrontAPIKey
 from engine.apps.analytics.service import meta_conversions
 from engine.apps.products.models import Product
 from engine.core.tenancy import require_api_key_store
@@ -25,7 +25,10 @@ def _wishlist_filter(request):
 class WishlistListView(ListAPIView):
     """List current visitor's wishlist items."""
     serializer_class = WishlistItemSerializer
-    permission_classes = [AllowAny]
+    permission_classes = [IsStorefrontAPIKey]
+    authentication_classes = []
+    allow_api_key = True
+    access_scope = "storefront"
 
     def get_queryset(self):
         store = require_api_key_store(self.request)
@@ -37,7 +40,10 @@ class WishlistListView(ListAPIView):
 
 class WishlistAddView(APIView):
     """Add product to wishlist. Idempotent."""
-    permission_classes = [AllowAny]
+    permission_classes = [IsStorefrontAPIKey]
+    authentication_classes = []
+    allow_api_key = True
+    access_scope = "storefront"
 
     def post(self, request):
         store = require_api_key_store(request)
@@ -63,7 +69,10 @@ class WishlistAddView(APIView):
 
 class WishlistRemoveView(APIView):
     """Remove product from wishlist."""
-    permission_classes = [AllowAny]
+    permission_classes = [IsStorefrontAPIKey]
+    authentication_classes = []
+    allow_api_key = True
+    access_scope = "storefront"
 
     def post(self, request, product_public_id):
         store = require_api_key_store(request)
@@ -83,7 +92,10 @@ class WishlistRemoveView(APIView):
 
 class WishlistClearView(APIView):
     """Remove all items from the current visitor's wishlist."""
-    permission_classes = [AllowAny]
+    permission_classes = [IsStorefrontAPIKey]
+    authentication_classes = []
+    allow_api_key = True
+    access_scope = "storefront"
 
     def post(self, request):
         store = require_api_key_store(request)

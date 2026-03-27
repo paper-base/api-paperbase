@@ -1,4 +1,3 @@
-from django.db.models import Q
 from rest_framework import viewsets, mixins
 from rest_framework.exceptions import ValidationError
 
@@ -25,9 +24,12 @@ class AdminStaffNotificationViewSet(
     lookup_field = 'public_id'
 
     def get_queryset(self):
-        # Show notifications targeted at this user OR global ones (user=null).
+        ctx = get_active_store(self.request)
+        if not ctx.store:
+            return super().get_queryset().none()
         return super().get_queryset().filter(
-            Q(user=self.request.user) | Q(user__isnull=True)
+            store=ctx.store,
+            user=self.request.user,
         )
 
 

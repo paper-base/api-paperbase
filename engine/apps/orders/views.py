@@ -5,15 +5,18 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import status
 from rest_framework.exceptions import NotFound
 from rest_framework.generics import CreateAPIView, ListAPIView, RetrieveAPIView
-from rest_framework.permissions import IsAuthenticatedOrReadOnly
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from rest_framework.permissions import IsAuthenticated
+from config.permissions import DenyAPIKeyAccess, IsAdminUser, IsStorefrontAPIKey
 
 from engine.apps.cart.views import get_or_create_cart
 from engine.apps.analytics.service import meta_conversions
-from engine.core.tenancy import require_api_key_store
+from engine.core.tenancy import get_active_store, require_api_key_store
+from engine.core.store_session import (
+    resolve_store_session,
+)
 
 from .models import Order, OrderItem
 from .serializers import OrderCreateSerializer, OrderSerializer, DirectOrderCreateSerializer
@@ -38,7 +41,24 @@ def _notify_order_created(order: Order) -> None:
 class OrderCreateView(CreateAPIView):
     """Create order from current cart."""
     serializer_class = OrderCreateSerializer
-    permission_classes = [IsAuthenticated]
+    authentication_classes = []
+    allow_api_key = True
+
+    def get_permissions(self):
+        if self.request.method == "GET":
+            return [IsAdminUser(), DenyAPIKeyAccess()]
+        return [IsStorefrontAPIKey()]
+
+    def get(self, request, *args, **kwargs):
+        ctx = get_active_store(request)
+        store = ctx.store
+        if not store:
+            raise PermissionDenied("No active store resolved.")
+        queryset = Order.objects.filter(store=store).prefetch_related(
+            "items__product", "items__product__images"
+        )
+        data = OrderSerializer(queryset, many=True, context={"request": request}).data
+        return Response(data, status=status.HTTP_200_OK)
 
     @transaction.atomic
     def create(self, request, *args, **kwargs):
@@ -55,12 +75,7 @@ class OrderCreateView(CreateAPIView):
         from engine.apps.products.models import Product, ProductVariant
         product_ids = [ci.product_id for ci in items]
         variant_ids = [ci.variant_id for ci in items if getattr(ci, "variant_id", None)]
-        store = items[0].product.store if items else None
-        if not store:
-            return Response(
-                {"detail": "No store found for this cart."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        store = request_store
         locked_products = {
             p.id: p
             for p in Product.objects.filter(
@@ -86,6 +101,9 @@ class OrderCreateView(CreateAPIView):
         # Check stock availability (variant stock when variant is present).
         stock_errors = []
         for ci in items:
+            if ci.quantity <= 0:
+                stock_errors.append(f"Invalid quantity for {ci.product.name}.")
+                continue
             if getattr(ci, "variant_id", None):
                 variant = locked_variants.get(ci.variant_id)
                 if not variant:
@@ -113,7 +131,7 @@ class OrderCreateView(CreateAPIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         store_ids = {p.store_id for p in locked_products.values() if p.store_id}
-        if len(store_ids) > 1:
+        if len(store_ids) > 1 or (store_ids and store.id not in store_ids):
             return Response(
                 {"detail": "All products in a single order must belong to the same store."},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -131,11 +149,18 @@ class OrderCreateView(CreateAPIView):
             context={**self.get_serializer_context(), "store": store},
         )
         ser.is_valid(raise_exception=True)
+        session_ctx = resolve_store_session(request)
+        if not session_ctx.store_session_id:
+            return Response(
+                {"detail": "Store session context is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         order = Order.objects.create(
             store=store,
             order_number=get_next_order_number(store),
             user=request.user if request.user.is_authenticated else None,
             email=ser.validated_data.get('email', ''),
+            store_session_id=session_ctx.store_session_id,
             shipping_name=ser.validated_data['shipping_name'],
             shipping_address=ser.validated_data['shipping_address'],
             phone=ser.validated_data['phone'],
@@ -211,12 +236,29 @@ class OrderCreateView(CreateAPIView):
 class DirectOrderCreateView(CreateAPIView):
     """Create order directly with products (not from cart)."""
     serializer_class = DirectOrderCreateSerializer
-    permission_classes = []  # Allow unauthenticated (storefront) access
+    permission_classes = [IsStorefrontAPIKey]
     authentication_classes = []
     throttle_classes = [DirectOrderRateThrottle]
+    allow_api_key = True
 
     @transaction.atomic
     def create(self, request, *args, **kwargs):
+        allowed_top_level_fields = {
+            "shipping_zone",
+            "shipping_method",
+            "shipping_name",
+            "phone",
+            "email",
+            "shipping_address",
+            "district",
+            "products",
+        }
+        unknown_fields = set(request.data.keys()) - allowed_top_level_fields
+        if unknown_fields:
+            return Response(
+                {"detail": f"Unknown fields are not allowed: {', '.join(sorted(unknown_fields))}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         products_data = request.data.get("products") or []
         if not isinstance(products_data, list) or not products_data:
             return Response(
@@ -300,11 +342,18 @@ class DirectOrderCreateView(CreateAPIView):
 
         # Create order and reduce stock
         subtotal = Decimal('0.00')
+        session_ctx = resolve_store_session(request)
+        if not session_ctx.store_session_id:
+            return Response(
+                {"detail": "Store session context is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         order = Order.objects.create(
             store=order_store,
             order_number=get_next_order_number(order_store),
             user=request.user if request.user.is_authenticated else None,
             email=email,
+            store_session_id=session_ctx.store_session_id,
             shipping_name=ser.validated_data['shipping_name'],
             shipping_address=ser.validated_data['shipping_address'],
             phone=ser.validated_data['phone'],
@@ -379,16 +428,53 @@ class DirectOrderCreateView(CreateAPIView):
 
 
 class OrderListView(ListAPIView):
-    """List orders for the authenticated user."""
+    """List storefront orders scoped to current store + store session."""
     serializer_class = OrderSerializer
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsStorefrontAPIKey]
+    authentication_classes = []
+    allow_api_key = True
 
     def get_queryset(self):
-        if not self.request.user.is_authenticated:
-            return Order.objects.none()
         store = require_api_key_store(self.request)
-        return Order.objects.filter(user=self.request.user, store=store).prefetch_related(
+        session_ctx = resolve_store_session(self.request)
+        self._session_context = session_ctx
+        if not session_ctx.session_initialized:
+            return Order.objects.none()
+        return Order.objects.filter(store=store).prefetch_related(
             'items__product', 'items__product__images'
+        ).filter(store_session_id=session_ctx.store_session_id)
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        session_ctx = getattr(self, "_session_context", None)
+        if session_ctx and not session_ctx.session_initialized:
+            return Response(
+                {
+                    "count": 0,
+                    "results": [],
+                    "session_initialized": False,
+                    "requires_session_init": True,
+                    "session_status": "missing",
+                },
+                status=status.HTTP_200_OK,
+            )
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            response = self.get_paginated_response(serializer.data)
+            response.data["session_initialized"] = True
+            response.data["requires_session_init"] = False
+            response.data["session_status"] = "active"
+            return response
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(
+            {
+                "results": serializer.data,
+                "session_initialized": True,
+                "requires_session_init": False,
+                "session_status": "active",
+            },
+            status=status.HTTP_200_OK,
         )
 
 
@@ -398,19 +484,17 @@ class OrderDetailView(RetrieveAPIView):
     queryset = Order.objects.prefetch_related('items__product', 'items__product__images')
     lookup_field = "public_id"
     lookup_url_kwarg = "public_id"
+    permission_classes = [IsAdminUser, DenyAPIKeyAccess]
 
     def get_object(self):
         public_id = self.kwargs.get(self.lookup_url_kwarg)
-        store = require_api_key_store(self.request)
+        ctx = get_active_store(self.request)
+        store = ctx.store
+        if not store:
+            raise PermissionDenied("No active store resolved.")
         order = self.get_queryset().filter(public_id=public_id, store=store).first()
         if not order:
             raise NotFound()
-        if order.user_id and (not self.request.user.is_authenticated or order.user_id != self.request.user.id):
-            raise NotFound()
-        if not order.user_id:
-            email = self.request.query_params.get('email', '').strip().lower()
-            if not email or order.email.lower() != email:
-                raise NotFound()
         return order
 
 
@@ -420,8 +504,9 @@ class InitiateCheckoutView(APIView):
     Called by the frontend when the user navigates to the checkout page.
     Fires an InitiateCheckout event to Meta Conversions API and returns 200.
     """
-    permission_classes = []
+    permission_classes = [IsStorefrontAPIKey]
     authentication_classes = []
+    allow_api_key = True
 
     def post(self, request):
         meta_conversions.track_initiate_checkout(request)

@@ -21,6 +21,7 @@ class ActiveSystemNotificationAPITests(TestCase):
             email="banner-staff@example.com",
             password="secret123",
             is_staff=True,
+            is_verified=True,
         )
 
     def test_unauthenticated_is_denied(self):
@@ -126,11 +127,13 @@ class SystemNotificationDismissAPITests(TestCase):
             email="dismiss-staff@example.com",
             password="secret123",
             is_staff=True,
+            is_verified=True,
         )
         self.other = User.objects.create_user(
             email="dismiss-other@example.com",
             password="secret123",
             is_staff=True,
+            is_verified=True,
         )
 
     def _active_banner(self):

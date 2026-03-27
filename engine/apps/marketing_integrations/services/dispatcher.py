@@ -1,7 +1,7 @@
 """
 Marketing event dispatcher.
 
-Resolves the active store from the request, looks up enabled marketing
+Resolves the active store from explicit context, looks up enabled marketing
 integrations, checks per-event toggles, and delegates to provider-specific
 service modules.  All exceptions are caught so callers are never broken.
 """
@@ -11,25 +11,15 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from engine.core.tenant_context import get_current_store
+from engine.core.tenant_guard import TenantViolationError
+
 logger = logging.getLogger(__name__)
 
 
-def _resolve_store(request, obj=None):
-    """Return the Store for a request, falling back to obj.store."""
-    from engine.core.tenancy import get_active_store
-
-    ctx = get_active_store(request)
-    if ctx.store:
-        return ctx.store
-    if obj and hasattr(obj, "store"):
-        return obj.store
-    if obj and hasattr(obj, "store_id"):
-        from engine.apps.stores.models import Store
-        try:
-            return Store.objects.get(pk=obj.store_id)
-        except Store.DoesNotExist:
-            pass
-    return None
+def _resolve_store(*, store=None):
+    """Return explicitly provided store or current request-scoped store."""
+    return store or get_current_store()
 
 
 def _get_integrations(store):
@@ -43,7 +33,7 @@ def _get_integrations(store):
     )
 
 
-def _dispatch(request, event_flag: str, handler_name: str, *args: Any) -> None:
+def _dispatch(request, event_flag: str, handler_name: str, *args: Any, store=None) -> None:
     """
     Core dispatch loop.
 
@@ -55,9 +45,9 @@ def _dispatch(request, event_flag: str, handler_name: str, *args: Any) -> None:
     """
     from engine.apps.marketing_integrations.services import facebook_service
 
-    store = _resolve_store(request, args[0] if args else None)
+    store = _resolve_store(store=store)
     if not store:
-        return
+        raise TenantViolationError("Dispatcher requires explicit tenant context.")
 
     integrations = _get_integrations(store)
 

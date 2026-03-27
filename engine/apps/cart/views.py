@@ -1,12 +1,13 @@
 from rest_framework import status
 from rest_framework.generics import RetrieveAPIView
 from rest_framework.exceptions import NotFound
-from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from config.permissions import IsStorefrontAPIKey
 from engine.apps.analytics.service import meta_conversions
 from engine.apps.products.models import Product
+from engine.core.store_session import resolve_store_session
 from engine.core.tenancy import require_api_key_store
 
 from .models import Cart, CartItem
@@ -14,20 +15,31 @@ from .serializers import CartAddSerializer, CartItemSerializer, CartSerializer
 
 
 def get_or_create_cart(request):
+    store = require_api_key_store(request)
+    session_ctx = resolve_store_session(request)
+    if not session_ctx.store_session_id:
+        raise NotFound("Unable to resolve store session.")
     if request.user.is_authenticated:
-        cart, _ = Cart.objects.get_or_create(user=request.user, defaults={'session_key': ''})
-    else:
-        if not request.session.session_key:
-            request.session.create()
         cart, _ = Cart.objects.get_or_create(
-            user=None, session_key=request.session.session_key
+            user=request.user,
+            store=store,
+            store_session_id=session_ctx.store_session_id,
+        )
+    else:
+        cart, _ = Cart.objects.get_or_create(
+            user=None,
+            store=store,
+            store_session_id=session_ctx.store_session_id,
         )
     return cart
 
 
 class CartDetailView(RetrieveAPIView):
     """Get current cart with items."""
-    permission_classes = [AllowAny]
+    permission_classes = [IsStorefrontAPIKey]
+    authentication_classes = []
+    allow_api_key = True
+    access_scope = "storefront"
     serializer_class = CartSerializer
 
     def get_object(self):
@@ -39,7 +51,10 @@ class CartDetailView(RetrieveAPIView):
 
 class CartAddView(APIView):
     """Add or update item in cart."""
-    permission_classes = [AllowAny]
+    permission_classes = [IsStorefrontAPIKey]
+    authentication_classes = []
+    allow_api_key = True
+    access_scope = "storefront"
 
     def post(self, request):
         store = require_api_key_store(request)
@@ -75,7 +90,10 @@ class CartAddView(APIView):
 
 class CartUpdateView(APIView):
     """Update quantity of a cart item."""
-    permission_classes = [AllowAny]
+    permission_classes = [IsStorefrontAPIKey]
+    authentication_classes = []
+    allow_api_key = True
+    access_scope = "storefront"
 
     def patch(self, request, item_public_id):
         store = require_api_key_store(request)
@@ -97,7 +115,10 @@ class CartUpdateView(APIView):
 
 class CartRemoveView(APIView):
     """Remove item from cart."""
-    permission_classes = [AllowAny]
+    permission_classes = [IsStorefrontAPIKey]
+    authentication_classes = []
+    allow_api_key = True
+    access_scope = "storefront"
 
     def post(self, request, item_public_id):
         store = require_api_key_store(request)
@@ -112,7 +133,10 @@ class CartRemoveView(APIView):
 
 class CartRemoveByProductView(APIView):
     """Remove a cart item by product public_id (used by frontend sync)."""
-    permission_classes = [AllowAny]
+    permission_classes = [IsStorefrontAPIKey]
+    authentication_classes = []
+    allow_api_key = True
+    access_scope = "storefront"
 
     def post(self, request, product_public_id):
         store = require_api_key_store(request)
@@ -131,7 +155,10 @@ class CartRemoveByProductView(APIView):
 
 class CartClearView(APIView):
     """Remove all items from the current cart."""
-    permission_classes = [AllowAny]
+    permission_classes = [IsStorefrontAPIKey]
+    authentication_classes = []
+    allow_api_key = True
+    access_scope = "storefront"
 
     def post(self, request):
         store = require_api_key_store(request)

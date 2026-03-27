@@ -468,13 +468,30 @@ class AdminProductVariantViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet
 
 
 class AdminProductAttributeViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
-    """Global attribute definitions (Color, Size, …) shared across stores."""
+    """Store-scoped attribute definitions (Color, Size, …)."""
     serializer_class = AdminProductAttributeSerializer
     queryset = ProductAttribute.objects.prefetch_related("values").order_by("order", "name")
     lookup_field = "public_id"
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        ctx = get_active_store(self.request)
+        if not ctx.store:
+            return qs.none()
+        return qs.filter(store=ctx.store)
+
+    def get_serializer_context(self):
+        ctx = get_active_store(self.request)
+        return {
+            **super().get_serializer_context(),
+            "store_id": ctx.store.pk if ctx.store else None,
+        }
+
     def perform_create(self, serializer):
-        instance = serializer.save()
+        ctx = get_active_store(self.request)
+        if not ctx.store:
+            raise ValidationError({"detail": "No active store resolved."})
+        instance = serializer.save(store=ctx.store)
         log_activity(
             request=self.request,
             action=ActivityLog.Action.CREATE,
@@ -515,14 +532,28 @@ class AdminProductAttributeValueViewSet(StoreRolePermissionMixin, viewsets.Model
 
     def get_queryset(self):
         qs = super().get_queryset()
+        ctx = get_active_store(self.request)
+        if not ctx.store:
+            return qs.none()
+        qs = qs.filter(store=ctx.store)
         # Do NOT accept ?attribute=<int> (internal PK) — use attribute_public_id instead
         attr_public_id = self.request.query_params.get("attribute_public_id")
         if attr_public_id:
             qs = qs.filter(attribute__public_id=attr_public_id)
         return qs
 
+    def get_serializer_context(self):
+        ctx = get_active_store(self.request)
+        return {
+            **super().get_serializer_context(),
+            "store_id": ctx.store.pk if ctx.store else None,
+        }
+
     def perform_create(self, serializer):
-        instance = serializer.save()
+        ctx = get_active_store(self.request)
+        if not ctx.store:
+            raise ValidationError({"detail": "No active store resolved."})
+        instance = serializer.save(store=ctx.store)
         log_activity(
             request=self.request,
             action=ActivityLog.Action.CREATE,

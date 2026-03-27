@@ -2,7 +2,7 @@ from datetime import date
 
 from rest_framework import mixins, viewsets
 
-from config.permissions import IsDashboardUser, IsStoreAdmin
+from config.permissions import DenyAPIKeyAccess, IsDashboardUser, IsStoreAdmin
 from engine.core.tenancy import get_active_store
 from .models import ActivityLog
 from .admin_serializers import AdminActivityLogSerializer
@@ -24,8 +24,8 @@ class StoreRolePermissionMixin:
 
     def get_permissions(self):
         if self.action in self.READ_ACTIONS:
-            return [IsDashboardUser()]
-        return [IsStoreAdmin()]
+            return [DenyAPIKeyAccess(), IsDashboardUser()]
+        return [DenyAPIKeyAccess(), IsStoreAdmin()]
 
 
 class AdminActivityLogViewSet(
@@ -33,7 +33,7 @@ class AdminActivityLogViewSet(
     mixins.RetrieveModelMixin,
     viewsets.GenericViewSet,
 ):
-    permission_classes = [IsDashboardUser]
+    permission_classes = [DenyAPIKeyAccess, IsDashboardUser]
     serializer_class = AdminActivityLogSerializer
     lookup_field = "public_id"
     queryset = ActivityLog.objects.select_related("actor").all()

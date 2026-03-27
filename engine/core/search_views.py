@@ -2,14 +2,14 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from config.permissions import IsDashboardUser
+from config.permissions import DenyAPIKeyAccess, IsAdminUser
 from engine.core.search_serializers import UnifiedSearchResponseSerializer
 from engine.core.search_services import search as search_entities
 from engine.core.tenancy import get_active_store
 
 
 class UnifiedSearchView(APIView):
-    permission_classes = [IsAuthenticated, IsDashboardUser]
+    permission_classes = [DenyAPIKeyAccess, IsAuthenticated, IsAdminUser]
 
     def get(self, request):
         query = (request.query_params.get("query") or "").strip()

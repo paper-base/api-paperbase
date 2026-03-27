@@ -40,7 +40,7 @@ class OrderSerializer(serializers.ModelSerializer):
             'public_id', 'order_number', 'status', 'subtotal', 'shipping_cost', 'total',
             'shipping_zone_public_id', 'shipping_method_public_id',
             'shipping_name', 'shipping_address',
-            'phone', 'email', 'district',
+            'phone', 'email', 'district', 'store_session_id',
             'tracking_number', 'customer', 'created_at', 'updated_at', 'items',
         ]
         read_only_fields = ['public_id', 'order_number']
@@ -124,6 +124,7 @@ class DirectOrderCreateSerializer(serializers.Serializer):
         child=serializers.DictField(),
         min_length=1
     )
+    max_quantity_per_item = 1000
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -158,6 +159,24 @@ class DirectOrderCreateSerializer(serializers.Serializer):
         if not value:
             raise serializers.ValidationError('At least one product is required.')
         for product in value:
+            allowed_keys = {"public_id", "quantity"}
+            unknown_keys = set(product.keys()) - allowed_keys
+            if unknown_keys:
+                raise serializers.ValidationError(
+                    f"Unknown product fields are not allowed: {', '.join(sorted(unknown_keys))}."
+                )
             if 'public_id' not in product or 'quantity' not in product:
                 raise serializers.ValidationError('Each product must have public_id and quantity.')
+            public_id = str(product.get("public_id", "")).strip()
+            if not public_id.startswith("prd_"):
+                raise serializers.ValidationError("Invalid product public_id.")
+            quantity = product.get("quantity")
+            if not isinstance(quantity, int):
+                raise serializers.ValidationError("Quantity must be an integer.")
+            if quantity <= 0:
+                raise serializers.ValidationError("Quantity must be greater than zero.")
+            if quantity > self.max_quantity_per_item:
+                raise serializers.ValidationError(
+                    f"Quantity cannot exceed {self.max_quantity_per_item} per item."
+                )
         return value

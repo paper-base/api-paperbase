@@ -10,6 +10,7 @@ from django.core.management.base import BaseCommand
 from django.utils.text import slugify
 from engine.apps.products.models import Category, Product
 from engine.apps.stores.models import Store
+from engine.core.tenant_execution import tenant_scope_from_store
 
 
 GADGET_PRODUCTS = [
@@ -308,29 +309,30 @@ class Command(BaseCommand):
             self.stdout.write(self.style.ERROR("No Store in DB; create a store first."))
             return
 
-        self.stdout.write("Deleting all existing products...")
-        deleted_count, _ = Product.objects.filter(store=store).delete()
-        self.stdout.write(self.style.WARNING(f"  Deleted {deleted_count} products."))
+        with tenant_scope_from_store(store=store, reason="seed_products_command"):
+            self.stdout.write("Deleting all existing products...")
+            deleted_count, _ = Product.objects.filter(store=store).delete()
+            self.stdout.write(self.style.WARNING(f"  Deleted {deleted_count} products."))
 
-        categories = {c.slug: c for c in Category.objects.filter(store=store)}
+            categories = {c.slug: c for c in Category.objects.filter(store=store)}
 
-        gadget_products_created = self._seed_products(
-            GADGET_PRODUCTS, store, categories, GADGET_DESCRIPTIONS
-        )
-        self.stdout.write(self.style.SUCCESS(
-            f"  Created {gadget_products_created} Gadget products."
-        ))
+            gadget_products_created = self._seed_products(
+                GADGET_PRODUCTS, store, categories, GADGET_DESCRIPTIONS
+            )
+            self.stdout.write(self.style.SUCCESS(
+                f"  Created {gadget_products_created} Gadget products."
+            ))
 
-        accessory_products_created = self._seed_products(
-            ACCESSORY_PRODUCTS, store, categories, ACCESSORY_DESCRIPTIONS
-        )
-        self.stdout.write(self.style.SUCCESS(
-            f"  Created {accessory_products_created} Accessory products."
-        ))
+            accessory_products_created = self._seed_products(
+                ACCESSORY_PRODUCTS, store, categories, ACCESSORY_DESCRIPTIONS
+            )
+            self.stdout.write(self.style.SUCCESS(
+                f"  Created {accessory_products_created} Accessory products."
+            ))
 
-        self.stdout.write(self.style.SUCCESS(
-            f"\nDone! Total products in DB: {Product.objects.count()}"
-        ))
+            self.stdout.write(self.style.SUCCESS(
+                f"\nDone! Total products in DB: {Product.objects.count()}"
+            ))
 
     def _seed_products(self, product_list, store, categories, descriptions):
         created = 0

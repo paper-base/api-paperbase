@@ -6,6 +6,7 @@ from django.db import models
 
 from engine.apps.customers.models import Customer
 from engine.core.ids import generate_public_id
+from engine.core.tenant_queryset import TenantAwareManager
 from engine.apps.products.models import Product
 from engine.apps.stores.models import Store
 from engine.apps.shipping.models import ShippingMethod, ShippingRate, ShippingZone
@@ -62,6 +63,11 @@ class Order(models.Model):
         related_name="orders",
     )
     email = models.EmailField(blank=True, default='')
+    store_session_id = models.CharField(
+        max_length=255,
+        db_index=True,
+        help_text="Deterministic storefront session identity scoped to store.",
+    )
     status = models.CharField(
         max_length=20, choices=Status.choices, default=Status.PENDING, db_index=True
     )
@@ -112,6 +118,8 @@ class Order(models.Model):
 
     class Meta:
         ordering = ['-created_at']
+
+    objects = TenantAwareManager()
 
     def save(self, *args, **kwargs):
         if not self.public_id:

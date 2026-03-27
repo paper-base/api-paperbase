@@ -5,6 +5,7 @@ from typing import Any
 from django.contrib.auth.models import AnonymousUser
 
 from .models import ActivityLog
+from .tenant_context import get_current_store
 
 
 def log_activity(
@@ -16,17 +17,11 @@ def log_activity(
     summary: str,
     metadata: dict[str, Any] | None = None,
 ) -> None:
-    from engine.core.tenancy import get_active_store
-
     actor = getattr(request, "user", None)
     if isinstance(actor, AnonymousUser):
         actor = None
 
-    try:
-        ctx = get_active_store(request)
-        store = ctx.store
-    except Exception:
-        store = None
+    store = get_current_store()
 
     ActivityLog.objects.create(
         actor=actor if getattr(actor, "is_authenticated", False) else None,

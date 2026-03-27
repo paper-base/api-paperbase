@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from django.conf import settings
 from django.db.models import Avg, Count
+from rest_framework import serializers
 
+from engine.apps.orders.models import Order, OrderItem
+from engine.core.authz import can_override_review
 from engine.core import cache_service
 
 from .models import Review
-from .serializers import ReviewSerializer
 from engine.apps.products.models import Product
 
 
@@ -112,3 +114,102 @@ def invalidate_review_cache(store_public_id: str, product_public_id: str = "") -
         )
     else:
         cache_service.invalidate_store_resource(store_public_id, "review_summary")
+
+
+class BaseReviewService:
+    """Base boundary for review writes and authorization policy checks."""
+
+    def __init__(self, request):
+        self.request = request
+
+
+class ReviewCreateService(BaseReviewService):
+    """Single write pathway for storefront review creation."""
+
+    def create_review(
+        self,
+        *,
+        store,
+        store_session_id: str,
+        user,
+        product,
+        order_public_id: str,
+        rating: int,
+        title: str,
+        body: str,
+        allow_legacy_binding: bool,
+    ) -> Review:
+        order_public_id = (order_public_id or "").strip()
+        store_session_id = (store_session_id or "").strip()
+        legacy_requested = bool(allow_legacy_binding)
+        override_allowed = can_override_review(
+            self.request,
+            {"allow_legacy_binding_requested": legacy_requested},
+        )
+        if legacy_requested and not override_allowed:
+            raise serializers.ValidationError(
+                {"allow_legacy_binding": "Legacy binding override is restricted to internal admin context."}
+            )
+        if legacy_requested and not bool(
+            getattr(settings, "SECURITY_REVIEW_LEGACY_MODE_ENABLED", False)
+        ):
+            raise serializers.ValidationError(
+                {"allow_legacy_binding": "Legacy review binding is currently disabled."}
+            )
+        if not store:
+            raise serializers.ValidationError({"detail": "No active store found."})
+        if not product:
+            raise serializers.ValidationError({"product": "This field is required."})
+        if not order_public_id:
+            raise serializers.ValidationError({"order_public_id": "This field is required."})
+        if not legacy_requested and not store_session_id:
+            raise serializers.ValidationError({"detail": "store session is required."})
+
+        if override_allowed and legacy_requested:
+            order = Order.objects.filter(public_id=order_public_id, store=store).first()
+            if not order:
+                raise serializers.ValidationError(
+                    {"detail": "Review requires a valid order in the current store."}
+                )
+            # Persist the canonical order session for legacy overrides so model-level
+            # invariants remain strict while allowing request-session drift.
+            review_store_session_id = order.store_session_id
+        else:
+            has_matching_order = OrderItem.objects.filter(
+                product=product,
+                order__public_id=order_public_id,
+                order__store=store,
+                order__store_session_id=store_session_id,
+            ).exists()
+            if not has_matching_order:
+                raise serializers.ValidationError(
+                    {"detail": "Review requires a matching order from the same store session."}
+                )
+            order = Order.objects.filter(
+                public_id=order_public_id,
+                store=store,
+                store_session_id=store_session_id,
+            ).first()
+            if not order:
+                raise serializers.ValidationError(
+                    {"detail": "Review requires a valid order from the same store session."}
+                )
+            if Review.objects.filter(product=product, store_session_id=store_session_id).exists():
+                raise serializers.ValidationError(
+                    {"detail": "Only one review per store session is allowed for this product."}
+                )
+            review_store_session_id = store_session_id
+
+        review = Review.objects.create(
+            store=store,
+            product=product,
+            order=order,
+            user=user,
+            store_session_id=review_store_session_id,
+            allow_legacy_binding=legacy_requested and override_allowed,
+            rating=rating,
+            title=title,
+            body=body,
+            status=Review.Status.PENDING,
+        )
+        return review

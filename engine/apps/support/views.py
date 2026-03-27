@@ -3,6 +3,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 
+from config.permissions import IsStorefrontAPIKey
 from engine.apps.analytics.service import meta_conversions
 from engine.core.tenancy import require_api_key_store
 
@@ -12,9 +13,11 @@ from .serializers import SupportTicketCreateSerializer, SupportTicketPublicRespo
 
 class SupportTicketCreateView(APIView):
     """Submit support ticket (guest allowed). Tenant is resolved by API key."""
-    permission_classes = []  # allow unauthenticated
+    permission_classes = [IsStorefrontAPIKey]
     authentication_classes = []
+    allow_api_key = True
     parser_classes = [MultiPartParser, FormParser, JSONParser]
+    access_scope = "storefront"
 
     def post(self, request):
         store = require_api_key_store(request)

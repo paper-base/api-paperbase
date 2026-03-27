@@ -5,12 +5,13 @@ from django.utils import timezone
 
 from engine.apps.stores.models import Store
 from engine.core.ids import generate_public_id
+from engine.core.tenant_queryset import TenantAwareManager
 
 
 class StaffNotification(models.Model):
     """
     Admin dashboard notification for events (new order, low stock, new customer, etc.).
-    When user is null, the notification is global for all staff.
+    Every row is tenant-bound and user-bound.
     """
     public_id = models.CharField(
         max_length=32, unique=True, db_index=True, editable=False,
@@ -28,10 +29,14 @@ class StaffNotification(models.Model):
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
-        null=True,
-        blank=True,
         related_name='staff_notifications',
-        help_text="Null = visible to all staff",
+        help_text="Recipient user for this tenant-scoped notification.",
+    )
+    store = models.ForeignKey(
+        Store,
+        on_delete=models.CASCADE,
+        related_name="staff_notifications",
+        db_index=True,
     )
     message_type = models.CharField(max_length=30, choices=MessageType.choices, default=MessageType.OTHER)
     title = models.CharField(max_length=255)
@@ -41,6 +46,8 @@ class StaffNotification(models.Model):
 
     class Meta:
         ordering = ['-created_at']
+
+    objects = TenantAwareManager()
 
     def save(self, *args, **kwargs):
         if not self.public_id:
@@ -213,6 +220,8 @@ class StorefrontCTA(models.Model):
 
     class Meta:
         ordering = ['order', '-created_at']
+
+    objects = TenantAwareManager()
 
     def __str__(self):
         return f"{self.cta_text[:50]}... ({'Active' if self.is_active else 'Inactive'})"

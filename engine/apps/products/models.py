@@ -3,6 +3,7 @@ from django.db import models  # type: ignore[import-not-found]
 
 from engine.apps.stores.models import Store
 from engine.core.ids import generate_public_id
+from engine.core.tenant_queryset import TenantAwareManager
 
 try:
     # Import at module level so tooling resolves it consistently.
@@ -66,6 +67,8 @@ class Category(models.Model):
                 name="uniq_category_store_slug",
             ),
         ]
+
+    objects = TenantAwareManager()
 
     def save(self, *args, **kwargs):
         if not self.public_id:
@@ -150,6 +153,8 @@ class Product(models.Model):
                 name="uniq_product_store_slug",
             ),
         ]
+
+    objects = TenantAwareManager()
 
     def __str__(self):
         return self.name
@@ -258,12 +263,26 @@ class ProductAttribute(models.Model):
         max_length=32, unique=True, db_index=True, editable=False,
         help_text="Non-sequential public identifier (e.g. atr_xxx).",
     )
+    store = models.ForeignKey(
+        Store,
+        on_delete=models.CASCADE,
+        related_name="product_attributes",
+        db_index=True,
+    )
     name = models.CharField(max_length=100)
-    slug = models.SlugField(max_length=100, unique=True)
+    slug = models.SlugField(max_length=100)
     order = models.PositiveIntegerField(default=0)
 
     class Meta:
         ordering = ['order']
+        constraints = [
+            models.UniqueConstraint(
+                fields=["store", "slug"],
+                name="uniq_product_attribute_store_slug",
+            ),
+        ]
+
+    objects = TenantAwareManager()
 
     def save(self, *args, **kwargs):
         if not self.public_id:
@@ -280,6 +299,12 @@ class ProductAttributeValue(models.Model):
         max_length=32, unique=True, db_index=True, editable=False,
         help_text="Non-sequential public identifier (e.g. atv_xxx).",
     )
+    store = models.ForeignKey(
+        Store,
+        on_delete=models.CASCADE,
+        related_name="product_attribute_values",
+        db_index=True,
+    )
     attribute = models.ForeignKey(
         ProductAttribute,
         on_delete=models.CASCADE,
@@ -290,7 +315,18 @@ class ProductAttributeValue(models.Model):
 
     class Meta:
         ordering = ['attribute', 'order']
-        unique_together = [['attribute', 'value']]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["attribute", "value"],
+                name="uniq_product_attribute_value_attribute_value",
+            ),
+            models.UniqueConstraint(
+                fields=["store", "attribute", "value"],
+                name="uniq_product_attribute_value_store_attribute_value",
+            ),
+        ]
+
+    objects = TenantAwareManager()
 
     def save(self, *args, **kwargs):
         if not self.public_id:

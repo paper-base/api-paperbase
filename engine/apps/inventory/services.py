@@ -2,7 +2,9 @@
 Inventory services: stock adjustments and low-stock notifications.
 """
 from django.db import transaction
+from django.core.exceptions import ValidationError
 
+from engine.core.tenant_context import require_store_context
 
 def adjust_stock(inventory, change, reason='adjustment', reference='', actor=None):
     """
@@ -26,14 +28,38 @@ def adjust_stock(inventory, change, reason='adjustment', reference='', actor=Non
 
 
 def _create_low_stock_notification(inventory):
-    """Create a system notification for low stock (visible to all staff when user=null)."""
+    """Create a tenant-scoped low-stock notification for a concrete recipient."""
     try:
+        from engine.apps.accounts.models import User
         from engine.apps.notifications.models import StaffNotification
+        from engine.apps.stores.models import StoreMembership
+
+        store = require_store_context()
+        if inventory.product.store_id != store.id:
+            raise ValidationError("Inventory store does not match current tenant context.")
+
+        recipient = (
+            User.objects.filter(
+                store_memberships__store=store,
+                store_memberships__is_active=True,
+                store_memberships__role__in=[
+                    StoreMembership.Role.OWNER,
+                    StoreMembership.Role.ADMIN,
+                    StoreMembership.Role.STAFF,
+                ],
+            )
+            .order_by("id")
+            .first()
+        )
+        if recipient is None:
+            return
+
         title = f"Low stock: {inventory.product.name}"
         if inventory.variant_id:
             title += f" ({inventory.variant.sku or f'Variant {inventory.variant_id}'})"
         StaffNotification.objects.create(
-            user=None,
+            store=store,
+            user=recipient,
             message_type=StaffNotification.MessageType.LOW_STOCK,
             title=title,
             payload={

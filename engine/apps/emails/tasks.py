@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from config.celery import app
+from engine.core.tenant_execution import system_scope
 
 from .services import send_email
 
@@ -12,4 +13,5 @@ def send_email_task(
     context: dict | None = None,
     from_email: str | None = None,
 ):
-    send_email(email_type, to_email, context or {}, from_email=from_email)
+    with system_scope(reason="send_email_task"):
+        send_email(email_type, to_email, context or {}, from_email=from_email)

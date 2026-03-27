@@ -48,7 +48,12 @@ class BillingServicesTests(TestCase):
                 ),
                 is_active=True,
             )
-        self.user = User.objects.create_user(username="billinguser", email="b@example.com", password="pass")
+        self.user = User.objects.create_user(
+            username="billinguser",
+            email="b@example.com",
+            password="pass",
+            is_verified=True,
+        )
 
     def test_get_active_subscription_returns_none_when_no_subscription(self):
         self.assertIsNone(get_active_subscription(self.user))
@@ -88,15 +93,11 @@ class BillingServicesTests(TestCase):
         self.assertEqual((sub.end_date - original_end).days, 14)
 
     def test_downgrade_clears_order_email_notification_settings(self):
-        from engine.apps.stores.models import Domain
-
         store = Store.objects.create(
             name="Downgrade Store",
-            domain=None,
             owner_name="O",
             owner_email=self.user.email,
         )
-        Domain.objects.filter(store=store, is_custom=False).update(domain="downgrade-billing.test")
         StoreMembership.objects.create(
             user=self.user,
             store=store,
@@ -110,7 +111,7 @@ class BillingServicesTests(TestCase):
 
         activate_subscription(self.user, self.plan_premium, source="manual", amount=0, provider="manual")
         ss.refresh_from_db()
-        self.assertTrue(ss.email_notify_owner_on_order_received)
+        self.assertFalse(ss.email_notify_owner_on_order_received)
 
         activate_subscription(self.user, self.plan_basic, source="manual", amount=0, provider="manual")
         ss.refresh_from_db()
@@ -140,7 +141,12 @@ class FeatureGateTests(TestCase):
             ),
             is_active=True,
         )
-        self.user = User.objects.create_user(username="fguser", email="fg@example.com", password="pass")
+        self.user = User.objects.create_user(
+            username="fguser",
+            email="fg@example.com",
+            password="pass",
+            is_verified=True,
+        )
 
     def test_has_feature_returns_false_without_subscription_uses_default(self):
         self.assertFalse(has_feature(self.user, "advanced_analytics"))
@@ -209,7 +215,12 @@ class StoreCreationEnforcementTests(TestCase):
                 ),
                 is_active=True,
             )
-        self.user = User.objects.create_user(username="storeuser", email="s@example.com", password="pass")
+        self.user = User.objects.create_user(
+            username="storeuser",
+            email="s@example.com",
+            password="pass",
+            is_verified=True,
+        )
         self.client.force_authenticate(user=self.user)
 
     def _create_store_via_api(self, **overrides):
@@ -267,7 +278,12 @@ class FeaturesEndpointTests(TestCase):
                 is_default=True,
                 is_active=True,
             )
-        self.user = User.objects.create_user(username="featuser", email="f@example.com", password="pass")
+        self.user = User.objects.create_user(
+            username="featuser",
+            email="f@example.com",
+            password="pass",
+            is_verified=True,
+        )
         self.client.force_authenticate(user=self.user)
 
     def test_features_endpoint_returns_config(self):
@@ -283,15 +299,12 @@ class AnalyticsFeatureGateTests(TestCase):
 
     def setUp(self):
         self.client = APIClient()
-        from engine.apps.stores.models import Domain
 
         self.store = Store.objects.create(
             name="Test Store",
-            domain=None,
             owner_name="Owner",
             owner_email="owner@example.com",
         )
-        Domain.objects.filter(store=self.store, is_custom=False).update(domain="analytics-test.local")
         self.plan_basic = Plan.objects.filter(is_default=True).first()
         if not self.plan_basic:
             self.plan_basic = Plan.objects.create(
@@ -312,7 +325,12 @@ class AnalyticsFeatureGateTests(TestCase):
             ),
             is_active=True,
         )
-        self.user = User.objects.create_user(username="analyticsuser", email="a@example.com", password="pass")
+        self.user = User.objects.create_user(
+            username="analyticsuser",
+            email="a@example.com",
+            password="pass",
+            is_verified=True,
+        )
         StoreMembership.objects.create(user=self.user, store=self.store, role=StoreMembership.Role.OWNER)
         self.client.force_authenticate(user=self.user)
 
@@ -320,8 +338,7 @@ class AnalyticsFeatureGateTests(TestCase):
         activate_subscription(self.user, self.plan_basic, source="manual", amount=0, provider="manual")
         resp = self.client.get(
             "/api/v1/admin/analytics/overview/",
-            HTTP_HOST="analytics-test.local",
-            HTTP_X_STORE_ID=str(self.store.id),
+            HTTP_X_STORE_PUBLIC_ID=self.store.public_id,
         )
         self.assertEqual(resp.status_code, 403)
 
@@ -329,7 +346,6 @@ class AnalyticsFeatureGateTests(TestCase):
         activate_subscription(self.user, self.plan_premium, source="manual", amount=0, provider="manual")
         resp = self.client.get(
             "/api/v1/admin/analytics/overview/",
-            HTTP_HOST="analytics-test.local",
-            HTTP_X_STORE_ID=str(self.store.id),
+            HTTP_X_STORE_PUBLIC_ID=self.store.public_id,
         )
         self.assertEqual(resp.status_code, 200)

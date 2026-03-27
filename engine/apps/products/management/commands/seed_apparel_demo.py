@@ -27,6 +27,7 @@ from engine.apps.products.models import (
     ProductVariantAttribute,
 )
 from engine.apps.stores.models import Store, StoreSettings
+from engine.core.tenant_execution import tenant_scope_from_store
 
 
 SHIRT_NAME = "Classic Crew Neck T-Shirt"
@@ -112,23 +113,24 @@ class Command(BaseCommand):
 
         self.stdout.write(f"Using store: {store.name!r} (id={store.pk})")
 
-        with transaction.atomic():
-            if force:
-                self._delete_demo_products(store)
+        with tenant_scope_from_store(store=store, reason="seed_apparel_demo_command"):
+            with transaction.atomic():
+                if force:
+                    self._delete_demo_products(store)
 
-            shirt_cat, pant_cat = self._ensure_categories(store)
-            color_attr, size_attr, waist_attr, fit_attr = self._ensure_attributes()
-            self._merge_demo_extra_schema(store)
+                shirt_cat, pant_cat = self._ensure_categories(store)
+                color_attr, size_attr, waist_attr, fit_attr = self._ensure_attributes(store)
+                self._merge_demo_extra_schema(store)
 
-            shirt = self._ensure_shirt(store, shirt_cat, color_attr, size_attr)
-            pant = self._ensure_pant(store, pant_cat, waist_attr, fit_attr)
+                shirt = self._ensure_shirt(store, shirt_cat, color_attr, size_attr)
+                pant = self._ensure_pant(store, pant_cat, waist_attr, fit_attr)
 
-        self.stdout.write(
-            self.style.SUCCESS(
-                f"Done. Shirt variants: {shirt.variants.count()}, "
-                f"Pant variants: {pant.variants.count()}"
+            self.stdout.write(
+                self.style.SUCCESS(
+                    f"Done. Shirt variants: {shirt.variants.count()}, "
+                    f"Pant variants: {pant.variants.count()}"
+                )
             )
-        )
 
     def _delete_demo_products(self, store: Store) -> None:
         qs = Product.objects.filter(store=store, name__in=[SHIRT_NAME, PANT_NAME])
@@ -172,49 +174,57 @@ class Command(BaseCommand):
         )
         return shirt_cat, pant_cat
 
-    def _ensure_attributes(self) -> tuple[
+    def _ensure_attributes(self, store: Store) -> tuple[
         ProductAttribute,
         ProductAttribute,
         ProductAttribute,
         ProductAttribute,
     ]:
         color_attr, _ = ProductAttribute.objects.get_or_create(
+            store=store,
             slug=ATTR_SHIRT_COLOR,
             defaults={"name": "Shirt color (demo)", "order": 1},
         )
         size_attr, _ = ProductAttribute.objects.get_or_create(
+            store=store,
             slug=ATTR_SHIRT_SIZE,
             defaults={"name": "Shirt size (demo)", "order": 2},
         )
         waist_attr, _ = ProductAttribute.objects.get_or_create(
+            store=store,
             slug=ATTR_PANT_WAIST,
             defaults={"name": "Pant waist (demo)", "order": 3},
         )
         fit_attr, _ = ProductAttribute.objects.get_or_create(
+            store=store,
             slug=ATTR_PANT_FIT,
             defaults={"name": "Pant fit (demo)", "order": 4},
         )
 
         for order, (label, code) in enumerate(SHIRT_COLORS):
             ProductAttributeValue.objects.get_or_create(
+                store=store,
                 attribute=color_attr,
                 value=label,
                 defaults={"order": order},
             )
         for order, sz in enumerate(SHIRT_SIZES):
             ProductAttributeValue.objects.get_or_create(
+                store=store,
                 attribute=size_attr,
                 value=sz,
                 defaults={"order": order},
             )
         for order, w in enumerate(PANT_WAISTS):
             ProductAttributeValue.objects.get_or_create(
+                store=store,
                 attribute=waist_attr,
                 value=w,
                 defaults={"order": order},
             )
         for order, (label, _code) in enumerate(PANT_FITS):
             ProductAttributeValue.objects.get_or_create(
+                store=store,
                 attribute=fit_attr,
                 value=label,
                 defaults={"order": order},

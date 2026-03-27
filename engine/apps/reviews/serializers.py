@@ -21,6 +21,9 @@ class ReviewCreateSerializer(serializers.ModelSerializer):
         slug_field='public_id',
         queryset=Product.objects.none(),
     )
+    body = serializers.CharField(min_length=5, max_length=2000, allow_blank=False)
+    order_public_id = serializers.CharField(write_only=True)
+    allow_legacy_binding = serializers.BooleanField(write_only=True, required=False, default=False)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -37,9 +40,15 @@ class ReviewCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Review
-        fields = ['product', 'rating', 'title', 'body']
+        fields = ['product', 'rating', 'title', 'body', 'order_public_id', 'allow_legacy_binding']
 
     def validate_rating(self, value):
         if value < 1 or value > 5:
             raise serializers.ValidationError('Rating must be between 1 and 5.')
+        return value
+
+    def validate_product(self, value):
+        public_id = getattr(value, "public_id", "") or ""
+        if not str(public_id).startswith("prd_"):
+            raise serializers.ValidationError("Invalid product_id format.")
         return value

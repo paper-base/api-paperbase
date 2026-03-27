@@ -6,6 +6,7 @@ from django.utils.encoding import force_bytes, force_str
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from rest_framework import serializers
 
+from engine.apps.emails.tasks import send_email_task  # Backwards-compatible test patch target.
 from engine.apps.stores.models import StoreMembership
 from .services import (
     change_user_password,

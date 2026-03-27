@@ -251,7 +251,7 @@ class AdminCategorySerializer(serializers.ModelSerializer):
 class AdminProductAttributeValueSerializer(serializers.ModelSerializer):
     attribute = serializers.SlugRelatedField(
         slug_field="public_id",
-        queryset=ProductAttribute.objects.all(),
+        queryset=ProductAttribute.objects.none(),
     )
     attribute_name = serializers.CharField(source="attribute.name", read_only=True)
 
@@ -259,6 +259,12 @@ class AdminProductAttributeValueSerializer(serializers.ModelSerializer):
         model = ProductAttributeValue
         fields = ["public_id", "attribute", "attribute_name", "value", "order"]
         read_only_fields = ["public_id", "attribute_name"]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        store_id = (self.context or {}).get("store_id")
+        if store_id is not None:
+            self.fields["attribute"].queryset = ProductAttribute.objects.filter(store_id=store_id)
 
 
 class AdminProductAttributeSerializer(serializers.ModelSerializer):
@@ -277,10 +283,13 @@ class AdminProductAttributeSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         slug = attrs.get("slug")
+        store_id = (self.context or {}).get("store_id")
         if slug:
             slug = slug.strip()
             attrs["slug"] = slug
             qs = ProductAttribute.objects.filter(slug=slug)
+            if store_id is not None:
+                qs = qs.filter(store_id=store_id)
             if self.instance:
                 qs = qs.exclude(pk=self.instance.pk)
             if qs.exists():
@@ -290,12 +299,14 @@ class AdminProductAttributeSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         from django.utils.text import slugify
 
+        store_id = (self.context or {}).get("store_id")
         slug = validated_data.get("slug")
         if not slug:
             base = slugify(validated_data["name"]) or "attribute"
             slug = base
             n = 1
-            while ProductAttribute.objects.filter(slug=slug).exists():
+            slug_qs = ProductAttribute.objects.filter(store_id=store_id) if store_id is not None else ProductAttribute.objects
+            while slug_qs.filter(slug=slug).exists():
                 slug = f"{base}-{n}"
                 n += 1
             validated_data["slug"] = slug
@@ -369,9 +380,11 @@ class AdminProductVariantSerializer(serializers.ModelSerializer):
         if not public_ids:
             return []
         uniq = list(dict.fromkeys(public_ids))
-        values = list(
-            ProductAttributeValue.objects.filter(public_id__in=uniq).select_related("attribute")
-        )
+        store_id = (self.context or {}).get("store_id")
+        value_qs = ProductAttributeValue.objects.filter(public_id__in=uniq).select_related("attribute")
+        if store_id is not None:
+            value_qs = value_qs.filter(store_id=store_id)
+        values = list(value_qs)
         if len(values) != len(uniq):
             raise serializers.ValidationError("One or more attribute value public_ids are invalid.")
         seen_attr = set()
@@ -407,7 +420,11 @@ class AdminProductVariantSerializer(serializers.ModelSerializer):
         """Resolve a list of attribute value public_ids to model instances."""
         if not public_ids:
             return []
-        values = list(ProductAttributeValue.objects.filter(public_id__in=public_ids))
+        store_id = (self.context or {}).get("store_id")
+        value_qs = ProductAttributeValue.objects.filter(public_id__in=public_ids)
+        if store_id is not None:
+            value_qs = value_qs.filter(store_id=store_id)
+        values = list(value_qs)
         return values
 
     def create(self, validated_data):

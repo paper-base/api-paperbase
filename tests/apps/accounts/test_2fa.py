@@ -2,12 +2,13 @@ from unittest.mock import patch
 
 import pyotp
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.test import TestCase
 from rest_framework.test import APIClient
 
 from engine.apps.accounts.models import UserTwoFactor
 from engine.apps.emails.constants import TWO_FA_RECOVERY
-from engine.apps.stores.models import Domain, Store, StoreMembership
+from engine.apps.stores.models import Store, StoreMembership
 
 User = get_user_model()
 
@@ -17,12 +18,10 @@ class TwoFactorFlowTests(TestCase):
         self.client = APIClient()
         self.store = Store.objects.create(
             name="2FA Store",
-            domain=None,
             owner_name="Owner",
             owner_email="owner@2fa.local",
         )
-        Domain.objects.filter(store=self.store, is_custom=False).update(domain="2fa.local")
-        self.user = User.objects.create_user(email="owner@2fa.local", password="pass1234")
+        self.user = User.objects.create_user(email="owner@2fa.local", password="pass1234", is_verified=True)
         StoreMembership.objects.create(
             user=self.user,
             store=self.store,
@@ -35,6 +34,7 @@ class TwoFactorFlowTests(TestCase):
             "/api/v1/auth/token/",
             {"email": self.user.email, "password": "pass1234"},
             format="json",
+            HTTP_X_STORE_PUBLIC_ID=self.store.public_id,
         )
         self.assertEqual(resp.status_code, 200)
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {resp.data['access']}")
@@ -57,6 +57,7 @@ class TwoFactorFlowTests(TestCase):
             "/api/v1/auth/token/",
             {"email": self.user.email, "password": "pass1234"},
             format="json",
+            HTTP_X_STORE_PUBLIC_ID=self.store.public_id,
         )
         self.assertEqual(login_resp.status_code, 202)
         self.assertTrue(login_resp.data["2fa_required"])
@@ -75,6 +76,7 @@ class TwoFactorFlowTests(TestCase):
             "/api/v1/auth/token/",
             {"email": self.user.email, "password": "pass1234"},
             format="json",
+            HTTP_X_STORE_PUBLIC_ID=self.store.public_id,
         )
         self.assertEqual(login_resp.status_code, 202)
         challenge_public_id = login_resp.data["challenge_public_id"]
@@ -138,15 +140,14 @@ class TwoFactorFlowTests(TestCase):
 
 class TwoFactorRecoveryTests(TestCase):
     def setUp(self):
+        cache.clear()
         self.client = APIClient()
         self.store = Store.objects.create(
             name="Rec Store",
-            domain=None,
             owner_name="Owner",
             owner_email="owner@rec.local",
         )
-        Domain.objects.filter(store=self.store, is_custom=False).update(domain="rec.local")
-        self.user = User.objects.create_user(email="owner@rec.local", password="pass1234")
+        self.user = User.objects.create_user(email="owner@rec.local", password="pass1234", is_verified=True)
         StoreMembership.objects.create(
             user=self.user,
             store=self.store,
@@ -159,6 +160,7 @@ class TwoFactorRecoveryTests(TestCase):
             "/api/v1/auth/token/",
             {"email": self.user.email, "password": "pass1234"},
             format="json",
+            HTTP_X_STORE_PUBLIC_ID=self.store.public_id,
         )
         self.assertEqual(resp.status_code, 200)
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {resp.data['access']}")
@@ -191,7 +193,12 @@ class TwoFactorRecoveryTests(TestCase):
         self._auth()
         self._enable_2fa()
 
-        self.client.post("/api/v1/auth/2fa/recovery/request/", {}, format="json")
+        self.client.post(
+            "/api/v1/auth/2fa/recovery/request/",
+            {},
+            format="json",
+            REMOTE_ADDR="10.1.0.1",
+        )
         plain_code = mock_delay.call_args[0][2]["code"]
 
         mock_delay.reset_mock()

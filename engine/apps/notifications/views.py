@@ -1,6 +1,7 @@
 from rest_framework.generics import ListAPIView
 from rest_framework.response import Response
 
+from config.permissions import IsStorefrontAPIKey
 from engine.core.tenancy import require_api_key_store, require_resolved_store
 
 from .serializers import NotificationSerializer
@@ -18,8 +19,10 @@ class _StorefrontTenantMixin:
 class ActiveNotificationListView(_StorefrontTenantMixin, ListAPIView):
     """List currently active notifications for the resolved store (banner display)."""
     serializer_class = NotificationSerializer
-    permission_classes = []  # Public endpoint
+    permission_classes = [IsStorefrontAPIKey]
     authentication_classes = []
+    allow_api_key = True
+    access_scope = "storefront"
 
     def list(self, request, *args, **kwargs):
         store = require_api_key_store(request)

@@ -15,21 +15,25 @@ from engine.apps.customers.models import Customer
 from engine.apps.orders.models import Order
 from engine.apps.shipping.models import ShippingZone
 from engine.apps.products.models import Category, Product
-from engine.apps.stores.models import Domain, Store, StoreDeletionJob, StoreMembership, StoreSettings
+from engine.apps.stores.models import Store, StoreDeletionJob, StoreMembership, StoreSettings
 
 
 User = get_user_model()
 
 
 def _make_user(email: str, password: str = "pass1234"):
-    return User.objects.create_user(email=email, password=password)
+    return User.objects.create_user(email=email, password=password, is_verified=True)
 
 
-def _auth_client(client: APIClient, email: str, password: str = "pass1234"):
+def _auth_client(client: APIClient, email: str, password: str = "pass1234", store_public_id: str | None = None):
+    extra = {}
+    if store_public_id:
+        extra["HTTP_X_STORE_PUBLIC_ID"] = store_public_id
     resp = client.post(
         "/api/v1/auth/token/",
         {"email": email, "password": password},
         format="json",
+        **extra,
     )
     assert resp.status_code == 200
     client.credentials(HTTP_AUTHORIZATION=f"Bearer {resp.data['access']}")
@@ -45,6 +49,7 @@ def _set_default_plan(max_stores: int):
 
     plan = Plan.objects.filter(name=plan_name).first()
     if not plan:
+        feature_flags = {"order_email_notifications": max_stores > 1}
         plan = Plan.objects.create(
             name=plan_name,
             price="0.00",
@@ -53,7 +58,7 @@ def _set_default_plan(max_stores: int):
             is_default=True,
             features={
                 "limits": {"max_stores": max_stores},
-                "features": {},
+                "features": feature_flags,
             },
         )
     else:
@@ -61,6 +66,9 @@ def _set_default_plan(max_stores: int):
         limits = features.get("limits") or {}
         limits["max_stores"] = max_stores
         features["limits"] = limits
+        feature_flags = features.get("features") or {}
+        feature_flags["order_email_notifications"] = max_stores > 1
+        features["features"] = feature_flags
         plan.features = features
         plan.is_default = True
         plan.save(update_fields=["features", "is_default"])
@@ -69,14 +77,9 @@ def _set_default_plan(max_stores: int):
 def _make_store(name: str, domain: str, owner_email: str):
     store = Store.objects.create(
         name=name,
-        domain=None,
         owner_name=f"{name} Owner",
         owner_email=owner_email,
     )
-    if domain:
-        Domain.objects.filter(store=store, is_custom=False).update(
-            domain=domain.strip().lower().split(":", 1)[0]
-        )
     return store
 
 
@@ -136,14 +139,14 @@ class DeleteStoreEndpointTests(TestCase):
 
         _make_catalog_data(store, user)
 
-        access = _auth_client(self.client, user.email)
+        access = _auth_client(self.client, user.email, store_public_id=store.public_id)
 
         # Wrong email (exact match should fail)
         resp = self.client.post(
             "/api/v1/stores/settings/delete/",
             {"account_email": "owner@example.com ", "store_name": store.name},
             format="json",
-            HTTP_X_STORE_ID=store.public_id,
+            HTTP_X_STORE_PUBLIC_ID=store.public_id,
         )
         self.assertEqual(resp.status_code, 403)
         self.assertTrue(Store.objects.filter(id=store.id).exists())
@@ -155,7 +158,7 @@ class DeleteStoreEndpointTests(TestCase):
             "/api/v1/stores/settings/delete/",
             {"account_email": user.email, "store_name": store.name},
             format="json",
-            HTTP_X_STORE_ID=store.public_id,
+            HTTP_X_STORE_PUBLIC_ID=store.public_id,
         )
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.data["redirect_route"], "/onboarding")
@@ -186,12 +189,12 @@ class DeleteStoreEndpointTests(TestCase):
 
         _make_catalog_data(store_a, user)
 
-        access = _auth_client(self.client, user.email)
+        access = _auth_client(self.client, user.email, store_public_id=store_a.public_id)
         resp = self.client.post(
             "/api/v1/stores/settings/delete/",
             {"account_email": user.email, "store_name": store_a.name},
             format="json",
-            HTTP_X_STORE_ID=store_a.public_id,
+            HTTP_X_STORE_PUBLIC_ID=store_a.public_id,
         )
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.data["redirect_route"], "/")
@@ -210,19 +213,19 @@ class DeleteStoreEndpointTests(TestCase):
         _make_owner_membership(user, store)
 
         _make_catalog_data(store, user)
-        _auth_client(self.client, user.email)
+        _auth_client(self.client, user.email, store_public_id=store.public_id)
 
         resp = self.client.post(
             "/api/v1/stores/settings/delete/",
             {"account_email": user.email, "store_name": store.name},
             format="json",
-            HTTP_X_STORE_ID=store.public_id,
+            HTTP_X_STORE_PUBLIC_ID=store.public_id,
         )
         self.assertEqual(resp.status_code, 200)
         job_id = resp.data["job_id"]
 
         other_client = APIClient()
-        _auth_client(other_client, other_user.email)
+        _auth_client(other_client, other_user.email, store_public_id=store.public_id)
 
         status_resp = other_client.get(
             "/api/v1/stores/settings/delete-status/?job_id=" + str(job_id)
@@ -252,25 +255,33 @@ class StoreSettingsOrderEmailTests(TestCase):
         premium = Plan.objects.filter(name="premium").first()
         self.assertIsNotNone(premium)
         activate_subscription(self.owner, premium, source="manual", amount=0, provider="manual")
-        _auth_client(self.client, self.staff_user.email)
+        _auth_client(self.client, self.staff_user.email, store_public_id=self.store.public_id)
         resp = self.client.patch(
             "/api/v1/stores/settings/current/",
             {"email_notify_owner_on_order_received": True},
             format="json",
-            HTTP_X_STORE_ID=self.store.public_id,
+            HTTP_X_STORE_PUBLIC_ID=self.store.public_id,
         )
         self.assertEqual(resp.status_code, 400)
 
     def test_owner_basic_cannot_enable_order_email_flags(self):
         basic = Plan.objects.filter(name="basic").first()
-        self.assertIsNotNone(basic)
+        if not basic:
+            basic = Plan.objects.create(
+                name="basic",
+                price="0.00",
+                billing_cycle="monthly",
+                is_active=True,
+                is_default=True,
+                features={"limits": {"max_stores": 1}, "features": {}},
+            )
         activate_subscription(self.owner, basic, source="manual", amount=0, provider="manual")
-        _auth_client(self.client, self.owner.email)
+        _auth_client(self.client, self.owner.email, store_public_id=self.store.public_id)
         resp = self.client.patch(
             "/api/v1/stores/settings/current/",
             {"email_notify_owner_on_order_received": True},
             format="json",
-            HTTP_X_STORE_ID=self.store.public_id,
+            HTTP_X_STORE_PUBLIC_ID=self.store.public_id,
         )
         self.assertEqual(resp.status_code, 400)
 
@@ -278,7 +289,7 @@ class StoreSettingsOrderEmailTests(TestCase):
         premium = Plan.objects.filter(name="premium").first()
         self.assertIsNotNone(premium)
         activate_subscription(self.owner, premium, source="manual", amount=0, provider="manual")
-        _auth_client(self.client, self.owner.email)
+        _auth_client(self.client, self.owner.email, store_public_id=self.store.public_id)
         resp = self.client.patch(
             "/api/v1/stores/settings/current/",
             {
@@ -286,7 +297,7 @@ class StoreSettingsOrderEmailTests(TestCase):
                 "email_customer_on_order_confirmed": True,
             },
             format="json",
-            HTTP_X_STORE_ID=self.store.public_id,
+            HTTP_X_STORE_PUBLIC_ID=self.store.public_id,
         )
         self.assertEqual(resp.status_code, 200)
         self.assertTrue(resp.data["email_notify_owner_on_order_received"])

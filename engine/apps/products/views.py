@@ -4,6 +4,7 @@ from django.db.models import Q
 from rest_framework.generics import ListAPIView, RetrieveAPIView
 from rest_framework.response import Response
 
+from config.permissions import IsStorefrontAPIKey
 from engine.apps.analytics.service import meta_conversions
 from engine.core.tenancy import require_api_key_store, require_resolved_store
 
@@ -27,6 +28,10 @@ class StorefrontTenantMixin:
 class ProductListView(StorefrontTenantMixin, ListAPIView):
     """List products with optional category, brand, and featured filters."""
     serializer_class = ProductListSerializer
+    permission_classes = [IsStorefrontAPIKey]
+    authentication_classes = []
+    allow_api_key = True
+    access_scope = "storefront"
 
     def get_queryset(self):
         store = require_api_key_store(self.request)
@@ -50,6 +55,10 @@ class ProductDetailView(StorefrontTenantMixin, RetrieveAPIView):
     """Get single product by public_id (prd_xxx) or slug."""
     serializer_class = ProductDetailSerializer
     lookup_url_kwarg = 'identifier'
+    permission_classes = [IsStorefrontAPIKey]
+    authentication_classes = []
+    allow_api_key = True
+    access_scope = "storefront"
 
     def retrieve(self, request, *args, **kwargs):
         store = require_api_key_store(request)
@@ -68,6 +77,10 @@ class ProductRelatedView(StorefrontTenantMixin, ListAPIView):
     """Related products for a given product (same category, excluding self)."""
     serializer_class = ProductListSerializer
     pagination_class = None
+    permission_classes = [IsStorefrontAPIKey]
+    authentication_classes = []
+    allow_api_key = True
+    access_scope = "storefront"
 
     def list(self, request, *args, **kwargs):
         store = require_api_key_store(request)
@@ -79,6 +92,10 @@ class ProductRelatedView(StorefrontTenantMixin, ListAPIView):
 class CategoryListView(StorefrontTenantMixin, ListAPIView):
     """List categories, optionally filtered by parent slug."""
     serializer_class = CategorySerializer
+    permission_classes = [IsStorefrontAPIKey]
+    authentication_classes = []
+    allow_api_key = True
+    access_scope = "storefront"
 
     def get_queryset(self):
         store = require_api_key_store(self.request)
@@ -104,6 +121,10 @@ class CategoryDetailView(StorefrontTenantMixin, RetrieveAPIView):
     """Get a single subcategory by slug."""
     serializer_class = CategorySerializer
     lookup_field = 'slug'
+    permission_classes = [IsStorefrontAPIKey]
+    authentication_classes = []
+    allow_api_key = True
+    access_scope = "storefront"
 
     def retrieve(self, request, *args, **kwargs):
         store = require_api_key_store(request)
@@ -119,6 +140,10 @@ class ProductSearchView(StorefrontTenantMixin, ListAPIView):
     Not cached — dynamic user input makes cache hit rates too low.
     """
     serializer_class = ProductListSerializer
+    permission_classes = [IsStorefrontAPIKey]
+    authentication_classes = []
+    allow_api_key = True
+    access_scope = "storefront"
 
     def get_queryset(self):
         store = require_api_key_store(self.request)

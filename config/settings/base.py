@@ -28,7 +28,11 @@ def env_list(name: str, default: list[str] | None = None) -> list[str]:
 
 
 # Used to make test runs deterministic (e.g. avoid DRF throttling interfering with auth tests).
-TESTING = any(arg == "test" or arg.startswith("test") for arg in sys.argv)
+TESTING = (
+    any(arg == "test" or arg.startswith("test") for arg in sys.argv)
+    or any("pytest" in (arg or "") for arg in sys.argv)
+    or "PYTEST_CURRENT_TEST" in os.environ
+)
 
 # Applications
 INSTALLED_APPS = [
@@ -72,11 +76,18 @@ WSGI_APPLICATION = "config.wsgi.application"
 
 # Tenant API auth
 TENANT_API_PREFIX = "/api/v1/"
-TENANT_API_KEY_ENFORCE = env_bool("TENANT_API_KEY_ENFORCE", not TESTING)
+TENANT_API_KEY_ENFORCE = env_bool("TENANT_API_KEY_ENFORCE", True)
 STORE_API_KEY_SECRET = os.getenv("STORE_API_KEY_SECRET", "").strip()
 STORE_API_KEY_LAST_USED_TOUCH_INTERVAL_SECONDS = int(
     os.getenv("STORE_API_KEY_LAST_USED_TOUCH_INTERVAL_SECONDS", "60")
 )
+INTERNAL_OVERRIDE_IP_ALLOWLIST = env_list(
+    "INTERNAL_OVERRIDE_IP_ALLOWLIST",
+    default=["127.0.0.1", "::1"],
+)
+SECURITY_INTERNAL_OVERRIDE_ALLOWED = env_bool("SECURITY_INTERNAL_OVERRIDE_ALLOWED", False)
+SECURITY_REVIEW_LEGACY_MODE_ENABLED = env_bool("SECURITY_REVIEW_LEGACY_MODE_ENABLED", False)
+TENANT_GUARD_STRICT_DEV = env_bool("TENANT_GUARD_STRICT_DEV", env_bool("CI", False))
 
 # ---------------------------------------------------------------------------
 # Data cache TTLs (seconds) — used by engine.core.cache_service
@@ -108,7 +119,9 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "engine.core.middleware.internal_override_middleware.InternalOverrideMiddleware",
     "engine.core.store_api_key_auth.TenantApiKeyMiddleware",
+    "engine.core.middleware.tenant_context_middleware.TenantContextMiddleware",
     "engine.core.rate_limit.ApiKeyRateLimitMiddleware",
 ]
 

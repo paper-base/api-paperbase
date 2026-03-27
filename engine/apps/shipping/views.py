@@ -1,6 +1,7 @@
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from config.permissions import IsStorefrontAPIKey
 from engine.core.tenancy import get_active_store
 
 from .service import get_shipping_options
@@ -11,6 +12,11 @@ class ShippingOptionsView(APIView):
     GET ?zone_public_id=szn_xxx&order_total=99.00
     Returns available shipping methods and estimated price for the given zone and order total.
     """
+    permission_classes = [IsStorefrontAPIKey]
+    authentication_classes = []
+    allow_api_key = True
+    access_scope = "storefront"
+
     def get(self, request):
         ctx = get_active_store(request)
         store = ctx.store
