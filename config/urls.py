@@ -25,6 +25,7 @@ api_v1_patterns = [
     path('orders/', include('engine.apps.orders.urls')),
     path('shipping/', include('engine.apps.shipping.urls')),
     path('reviews/', include('engine.apps.reviews.urls')),
+    path('coupons/', include('engine.apps.coupons.urls')),
     path('customers/', include('engine.apps.customers.urls')),
     path('notifications/', include('engine.apps.notifications.urls')),
     path('system-notifications/', include('engine.apps.notifications.system_urls')),

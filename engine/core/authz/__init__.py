@@ -74,13 +74,15 @@ class IsDashboardUser(BasePermission):
     def has_permission(self, request, view):
         if not request.user or not getattr(request.user, "is_authenticated", False):
             return False
+        if getattr(request.user, "is_superuser", False):
+            return True
         if not getattr(request.user, "is_verified", False):
             return False
-        if request.user.is_staff:
-            return True
         ctx = get_active_store(request)
         if not (ctx.store and ctx.membership):
             return False
+        if request.user.is_staff:
+            return True
         from engine.apps.billing.feature_gate import _get_effective_plan
 
         return _get_effective_plan(request.user) is not None
@@ -96,7 +98,10 @@ class IsStorefrontAPIKey(BasePermission):
     message = "A valid storefront API key is required."
 
     def has_permission(self, request, view):
-        return bool(getattr(request, "api_key", None) and getattr(request, "store", None))
+        api_key = getattr(request, "api_key", None)
+        if not (api_key and getattr(request, "store", None)):
+            return False
+        return getattr(api_key, "key_type", None) == api_key.KeyType.PUBLIC
 
 
 class DenyAPIKeyAccess(BasePermission):
@@ -109,7 +114,8 @@ class DenyAPIKeyAccess(BasePermission):
             return False
         header = request.headers.get("Authorization") or request.headers.get("authorization") or ""
         parts = header.split(" ", 1)
-        if len(parts) == 2 and parts[0].lower() == "bearer" and parts[1].strip().startswith("ak_live_"):
+        token = parts[1].strip() if len(parts) == 2 and parts[0].lower() == "bearer" else ""
+        if token.startswith("ak_pk_") or token.startswith("ak_sk_"):
             return False
         return True
 

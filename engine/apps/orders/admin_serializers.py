@@ -8,7 +8,6 @@ from django.db import transaction
 from engine.apps.products.models import Product, ProductVariant
 from engine.apps.orders.stock import adjust_stock
 from engine.apps.shipping.models import ShippingMethod, ShippingZone
-from engine.apps.shipping.service import quote_shipping
 from engine.apps.orders.services import (
     recalculate_order_totals,
     resolve_active_store_product,
@@ -18,6 +17,7 @@ from engine.apps.orders.services import (
 )
 
 from .models import Order, OrderItem
+from .services import get_allowed_next_order_statuses
 
 
 class StoreScopedProductSlugRelatedField(serializers.SlugRelatedField):
@@ -49,7 +49,7 @@ class AdminOrderItemSerializer(serializers.ModelSerializer):
     original_price = serializers.SerializerMethodField()
     variant_public_id = serializers.CharField(source="variant.public_id", read_only=True, allow_null=True)
     variant_sku = serializers.CharField(source="variant.sku", read_only=True, allow_null=True)
-    variant_stock_quantity = serializers.IntegerField(source="variant.stock_quantity", read_only=True, allow_null=True)
+    variant_inventory_quantity = serializers.SerializerMethodField()
     variant_option_labels = serializers.SerializerMethodField()
 
     class Meta:
@@ -57,7 +57,7 @@ class AdminOrderItemSerializer(serializers.ModelSerializer):
         fields = [
             'public_id', 'product', 'product_name', 'product_brand', 'product_image',
             'status',
-            'variant_public_id', 'variant_sku', 'variant_stock_quantity', 'variant_option_labels',
+            'variant_public_id', 'variant_sku', 'variant_inventory_quantity', 'variant_option_labels',
             'quantity', 'price', 'original_price',
         ]
         read_only_fields = ['public_id']
@@ -98,6 +98,15 @@ class AdminOrderItemSerializer(serializers.ModelSerializer):
             for link in links
         ]
 
+    def get_variant_inventory_quantity(self, obj):
+        v = getattr(obj, "variant", None)
+        if not v:
+            return None
+        inv = getattr(v, "inventory", None)
+        if inv is None:
+            return 0
+        return int(inv.quantity or 0)
+
 
 class AdminOrderListSerializer(serializers.ModelSerializer):
     items_count = serializers.SerializerMethodField()
@@ -107,6 +116,7 @@ class AdminOrderListSerializer(serializers.ModelSerializer):
         model = Order
         fields = [
             'public_id', 'order_number', 'email', 'status', 'subtotal', 'shipping_cost', 'total',
+            'coupon_code', 'discount_amount',
             'shipping_name', 'phone', 'district',
             'items_count', 'customer', 'extra_data',
             'courier_provider', 'courier_consignment_id', 'courier_tracking_code',
@@ -130,22 +140,23 @@ class AdminOrderSerializer(serializers.ModelSerializer):
     shipping_zone_public_id = serializers.CharField(source="shipping_zone.public_id", read_only=True, allow_null=True)
     shipping_method_public_id = serializers.CharField(source="shipping_method.public_id", read_only=True, allow_null=True)
     customer = serializers.SerializerMethodField()
+    allowed_next_statuses = serializers.SerializerMethodField()
 
     class Meta:
         model = Order
         fields = [
             'public_id', 'order_number', 'user_public_id', 'email', 'status',
-            'subtotal', 'shipping_cost', 'total',
+            'subtotal', 'shipping_cost', 'discount_amount', 'total', 'coupon_code',
             'shipping_zone_public_id', 'shipping_method_public_id',
             'shipping_name', 'shipping_address', 'phone',
             'district',
             'tracking_number', 'customer',
             'courier_provider', 'courier_consignment_id', 'courier_tracking_code',
             'courier_status', 'sent_to_courier', 'customer_confirmation_sent_at',
-            'extra_data', 'items', 'created_at', 'updated_at',
+            'extra_data', 'items', 'allowed_next_statuses', 'created_at', 'updated_at',
         ]
         read_only_fields = [
-            'public_id', 'order_number', 'status', 'subtotal', 'shipping_cost', 'total',
+            'public_id', 'order_number', 'status', 'subtotal', 'shipping_cost', 'discount_amount', 'total', 'coupon_code',
             'courier_provider', 'courier_consignment_id', 'courier_tracking_code',
             'courier_status', 'sent_to_courier', 'customer_confirmation_sent_at',
             'created_at', 'updated_at',
@@ -156,6 +167,9 @@ class AdminOrderSerializer(serializers.ModelSerializer):
         if not customer:
             return None
         return {"public_id": customer.public_id, "name": customer.name, "phone": customer.phone}
+
+    def get_allowed_next_statuses(self, obj):
+        return get_allowed_next_order_statuses(obj.status)
 
 
 class AdminOrderItemUpdateSerializer(serializers.Serializer):
@@ -184,13 +198,13 @@ class AdminOrderItemUpdateSerializer(serializers.Serializer):
             return attrs
 
         if has_public_id:
-            if "quantity" not in attrs or "price" not in attrs:
-                raise serializers.ValidationError("quantity and price are required for existing items.")
+            if "quantity" not in attrs:
+                raise serializers.ValidationError("quantity is required for existing items.")
             return attrs
 
         if has_product:
-            if "quantity" not in attrs or "price" not in attrs:
-                raise serializers.ValidationError("quantity and price are required for new items.")
+            if "quantity" not in attrs:
+                raise serializers.ValidationError("quantity is required for new items.")
             return attrs
 
         raise serializers.ValidationError("Either public_id or product is required.")
@@ -231,6 +245,7 @@ class AdminOrderUpdateSerializer(serializers.ModelSerializer):
             "district",
             "tracking_number",
             "extra_data",
+            "coupon_code",
             "items",
             "total",
             "created_at",
@@ -276,6 +291,7 @@ class AdminOrderUpdateSerializer(serializers.ModelSerializer):
                         if oi.product_id:
                             try:
                                 restore_order_item_stock(
+                                    store_id=store.id,
                                     product_id=oi.product_id,
                                     variant_id=oi.variant_id,
                                     quantity=oi.quantity,
@@ -288,7 +304,6 @@ class AdminOrderUpdateSerializer(serializers.ModelSerializer):
                         continue
 
                     qty = int(item["quantity"])
-                    price = item["price"]
                     variant_public_id = item.get("variant_public_id")
 
                     if item_public_id:
@@ -310,12 +325,27 @@ class AdminOrderUpdateSerializer(serializers.ModelSerializer):
                         new_variant_id = variant_obj.pk if variant_obj else None
                         try:
                             if prev_variant_id != new_variant_id:
-                                adjust_stock(product_id=prev_product_id, variant_id=prev_variant_id, delta_qty=-prev_qty)
-                                adjust_stock(product_id=prev_product_id, variant_id=new_variant_id, delta_qty=qty)
+                                adjust_stock(
+                                    product_id=prev_product_id,
+                                    variant_id=prev_variant_id,
+                                    delta_qty=-prev_qty,
+                                    store_id=store.id,
+                                )
+                                adjust_stock(
+                                    product_id=prev_product_id,
+                                    variant_id=new_variant_id,
+                                    delta_qty=qty,
+                                    store_id=store.id,
+                                )
                             else:
                                 delta = qty - prev_qty
                                 if delta != 0:
-                                    adjust_stock(product_id=prev_product_id, variant_id=prev_variant_id, delta_qty=delta)
+                                    adjust_stock(
+                                        product_id=prev_product_id,
+                                        variant_id=prev_variant_id,
+                                        delta_qty=delta,
+                                        store_id=store.id,
+                                    )
                         except DjangoValidationError as e:
                             raise serializers.ValidationError(
                                 e.message_dict if hasattr(e, "message_dict") else {"detail": str(e)}
@@ -323,7 +353,11 @@ class AdminOrderUpdateSerializer(serializers.ModelSerializer):
 
                         oi.variant = variant_obj
                         oi.quantity = qty
-                        oi.price = price
+                        oi.price = (
+                            variant_obj.price_override
+                            if (variant_obj and variant_obj.price_override is not None)
+                            else oi.product.price
+                        )
                         oi.save(update_fields=["variant", "quantity", "price"])
                         continue
 
@@ -347,6 +381,7 @@ class AdminOrderUpdateSerializer(serializers.ModelSerializer):
                             product_id=product_obj.pk,
                             variant_id=variant_obj.pk if variant_obj else None,
                             delta_qty=qty,
+                            store_id=store.id,
                         )
                     except DjangoValidationError as e:
                         raise serializers.ValidationError(
@@ -357,7 +392,11 @@ class AdminOrderUpdateSerializer(serializers.ModelSerializer):
                         product=product_obj,
                         variant=variant_obj,
                         quantity=qty,
-                        price=price,
+                        price=(
+                            variant_obj.price_override
+                            if (variant_obj and variant_obj.price_override is not None)
+                            else product_obj.price
+                        ),
                     )
 
                 recalculate_order_totals(instance)
@@ -375,7 +414,7 @@ class AdminOrderItemWriteSerializer(serializers.Serializer):
     product = StoreScopedProductSlugRelatedField(slug_field="public_id", queryset=Product.objects.all())
     variant_public_id = serializers.CharField(required=False, allow_null=True, allow_blank=True)
     quantity = serializers.IntegerField(min_value=1)
-    price = serializers.DecimalField(max_digits=10, decimal_places=2)
+    price = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)
 
     def validate(self, attrs):
         if attrs.get("variant_public_id") == "":
@@ -418,6 +457,7 @@ class AdminOrderCreateSerializer(serializers.ModelSerializer):
             "district",
             "tracking_number",
             "extra_data",
+            "coupon_code",
             "items",
             "total",
             "created_at",
@@ -471,7 +511,6 @@ class AdminOrderCreateSerializer(serializers.ModelSerializer):
                     )
                 variant_public_id = item.get("variant_public_id")
                 quantity = item["quantity"]
-                price = item["price"]
 
                 variant_obj = None
                 if variant_public_id is not None:
@@ -494,7 +533,11 @@ class AdminOrderCreateSerializer(serializers.ModelSerializer):
                     product=product_obj,
                     variant=variant_obj,
                     quantity=quantity,
-                    price=price,
+                    price=(
+                        variant_obj.price_override
+                        if (variant_obj and variant_obj.price_override is not None)
+                        else product_obj.price
+                    ),
                 )
                 # Reduce stock for created order items (dashboard-created orders).
                 try:
@@ -502,33 +545,15 @@ class AdminOrderCreateSerializer(serializers.ModelSerializer):
                         product_id=product_obj.pk,
                         variant_id=variant_obj.pk if variant_obj else None,
                         delta_qty=quantity,
+                        store_id=store.id,
                     )
                 except DjangoValidationError as e:
                     raise serializers.ValidationError(e.message_dict if hasattr(e, "message_dict") else {"detail": str(e)})
                 subtotal += Decimal(str(order_item.price)) * Decimal(order_item.quantity)
 
-            quote = quote_shipping(
-                store=order.store,
-                order_subtotal=subtotal,
-                shipping_zone_id=order.shipping_zone_id,
-                shipping_method_id=order.shipping_method_id,
-            )
             order.subtotal = subtotal
-            order.shipping_cost = quote.shipping_cost
-            order.shipping_zone = quote.zone
-            order.shipping_method = quote.method
-            order.shipping_rate = quote.rate
-            order.total = subtotal + quote.shipping_cost
-            order.save(
-                update_fields=[
-                    "subtotal",
-                    "shipping_cost",
-                    "shipping_zone",
-                    "shipping_method",
-                    "shipping_rate",
-                    "total",
-                ]
-            )
+            order.save(update_fields=["subtotal", "updated_at"])
+            recalculate_order_totals(order)
             resolve_and_attach_customer(
                 order,
                 store=store,

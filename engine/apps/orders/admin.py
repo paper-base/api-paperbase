@@ -1,5 +1,6 @@
 from django.contrib import admin
 from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.utils.html import format_html
 
 from engine.apps.stores.models import Store
@@ -172,58 +173,63 @@ class OrderAdmin(admin.ModelAdmin):
             ):
                 original[oi.id] = (str(oi.product_id), oi.variant_id, int(oi.quantity))
 
-        instances = formset.save(commit=False)
-        deleted = list(formset.deleted_objects)
+        with transaction.atomic():
+            instances = formset.save(commit=False)
+            deleted = list(formset.deleted_objects)
 
-        # Handle deletions first (restore stock).
-        for obj in deleted:
-            try:
-                adjust_stock(
-                    product_id=obj.product_id,
-                    variant_id=obj.variant_id,
-                    delta_qty=-int(obj.quantity),
-                )
-            except ValidationError as e:
-                raise ValidationError(e)
-            obj.delete()
-
-        # Handle creates/updates (reduce or restore by delta).
-        for obj in instances:
-            prev = original.get(getattr(obj, "id", None))
-            prev_product_id, prev_variant_id, prev_qty = (None, None, 0)
-            if prev is not None:
-                prev_product_id, prev_variant_id, prev_qty = prev
-
-            new_product_id = str(obj.product_id)
-            new_variant_id = obj.variant_id
-            new_qty = int(obj.quantity or 0)
-
-            # If target changed, restore old then reduce new.
-            if prev is not None and (
-                str(prev_product_id) != new_product_id or prev_variant_id != new_variant_id
-            ):
-                adjust_stock(
-                    product_id=prev_product_id,
-                    variant_id=prev_variant_id,
-                    delta_qty=-prev_qty,
-                )
-                adjust_stock(
-                    product_id=new_product_id,
-                    variant_id=new_variant_id,
-                    delta_qty=new_qty,
-                )
-            else:
-                delta = new_qty - int(prev_qty or 0)
-                if delta != 0:
+            # Handle deletions first (restore stock).
+            for obj in deleted:
+                try:
                     adjust_stock(
+                        store_id=form.instance.store_id,
+                        product_id=obj.product_id,
+                        variant_id=obj.variant_id,
+                        delta_qty=-int(obj.quantity),
+                    )
+                except ValidationError as e:
+                    raise ValidationError(e)
+                obj.delete()
+
+            # Handle creates/updates (reduce or restore by delta).
+            for obj in instances:
+                prev = original.get(getattr(obj, "id", None))
+                prev_product_id, prev_variant_id, prev_qty = (None, None, 0)
+                if prev is not None:
+                    prev_product_id, prev_variant_id, prev_qty = prev
+
+                new_product_id = str(obj.product_id)
+                new_variant_id = obj.variant_id
+                new_qty = int(obj.quantity or 0)
+
+                # If target changed, restore old then reduce new.
+                if prev is not None and (
+                    str(prev_product_id) != new_product_id or prev_variant_id != new_variant_id
+                ):
+                    adjust_stock(
+                        store_id=form.instance.store_id,
+                        product_id=prev_product_id,
+                        variant_id=prev_variant_id,
+                        delta_qty=-prev_qty,
+                    )
+                    adjust_stock(
+                        store_id=form.instance.store_id,
                         product_id=new_product_id,
                         variant_id=new_variant_id,
-                        delta_qty=delta,
+                        delta_qty=new_qty,
                     )
+                else:
+                    delta = new_qty - int(prev_qty or 0)
+                    if delta != 0:
+                        adjust_stock(
+                            store_id=form.instance.store_id,
+                            product_id=new_product_id,
+                            variant_id=new_variant_id,
+                            delta_qty=delta,
+                        )
 
-            obj.save()
+                obj.save()
 
-        formset.save_m2m()
+            formset.save_m2m()
 
     @admin.display(description='Products')
     def product_names(self, obj: Order):

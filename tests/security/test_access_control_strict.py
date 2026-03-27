@@ -8,8 +8,11 @@ from django.urls import path
 from rest_framework.test import APIClient
 from rest_framework.views import APIView
 
-from engine.apps.orders.models import Order, OrderItem
-from engine.apps.products.models import Category, Product
+from engine.apps.orders.models import Order, OrderItem, StockRestoreLog
+from engine.apps.orders.services import transition_order_status
+from engine.apps.inventory.models import Inventory
+from engine.apps.products.models import Category, Product, ProductVariant
+from engine.apps.products.stock_sync import sync_product_stock_from_variants
 from engine.apps.reviews.models import Review
 from engine.apps.reviews import services as review_services
 from engine.apps.shipping.models import ShippingZone
@@ -367,7 +370,7 @@ def test_api_key_view_scan_raises_when_allow_flag_missing():
         validate_storefront_api_key_view_flags(patterns=patterns)
 
 
-def test_maybe_validate_scan_warns_only_in_debug(monkeypatch, settings, caplog):
+def test_maybe_validate_scan_raises_in_debug(monkeypatch, settings):
     settings.DEBUG = True
     settings.TESTING = False
     store_api_key_auth._API_KEY_VIEW_SCAN_DONE = False
@@ -376,8 +379,8 @@ def test_maybe_validate_scan_warns_only_in_debug(monkeypatch, settings, caplog):
         raise RuntimeError("missing allow flag")
 
     monkeypatch.setattr(store_api_key_auth, "validate_storefront_api_key_view_flags", _raise)
-    maybe_validate_storefront_api_key_view_flags()
-    assert "missing allow flag" in caplog.text
+    with pytest.raises(RuntimeError):
+        maybe_validate_storefront_api_key_view_flags()
 
 
 def test_maybe_validate_scan_raises_in_test_mode(monkeypatch, settings):
@@ -393,7 +396,7 @@ def test_maybe_validate_scan_raises_in_test_mode(monkeypatch, settings):
         maybe_validate_storefront_api_key_view_flags()
 
 
-def test_maybe_validate_scan_disabled_in_prod(monkeypatch, settings):
+def test_maybe_validate_scan_raises_in_prod(monkeypatch, settings):
     settings.DEBUG = False
     settings.TESTING = False
     store_api_key_auth._API_KEY_VIEW_SCAN_DONE = False
@@ -401,11 +404,12 @@ def test_maybe_validate_scan_disabled_in_prod(monkeypatch, settings):
 
     def _raise():
         called["value"] = True
-        raise RuntimeError("should not be called")
+        raise RuntimeError("missing allow flag")
 
     monkeypatch.setattr(store_api_key_auth, "validate_storefront_api_key_view_flags", _raise)
-    maybe_validate_storefront_api_key_view_flags()
-    assert called["value"] is False
+    with pytest.raises(RuntimeError):
+        maybe_validate_storefront_api_key_view_flags()
+    assert called["value"] is True
 
 
 @pytest.mark.django_db
@@ -647,7 +651,17 @@ def test_admin_override_allows_legacy_review_binding(settings):
     admin_user.is_staff = True
     admin_user.is_verified = True
     admin_user.save(update_fields=["is_staff", "is_verified"])
-    client.force_authenticate(user=admin_user)
+    StoreMembership.objects.create(
+        user=admin_user,
+        store=store,
+        role=StoreMembership.Role.ADMIN,
+        is_active=True,
+    )
+    client.force_login(admin_user)
+    client.credentials(
+        HTTP_AUTHORIZATION=f"Bearer {api_key}",
+        HTTP_X_STORE_PUBLIC_ID=store.public_id,
+    )
 
     order_payload = {
         "shipping_zone": zone.public_id,
@@ -677,6 +691,7 @@ def test_admin_override_allows_legacy_review_binding(settings):
         "/api/v1/reviews/create/",
         review_payload,
         format="json",
+        HTTP_X_FORWARDED_FOR="127.0.0.1",
         **_session_headers("different-session"),
     )
     assert review_response.status_code == 201
@@ -798,7 +813,17 @@ def test_review_override_enforced_by_central_policy(settings, monkeypatch):
     admin_user.is_staff = True
     admin_user.is_verified = True
     admin_user.save(update_fields=["is_staff", "is_verified"])
+    StoreMembership.objects.create(
+        user=admin_user,
+        store=store,
+        role=StoreMembership.Role.ADMIN,
+        is_active=True,
+    )
     client.force_authenticate(user=admin_user)
+    client.credentials(
+        HTTP_AUTHORIZATION=f"Bearer {api_key}",
+        HTTP_X_STORE_PUBLIC_ID=store.public_id,
+    )
 
     order_payload = {
         "shipping_zone": zone.public_id,
@@ -901,3 +926,194 @@ def test_auto_route_policy_with_api_key():
     for method, path in blocked_routes:
         response = client.generic(method, path)
         assert response.status_code in {401, 403, 404}
+
+
+@pytest.mark.django_db
+def test_api_key_is_explicitly_blocked_on_exempt_dashboard_routes():
+    store = _make_store("Exempt Block")
+    _key_row, api_key = create_store_api_key(store, name="frontend")
+    client = _api_key_client(api_key)
+
+    response = client.get("/api/v1/settings/network/api-keys/")
+    assert response.status_code == 403
+
+
+@pytest.mark.django_db
+def test_staff_without_membership_cannot_switch_tenants_via_header():
+    store_a = _make_store("Tenant A")
+    store_b = _make_store("Tenant B")
+    zone_b = _make_zone(store_b)
+    Order.objects.create(
+        store=store_b,
+        order_number="TENANTB0001",
+        email="buyer@example.com",
+        shipping_name="Buyer",
+        shipping_address="Addr",
+        phone="01700000000",
+        shipping_zone=zone_b,
+    )
+    user = User.objects.create_user(
+        email="staff-no-membership@example.com",
+        password="pass1234",
+    )
+    user.is_verified = True
+    user.is_staff = True
+    user.save(update_fields=["is_verified", "is_staff"])
+    StoreMembership.objects.create(
+        user=user,
+        store=store_a,
+        role=StoreMembership.Role.OWNER,
+        is_active=True,
+    )
+    client = APIClient()
+    client.force_authenticate(user=user)
+    client.credentials(HTTP_X_STORE_PUBLIC_ID=store_b.public_id)
+
+    response = client.get("/api/v1/orders/")
+    assert response.status_code == 403
+
+
+@pytest.mark.django_db
+def test_wishlist_is_isolated_by_store_session_id():
+    store = _make_store("Wishlist Isolation")
+    product = _make_product(store, stock=10)
+    _key_row, api_key = create_store_api_key(store, name="frontend")
+    client = _api_key_client(api_key)
+
+    add_response = client.post(
+        "/api/v1/wishlist/add/",
+        {"product_public_id": product.public_id},
+        format="json",
+        **_session_headers("wishlist-session-a"),
+    )
+    assert add_response.status_code == 201
+
+    list_a = client.get("/api/v1/wishlist/", **_session_headers("wishlist-session-a"))
+    list_b = client.get("/api/v1/wishlist/", **_session_headers("wishlist-session-b"))
+    assert list_a.status_code == 200
+    assert list_b.status_code == 200
+    assert len(list_a.data["results"]) == 1
+    assert list_b.data["results"] == []
+
+
+@pytest.mark.django_db
+def test_public_reviews_response_hides_moderation_status():
+    store = _make_store("Review Surface")
+    product = _make_product(store, stock=10)
+    zone = _make_zone(store)
+    order = Order.objects.create(
+        store=store,
+        order_number="REVIEWS0001",
+        email="buyer@example.com",
+        store_session_id=derive_store_session_id(store_id=store.id, token="review-surface"),
+        shipping_name="Buyer",
+        shipping_address="Addr",
+        phone="01700000000",
+        shipping_zone=zone,
+    )
+    OrderItem.objects.create(order=order, product=product, quantity=1, price=product.price)
+    Review.objects.create(
+        store=store,
+        product=product,
+        order=order,
+        store_session_id=order.store_session_id,
+        rating=5,
+        title="Great",
+        body="Great product and quality.",
+        status=Review.Status.APPROVED,
+    )
+    _key_row, api_key = create_store_api_key(store, name="frontend")
+    client = _api_key_client(api_key)
+
+    response = client.get("/api/v1/reviews/", {"product_public_id": product.public_id})
+    assert response.status_code == 200
+    assert response.data["count"] == 1
+    assert "status" not in response.data["results"][0]
+
+
+@pytest.mark.django_db
+def test_variant_stock_sync_updates_product_total_consistently():
+    store = _make_store("Stock Sync")
+    category = Category.objects.create(
+        store=store,
+        name="Stock Category",
+        slug="stock-category",
+    )
+    product = Product.objects.create(
+        store=store,
+        category=category,
+        name="Variant Product",
+        price=120,
+        stock=0,
+        status=Product.Status.ACTIVE,
+        is_active=True,
+    )
+    v1 = ProductVariant.objects.create(
+        product=product,
+        sku="sku-v1",
+        is_active=True,
+    )
+    v2 = ProductVariant.objects.create(
+        product=product,
+        sku="sku-v2",
+        is_active=True,
+    )
+    Inventory.objects.create(product=product, variant=v1, quantity=3)
+    Inventory.objects.create(product=product, variant=v2, quantity=7)
+
+    sync_product_stock_from_variants(product.id)
+    product.refresh_from_db()
+    assert product.stock == 10
+
+    Inventory.objects.filter(product=product, variant=v1).update(quantity=5)
+    Inventory.objects.filter(product=product, variant=v2).update(quantity=1)
+    sync_product_stock_from_variants(product.id)
+    product.refresh_from_db()
+    assert product.stock == 6
+
+
+@pytest.mark.django_db
+def test_terminal_status_transition_restores_stock_once_per_item_reason():
+    store = _make_store("Restore Once")
+    product = _make_product(store, stock=0)
+    zone = _make_zone(store)
+    Inventory.objects.create(product=product, variant=None, quantity=3)
+    order = Order.objects.create(
+        store=store,
+        order_number="RESTORE0001",
+        email="buyer@example.com",
+        store_session_id=derive_store_session_id(store_id=store.id, token="restore-once"),
+        shipping_name="Buyer",
+        shipping_address="Addr",
+        phone="01700000000",
+        shipping_zone=zone,
+        status=Order.Status.PENDING,
+    )
+    item = OrderItem.objects.create(order=order, product=product, quantity=2, price=product.price)
+    transition_order_status(order=order, to_status=Order.Status.FAILED, note="payment-fail", actor_label="test")
+    transition_order_status(order=order, to_status=Order.Status.FAILED, note="retry", actor_label="test")
+
+    inv = Inventory.objects.get(product=product, variant__isnull=True)
+    assert inv.quantity == 5
+    assert (
+        StockRestoreLog.objects.filter(
+            order=order,
+            order_item=item,
+            reason=Order.Status.FAILED,
+        ).count()
+        == 1
+    )
+
+
+@pytest.mark.django_db
+def test_admin_product_patch_rejects_direct_stock_mutation():
+    store = _make_store("No Direct Stock Patch")
+    product = _make_product(store, stock=10)
+    client = _admin_client_for_store(store)
+
+    response = client.patch(
+        f"/api/v1/admin/products/{product.public_id}/",
+        {"stock": 999},
+        format="json",
+    )
+    assert response.status_code == 400

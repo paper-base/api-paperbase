@@ -2,6 +2,7 @@ import logging
 from datetime import timedelta
 
 import requests as http_requests
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import Q
 from django.utils import timezone
 from rest_framework import viewsets, mixins, status
@@ -21,6 +22,10 @@ from engine.apps.emails.triggers import (
 from engine.apps.couriers.status_mapping import courier_status_implies_order_confirmed
 
 from .models import Order
+from .services import (
+    get_allowed_next_order_statuses,
+    transition_order_status,
+)
 from .admin_serializers import (
     AdminOrderListSerializer,
     AdminOrderSerializer,
@@ -36,6 +41,7 @@ ALLOWED_ORDER_STATUSES = {
     Order.Status.PROCESSING,
     Order.Status.SHIPPED,
     Order.Status.DELIVERED,
+    Order.Status.FAILED,
     Order.Status.CANCELLED,
     Order.Status.RETURNED,
 }
@@ -52,6 +58,20 @@ class AdminOrderViewSet(
 ):
     queryset = Order.objects.select_related("customer", "user").prefetch_related('items__product').all()
     lookup_field = 'public_id'
+
+    def _send_customer_confirmation_if_enabled(self, order: Order) -> None:
+        """
+        Send ORDER_CONFIRMED mail exactly once when order reaches confirmed.
+        """
+        if order.status != Order.Status.CONFIRMED:
+            return
+        if order.customer_confirmation_sent_at is not None:
+            return
+        if should_send_customer_confirmation_order_email(order):
+            if not notify_customer_order_confirmation_send_to_courier(order):
+                raise ValidationError({"detail": "Unable to queue customer confirmation email."})
+            order.customer_confirmation_sent_at = timezone.now()
+            order.save(update_fields=["customer_confirmation_sent_at"])
 
     def get_serializer_class(self):
         if self.action == "create":
@@ -198,13 +218,14 @@ class AdminOrderViewSet(
         else:
             raise ValidationError({"detail": f"Unsupported courier provider: {courier.provider}"})
 
-        order.status = Order.Status.PENDING
-        if order.customer_confirmation_sent_at is None:
-            if should_send_customer_confirmation_order_email(order):
-                if not notify_customer_order_confirmation_send_to_courier(order):
-                    raise ValidationError({"detail": "Unable to queue customer confirmation email."})
-                order.customer_confirmation_sent_at = timezone.now()
-        order.save(update_fields=["status", "customer_confirmation_sent_at"])
+        if order.status == Order.Status.PENDING:
+            order = transition_order_status(
+                order=order,
+                to_status=Order.Status.CONFIRMED,
+                note="Order sent to courier",
+                actor_label="system",
+            )
+        self._send_customer_confirmation_if_enabled(order)
 
         try:
             result = svc.create_order(order, courier)
@@ -242,6 +263,44 @@ class AdminOrderViewSet(
             },
         )
         return Response(AdminOrderSerializer(order).data)
+
+    @action(detail=True, methods=["patch"], url_path="status")
+    def update_status(self, request, public_id=None):
+        order = self.get_object()
+        next_status = (request.data.get("status") or "").strip().lower()
+        note = (request.data.get("note") or "").strip()
+        if not next_status:
+            raise ValidationError({"status": "This field is required."})
+        try:
+            order = transition_order_status(
+                order=order,
+                to_status=next_status,
+                note=note,
+                actor_label=f"user:{getattr(request.user, 'public_id', request.user.pk)}",
+            )
+        except DjangoValidationError as exc:
+            raise ValidationError(
+                exc.message_dict if hasattr(exc, "message_dict") else {"detail": str(exc)}
+            )
+        self._send_customer_confirmation_if_enabled(order)
+        log_activity(
+            request=request,
+            action=ActivityLog.Action.CUSTOM,
+            entity_type="order",
+            entity_id=order.public_id,
+            summary=f"Order {order.order_number} status updated",
+            metadata={
+                "status": order.status,
+                "allowed_next_statuses": get_allowed_next_order_statuses(order.status),
+            },
+        )
+        return Response(
+            {
+                "order": AdminOrderSerializer(order).data,
+                "allowed_next_statuses": get_allowed_next_order_statuses(order.status),
+            },
+            status=status.HTTP_200_OK,
+        )
 
     @action(detail=True, methods=["get"], url_path="track")
     def track(self, request, public_id=None):
@@ -287,10 +346,15 @@ class AdminOrderViewSet(
 
         effective = new_status or order.courier_status
         if courier_status_implies_order_confirmed(order.courier_provider, effective):
-            if order.status != Order.Status.CONFIRMED:
+            if order.status == Order.Status.PENDING:
                 prev = order.status
-                order.status = Order.Status.CONFIRMED
-                update_fields.append("status")
+                order = transition_order_status(
+                    order=order,
+                    to_status=Order.Status.CONFIRMED,
+                    note=f"Courier status: {effective}",
+                    actor_label="system",
+                )
+                self._send_customer_confirmation_if_enabled(order)
                 log_activity(
                     request=request,
                     action=ActivityLog.Action.CUSTOM,

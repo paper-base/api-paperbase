@@ -2,6 +2,7 @@ from datetime import timedelta
 from pathlib import Path
 import os
 import sys
+from celery.schedules import crontab
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
@@ -235,4 +236,10 @@ CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
+CELERY_BEAT_SCHEDULE = {
+    "inventory-sync-product-stock-cache-hourly": {
+        "task": "engine.apps.inventory.sync_product_stock_cache_all_stores",
+        "schedule": crontab(minute=0, hour="*"),
+    },
+}
 

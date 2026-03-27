@@ -31,28 +31,42 @@ def _hash_store_api_key(raw_key: str) -> str:
     return hmac.new(_api_key_secret(), material, hashlib.sha256).hexdigest()
 
 
-def generate_store_api_key() -> str:
+def generate_store_api_key(*, key_type: str) -> str:
     """
     Create a high-entropy plaintext API key for one-time display.
     """
-    return f"ak_live_{secrets.token_urlsafe(24)}"
+    if key_type == StoreApiKey.KeyType.SECRET:
+        return f"ak_sk_{secrets.token_urlsafe(24)}"
+    return f"ak_pk_{secrets.token_urlsafe(24)}"
 
 
-def create_store_api_key(store: Store, *, name: str = "") -> tuple[StoreApiKey, str]:
+def create_store_api_key(
+    store: Store, *, name: str = "", key_type: str = StoreApiKey.KeyType.PUBLIC
+) -> tuple[StoreApiKey, str]:
     """
     Issue a new API key for the store.
     Returns (row, plaintext_key). The plaintext must not be persisted.
     """
-    raw = generate_store_api_key()
+    if key_type not in {StoreApiKey.KeyType.PUBLIC, StoreApiKey.KeyType.SECRET}:
+        raise ValueError("Invalid key_type")
+    raw = generate_store_api_key(key_type=key_type)
     key_hash = _hash_store_api_key(raw)
     key_name = (name or "").strip()[:80] or "Default key"
+    key_prefix = "ak_sk" if key_type == StoreApiKey.KeyType.SECRET else "ak_pk"
+    scopes = (
+        ["admin:all", "mutations:all"]
+        if key_type == StoreApiKey.KeyType.SECRET
+        else ["products:read", "cart:write", "orders:create", "orders:read"]
+    )
     with transaction.atomic():
         row = StoreApiKey.objects.create(
             store=store,
             key_hash=key_hash,
-            key_prefix="ak_live",
+            key_prefix=key_prefix,
             key_last4=raw[-4:],
             label=key_name,
+            key_type=key_type,
+            scopes=scopes,
             is_active=True,
         )
     return row, raw

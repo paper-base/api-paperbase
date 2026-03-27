@@ -38,6 +38,7 @@ class OrderSerializer(serializers.ModelSerializer):
         model = Order
         fields = [
             'public_id', 'order_number', 'status', 'subtotal', 'shipping_cost', 'total',
+            'coupon_code', 'discount_amount',
             'shipping_zone_public_id', 'shipping_method_public_id',
             'shipping_name', 'shipping_address',
             'phone', 'email', 'district', 'store_session_id',
@@ -71,6 +72,7 @@ class OrderCreateSerializer(serializers.Serializer):
     email = serializers.EmailField(required=False, allow_blank=True, default="")
     shipping_name = serializers.CharField(max_length=255)
     shipping_address = serializers.CharField()
+    coupon_code = serializers.CharField(max_length=50, required=False, allow_blank=True, default="")
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -120,6 +122,7 @@ class DirectOrderCreateSerializer(serializers.Serializer):
     email = serializers.EmailField(required=False, allow_blank=True, default='')
     shipping_address = serializers.CharField()
     district = serializers.CharField(max_length=100, required=False, allow_blank=True, default='')
+    coupon_code = serializers.CharField(max_length=50, required=False, allow_blank=True, default="")
     products = serializers.ListField(
         child=serializers.DictField(),
         min_length=1

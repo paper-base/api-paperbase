@@ -25,6 +25,7 @@ from .utils import get_next_order_number
 from .stock import adjust_stock
 from .throttles import DirectOrderRateThrottle
 from engine.apps.shipping.service import quote_shipping
+from engine.apps.coupons.services import consume_coupon_usage, validate_coupon_for_subtotal
 from engine.apps.emails.triggers import notify_store_new_order
 from engine.core.realtime import emit_store_event
 
@@ -57,6 +58,10 @@ class OrderCreateView(CreateAPIView):
         queryset = Order.objects.filter(store=store).prefetch_related(
             "items__product", "items__product__images"
         )
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = OrderSerializer(page, many=True, context={"request": request})
+            return self.get_paginated_response(serializer.data)
         data = OrderSerializer(queryset, many=True, context={"request": request}).data
         return Response(data, status=status.HTTP_200_OK)
 
@@ -71,8 +76,9 @@ class OrderCreateView(CreateAPIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Lock products and variants for atomic stock validation.
+        # Lock products, variants, and inventory rows for atomic stock validation.
         from engine.apps.products.models import Product, ProductVariant
+        from engine.apps.inventory.models import Inventory
         product_ids = [ci.product_id for ci in items]
         variant_ids = [ci.variant_id for ci in items if getattr(ci, "variant_id", None)]
         store = request_store
@@ -97,6 +103,21 @@ class OrderCreateView(CreateAPIView):
             .select_for_update()
             .select_related("product")
         }
+        locked_product_inventory = {
+            inv.product_id: inv
+            for inv in Inventory.objects.select_for_update().filter(
+                product_id__in=product_ids,
+                variant__isnull=True,
+                product__store=store,
+            )
+        }
+        locked_variant_inventory = {
+            inv.variant_id: inv
+            for inv in Inventory.objects.select_for_update().filter(
+                variant_id__in=variant_ids,
+                product__store=store,
+            )
+        }
         
         # Check stock availability (variant stock when variant is present).
         stock_errors = []
@@ -109,20 +130,24 @@ class OrderCreateView(CreateAPIView):
                 if not variant:
                     stock_errors.append(f"Variant {ci.variant_id} is unavailable.")
                     continue
-                if variant.stock_quantity < ci.quantity:
+                inv = locked_variant_inventory.get(ci.variant_id)
+                available = int(inv.quantity) if inv else 0
+                if available < ci.quantity:
                     stock_errors.append(
                         f"Insufficient variant stock for {variant.product.name}. "
-                        f"Available: {variant.stock_quantity}, Requested: {ci.quantity}"
+                        f"Available: {available}, Requested: {ci.quantity}"
                     )
             else:
                 product = locked_products.get(ci.product_id)
                 if not product:
                     stock_errors.append(f"Product {ci.product.name} is unavailable.")
                     continue
-                if product.stock < ci.quantity:
+                inv = locked_product_inventory.get(ci.product_id)
+                available = int(inv.quantity) if inv else 0
+                if available < ci.quantity:
                     stock_errors.append(
                         f"Insufficient stock for {product.name}. "
-                        f"Available: {product.stock}, Requested: {ci.quantity}"
+                        f"Available: {available}, Requested: {ci.quantity}"
                     )
         
         if stock_errors:
@@ -158,8 +183,10 @@ class OrderCreateView(CreateAPIView):
         order = Order.objects.create(
             store=store,
             order_number=get_next_order_number(store),
+            status=Order.Status.PENDING,
             user=request.user if request.user.is_authenticated else None,
             email=ser.validated_data.get('email', ''),
+            coupon_code=(ser.validated_data.get("coupon_code") or "").strip(),
             store_session_id=session_ctx.store_session_id,
             shipping_name=ser.validated_data['shipping_name'],
             shipping_address=ser.validated_data['shipping_address'],
@@ -183,7 +210,12 @@ class OrderCreateView(CreateAPIView):
                 price=price
             )
             try:
-                adjust_stock(product_id=product.id, variant_id=variant.id if variant else None, delta_qty=ci.quantity)
+                adjust_stock(
+                    product_id=product.id,
+                    variant_id=variant.id if variant else None,
+                    delta_qty=ci.quantity,
+                    store_id=store.id,
+                )
             except DjangoValidationError as e:
                 return Response(
                     {"detail": "Stock validation failed.", "errors": e.message_dict if hasattr(e, "message_dict") else str(e)},
@@ -191,21 +223,37 @@ class OrderCreateView(CreateAPIView):
                 )
             subtotal += price * ci.quantity
 
+        discount_amount = Decimal("0.00")
+        applied_coupon = None
+        coupon_code = (order.coupon_code or "").strip()
+        if coupon_code:
+            coupon_quote = validate_coupon_for_subtotal(
+                store=order.store,
+                code=coupon_code,
+                subtotal=subtotal,
+            )
+            applied_coupon = coupon_quote.coupon
+            discount_amount = coupon_quote.discount_amount
+
         quote = quote_shipping(
             store=order.store,
-            order_subtotal=subtotal,
+            order_subtotal=subtotal - discount_amount,
             shipping_zone_id=order.shipping_zone_id,
             shipping_method_id=order.shipping_method_id,
         )
         order.subtotal = subtotal
+        order.discount_amount = discount_amount
+        order.coupon = applied_coupon
         order.shipping_cost = quote.shipping_cost
         order.shipping_zone = quote.zone
         order.shipping_method = quote.method
         order.shipping_rate = quote.rate
-        order.total = subtotal + quote.shipping_cost
+        order.total = subtotal - discount_amount + quote.shipping_cost
         order.save(
             update_fields=[
                 "subtotal",
+                "discount_amount",
+                "coupon",
                 "shipping_cost",
                 "shipping_zone",
                 "shipping_method",
@@ -213,6 +261,8 @@ class OrderCreateView(CreateAPIView):
                 "total",
             ]
         )
+        if applied_coupon is not None:
+            consume_coupon_usage(coupon=applied_coupon)
         resolve_and_attach_customer(
             order,
             store=store,
@@ -252,6 +302,7 @@ class DirectOrderCreateView(CreateAPIView):
             "shipping_address",
             "district",
             "products",
+            "coupon_code",
         }
         unknown_fields = set(request.data.keys()) - allowed_top_level_fields
         if unknown_fields:
@@ -268,8 +319,9 @@ class DirectOrderCreateView(CreateAPIView):
         
         request_store = require_api_key_store(request)
 
-        # Get products with locked rows for atomic stock updates
+        # Get products and inventory with locked rows for atomic stock updates
         from engine.apps.products.models import Product
+        from engine.apps.inventory.models import Inventory
         product_public_ids = [p['public_id'] for p in products_data]
 
         locked_products = {
@@ -280,6 +332,14 @@ class DirectOrderCreateView(CreateAPIView):
                 is_active=True,
                 status=Product.Status.ACTIVE,
             ).select_for_update()
+        }
+        locked_product_inventory = {
+            inv.product_id: inv
+            for inv in Inventory.objects.select_for_update().filter(
+                product_id__in=[p.id for p in locked_products.values()],
+                variant__isnull=True,
+                product__store=request_store,
+            )
         }
 
         # Validate all products belong to the same store.
@@ -321,10 +381,12 @@ class DirectOrderCreateView(CreateAPIView):
             if not product:
                 stock_errors.append(f"Product {product_id_str} not found.")
                 continue
-            if product.stock < quantity:
+            inv = locked_product_inventory.get(product.id)
+            available = int(inv.quantity) if inv else 0
+            if available < quantity:
                 stock_errors.append(
                     f"Insufficient stock for {product.name}. "
-                    f"Available: {product.stock}, Requested: {quantity}"
+                    f"Available: {available}, Requested: {quantity}"
                 )
 
         if stock_errors:
@@ -351,8 +413,10 @@ class DirectOrderCreateView(CreateAPIView):
         order = Order.objects.create(
             store=order_store,
             order_number=get_next_order_number(order_store),
+            status=Order.Status.PENDING,
             user=request.user if request.user.is_authenticated else None,
             email=email,
+            coupon_code=(ser.validated_data.get("coupon_code") or "").strip(),
             store_session_id=session_ctx.store_session_id,
             shipping_name=ser.validated_data['shipping_name'],
             shipping_address=ser.validated_data['shipping_address'],
@@ -372,7 +436,12 @@ class DirectOrderCreateView(CreateAPIView):
                 price=price
             )
             try:
-                adjust_stock(product_id=product.id, variant_id=None, delta_qty=quantity)
+                adjust_stock(
+                    product_id=product.id,
+                    variant_id=None,
+                    delta_qty=quantity,
+                    store_id=order_store.id,
+                )
             except DjangoValidationError as e:
                 return Response(
                     {"detail": "Stock validation failed.", "errors": e.message_dict if hasattr(e, "message_dict") else str(e)},
@@ -381,21 +450,37 @@ class DirectOrderCreateView(CreateAPIView):
             subtotal += price * quantity
         
         # Add shipping cost from dynamic shipping rules (store-scoped).
+        discount_amount = Decimal("0.00")
+        applied_coupon = None
+        coupon_code = (order.coupon_code or "").strip()
+        if coupon_code:
+            coupon_quote = validate_coupon_for_subtotal(
+                store=order.store,
+                code=coupon_code,
+                subtotal=subtotal,
+            )
+            applied_coupon = coupon_quote.coupon
+            discount_amount = coupon_quote.discount_amount
+
         quote = quote_shipping(
             store=order.store,
-            order_subtotal=subtotal,
+            order_subtotal=subtotal - discount_amount,
             shipping_zone_id=order.shipping_zone_id,
             shipping_method_id=order.shipping_method_id,
         )
         order.subtotal = subtotal
+        order.discount_amount = discount_amount
+        order.coupon = applied_coupon
         order.shipping_cost = quote.shipping_cost
         order.shipping_zone = quote.zone
         order.shipping_method = quote.method
         order.shipping_rate = quote.rate
-        order.total = subtotal + quote.shipping_cost
+        order.total = subtotal - discount_amount + quote.shipping_cost
         order.save(
             update_fields=[
                 "subtotal",
+                "discount_amount",
+                "coupon",
                 "shipping_cost",
                 "shipping_zone",
                 "shipping_method",
@@ -403,6 +488,8 @@ class DirectOrderCreateView(CreateAPIView):
                 "total",
             ]
         )
+        if applied_coupon is not None:
+            consume_coupon_usage(coupon=applied_coupon)
         resolve_and_attach_customer(
             order,
             store=order_store,

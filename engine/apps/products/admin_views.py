@@ -33,7 +33,6 @@ from .admin_serializers import (
     AdminProductVariantSerializer,
 )
 from .services import invalidate_category_cache, invalidate_product_cache
-from .stock_sync import sync_product_stock_from_variants
 
 
 class AdminProductViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
@@ -43,7 +42,7 @@ class AdminProductViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
         .prefetch_related("images")
         .annotate(
             _admin_variant_count=Count("variants", distinct=False),
-            _admin_variant_stock_sum=Sum("variants__stock_quantity"),
+            _admin_variant_stock_sum=Sum("variants__inventory__quantity"),
         )
         .all()
     )
@@ -105,7 +104,14 @@ class AdminProductViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
                 | Q(brand__icontains=search)
             )
 
-        return qs
+        ordering = (self.request.query_params.get("ordering") or "newest").strip().lower()
+        if ordering == "price_asc":
+            return qs.order_by("price", "id")
+        if ordering == "price_desc":
+            return qs.order_by("-price", "id")
+        if ordering == "popularity":
+            return qs.annotate(_order_count=Count("orderitem")).order_by("-_order_count", "-created_at", "id")
+        return qs.order_by("-created_at", "id")
 
     def get_serializer_class(self):
         if self.action == 'list':
@@ -375,7 +381,7 @@ class AdminCategoryViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
 class AdminProductVariantViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
     serializer_class = AdminProductVariantSerializer
     queryset = (
-        ProductVariant.objects.select_related("product")
+        ProductVariant.objects.select_related("product", "inventory")
         .prefetch_related("attribute_values__attribute_value__attribute")
         .all()
     )
@@ -420,7 +426,6 @@ class AdminProductVariantViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet
         product = serializer.validated_data["product"]
         self._ensure_product_in_store(product)
         instance = serializer.save()
-        sync_product_stock_from_variants(instance.product_id)
         ctx = get_active_store(self.request)
         if ctx.store:
             invalidate_product_cache(ctx.store.public_id)
@@ -436,7 +441,6 @@ class AdminProductVariantViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet
         product = serializer.validated_data.get("product", serializer.instance.product)
         self._ensure_product_in_store(product)
         instance = serializer.save()
-        sync_product_stock_from_variants(instance.product_id)
         ctx = get_active_store(self.request)
         if ctx.store:
             invalidate_product_cache(ctx.store.public_id)
@@ -450,12 +454,10 @@ class AdminProductVariantViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet
 
     def perform_destroy(self, instance):
         self._ensure_product_in_store(instance.product)
-        pid = instance.product_id
         sku = instance.sku
         variant_public_id = instance.public_id
         ctx = get_active_store(self.request)
         super().perform_destroy(instance)
-        sync_product_stock_from_variants(pid)
         if ctx.store:
             invalidate_product_cache(ctx.store.public_id)
         log_activity(

@@ -30,6 +30,13 @@ class AdminInventoryViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
     def adjust(self, request, public_id=None):
         """Adjust stock by a delta. Body: { "change": 5, "reason": "restock", "reference": "" }"""
         inventory = self.get_object()
+        allowed_fields = {"change", "reason", "reference", "reference_id", "source"}
+        unknown_fields = set(request.data.keys()) - allowed_fields
+        if unknown_fields:
+            return Response(
+                {"detail": f"Unknown fields are not allowed: {', '.join(sorted(unknown_fields))}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         change = request.data.get('change')
         if change is None:
             return Response({'detail': 'change is required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -39,7 +46,17 @@ class AdminInventoryViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
             return Response({'detail': 'change must be an integer'}, status=status.HTTP_400_BAD_REQUEST)
         reason = request.data.get('reason', 'adjustment')
         reference = request.data.get('reference', '') or ''
-        adjust_stock(inventory, change, reason=reason, reference=reference, actor=request.user)
+        reference_id = request.data.get("reference_id", "") or ""
+        source = request.data.get("source", "admin") or "admin"
+        adjust_stock(
+            inventory,
+            change,
+            reason=reason,
+            source=source,
+            reference_id=reference_id,
+            reference=reference,
+            actor=request.user,
+        )
         inventory.refresh_from_db()
         return Response(InventoryDetailSerializer(inventory).data)
 

@@ -26,6 +26,7 @@ from engine.apps.products.models import (
     ProductVariant,
     ProductVariantAttribute,
 )
+from engine.apps.inventory.models import Inventory
 from engine.apps.stores.models import Store, StoreSettings
 from engine.core.tenant_execution import tenant_scope_from_store
 
@@ -340,9 +341,9 @@ class Command(BaseCommand):
                     product=p,
                     sku=sku,
                     price_override=None,
-                    stock_quantity=random.randint(8, 85),
                     is_active=True,
                 )
+                Inventory.objects.create(product=p, variant=v, quantity=random.randint(8, 85))
                 ProductVariantAttribute.objects.create(variant=v, attribute_value=cv)
                 ProductVariantAttribute.objects.create(variant=v, attribute_value=sv)
 
@@ -407,9 +408,9 @@ class Command(BaseCommand):
                     product=p,
                     sku=sku,
                     price_override=Decimal("64.99") if fit_code == "SLM" else None,
-                    stock_quantity=random.randint(5, 40),
                     is_active=True,
                 )
+                Inventory.objects.create(product=p, variant=v, quantity=random.randint(5, 40))
                 ProductVariantAttribute.objects.create(variant=v, attribute_value=wv)
                 ProductVariantAttribute.objects.create(variant=v, attribute_value=fv)
 
@@ -418,9 +419,7 @@ class Command(BaseCommand):
         return p
 
     def _sync_parent_stock(self, product: Product) -> None:
-        """Mirror sum of variant stock on Product.stock for simple listings / legacy UIs."""
-        from django.db.models import Sum
+        """Refresh stock caches from Inventory source of truth."""
+        from engine.apps.inventory.cache_sync import sync_product_stock_cache
 
-        total = product.variants.aggregate(s=Sum("stock_quantity"))["s"] or 0
-        Product.objects.filter(pk=product.pk).update(stock=int(total))
-        product.stock = int(total)
+        sync_product_stock_cache(int(product.store_id))

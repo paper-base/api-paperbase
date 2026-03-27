@@ -166,7 +166,7 @@ class ProductSearchView(StorefrontTenantMixin, ListAPIView):
             Q(description__icontains=query)
         )
 
-        return qs.order_by('name', 'id')[:10]
+        return qs.order_by('name', 'id')
 
     def list(self, request, *args, **kwargs):
         response = super().list(request, *args, **kwargs)

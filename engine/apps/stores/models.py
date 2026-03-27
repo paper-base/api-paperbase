@@ -233,6 +233,10 @@ class StoreApiKey(models.Model):
     key material and matching the digest against key_hash.
     """
 
+    class KeyType(models.TextChoices):
+        PUBLIC = "public", "Public"
+        SECRET = "secret", "Secret"
+
     public_id = models.CharField(
         max_length=32,
         unique=True,
@@ -254,6 +258,13 @@ class StoreApiKey(models.Model):
     key_prefix = models.CharField(max_length=16, blank=True, default="")
     key_last4 = models.CharField(max_length=4, blank=True, default="")
     label = models.CharField(max_length=80, blank=True, default="")
+    key_type = models.CharField(
+        max_length=16,
+        choices=KeyType.choices,
+        default=KeyType.PUBLIC,
+        db_index=True,
+    )
+    scopes = models.JSONField(default=list, blank=True)
     is_active = models.BooleanField(default=True, db_index=True)
     revoked_at = models.DateTimeField(null=True, blank=True)
     last_used_at = models.DateTimeField(null=True, blank=True)

@@ -135,7 +135,7 @@ class AdminProductListSerializer(serializers.ModelSerializer):
         if s is None:
             from django.db.models import Sum as SumAgg
 
-            s = obj.variants.aggregate(x=SumAgg('stock_quantity'))['x']
+            s = obj.variants.aggregate(x=SumAgg('inventory__quantity'))['x']
         return int(s or 0)
 
 
@@ -161,7 +161,7 @@ class AdminProductSerializer(serializers.ModelSerializer):
             'is_featured', 'is_active', 'extra_data', 'images',
             'created_at', 'updated_at',
         ]
-        read_only_fields = ['public_id', 'slug', 'created_at', 'updated_at', 'variant_count', 'total_stock']
+        read_only_fields = ['public_id', 'slug', 'stock', 'created_at', 'updated_at', 'variant_count', 'total_stock']
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -187,7 +187,7 @@ class AdminProductSerializer(serializers.ModelSerializer):
         if s is None:
             from django.db.models import Sum as SumAgg
 
-            s = obj.variants.aggregate(x=SumAgg('stock_quantity'))['x']
+            s = obj.variants.aggregate(x=SumAgg('inventory__quantity'))['x']
         return int(s or 0)
 
     def validate_brand(self, value):
@@ -195,6 +195,13 @@ class AdminProductSerializer(serializers.ModelSerializer):
             return None
         normalized = value.strip()
         return normalized or None
+
+    def validate(self, attrs):
+        if "stock" in getattr(self, "initial_data", {}):
+            raise serializers.ValidationError(
+                {"stock": "Direct stock mutation is disabled. Use inventory adjust endpoint."}
+            )
+        return super().validate(attrs)
 
 
 class AdminParentCategorySerializer(serializers.ModelSerializer):
@@ -329,6 +336,7 @@ class AdminProductVariantSerializer(serializers.ModelSerializer):
         default=list,
     )
     option_labels = serializers.SerializerMethodField(read_only=True)
+    inventory_quantity = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = ProductVariant
@@ -337,14 +345,14 @@ class AdminProductVariantSerializer(serializers.ModelSerializer):
             "product",
             "sku",
             "price_override",
-            "stock_quantity",
             "is_active",
             "attribute_value_public_ids",
             "option_labels",
+            "inventory_quantity",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["public_id", "option_labels", "created_at", "updated_at"]
+        read_only_fields = ["public_id", "option_labels", "inventory_quantity", "created_at", "updated_at"]
         # DRF auto-adds UniqueTogetherValidator for the model constraint (product, sku) and
         # enforces both fields as required on create. We generate SKU when omitted, so we
         # disable auto validators and keep our own uniqueness checks + generation.
@@ -368,6 +376,12 @@ class AdminProductVariantSerializer(serializers.ModelSerializer):
             f"{link.attribute_value.attribute.name}: {link.attribute_value.value}"
             for link in links
         ]
+
+    def get_inventory_quantity(self, obj):
+        inv = getattr(obj, "inventory", None)
+        if inv is None:
+            return 0
+        return int(inv.quantity or 0)
 
     def to_representation(self, instance):
         data = super().to_representation(instance)

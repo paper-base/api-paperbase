@@ -129,7 +129,9 @@ class StoreViewSet(viewsets.ModelViewSet):
             role=StoreMembership.Role.OWNER,
             is_active=True,
         )
-        _, bootstrap_api_key = create_store_api_key(store, name="Bootstrap")
+        _, bootstrap_api_key = create_store_api_key(
+            store, name="Bootstrap Public", key_type=StoreApiKey.KeyType.PUBLIC
+        )
 
         # Update User's first_name and last_name for auth/profile
         request.user.first_name = owner_first_name[:150]
@@ -360,6 +362,7 @@ class StoreSettingsViewSet(
                     "has_api_key": True,
                     "public_id": row.public_id,
                     "key_prefix": row.key_prefix,
+                    "key_type": row.key_type,
                     "name": row.label,
                     "created_at": row.created_at,
                     "updated_at": row.updated_at,
@@ -373,12 +376,14 @@ class StoreSettingsViewSet(
             revoked_at__isnull=True,
             is_active=True,
         ).update(revoked_at=timezone.now(), is_active=False, updated_at=timezone.now())
-        row, raw_api_key = create_store_api_key(ctx.store, name=name)
+        key_type = (request.data.get("key_type") or StoreApiKey.KeyType.PUBLIC).strip().lower()
+        row, raw_api_key = create_store_api_key(ctx.store, name=name, key_type=key_type)
         return Response(
             {
                 "public_id": row.public_id,
                 "key_prefix": row.key_prefix,
                 "name": row.label,
+                "key_type": row.key_type,
                 "api_key": raw_api_key,
             },
             status=status.HTTP_201_CREATED,
@@ -403,13 +408,14 @@ class StoreAPIKeyManagementViewSet(viewsets.ViewSet):
         rows = list(
             StoreApiKey.objects.filter(store=store)
             .order_by("-created_at")
-            .values("public_id", "label", "key_prefix", "created_at", "revoked_at")
+            .values("public_id", "label", "key_prefix", "key_type", "created_at", "revoked_at")
         )
         payload = [
             {
                 "public_id": r["public_id"],
                 "name": r["label"],
                 "key_prefix": r["key_prefix"],
+                "key_type": r["key_type"],
                 "created_at": r["created_at"],
                 "revoked_at": r["revoked_at"],
             }
@@ -422,12 +428,14 @@ class StoreAPIKeyManagementViewSet(viewsets.ViewSet):
         if not store:
             return Response({"detail": "No active store."}, status=status.HTTP_403_FORBIDDEN)
         name = (request.data.get("name") or "").strip()
-        row, raw_api_key = create_store_api_key(store, name=name)
+        key_type = (request.data.get("key_type") or StoreApiKey.KeyType.PUBLIC).strip().lower()
+        row, raw_api_key = create_store_api_key(store, name=name, key_type=key_type)
         return Response(
             {
                 "public_id": row.public_id,
                 "name": row.label,
                 "key_prefix": row.key_prefix,
+                "key_type": row.key_type,
                 "created_at": row.created_at,
                 "api_key": raw_api_key,
             },
@@ -447,12 +455,14 @@ class StoreAPIKeyManagementViewSet(viewsets.ViewSet):
             return Response({"detail": "API key not found."}, status=status.HTTP_404_NOT_FOUND)
         revoke_store_api_key(row)
         name = (request.data.get("name") or row.label or "").strip()
-        new_row, raw_api_key = create_store_api_key(store, name=name)
+        key_type = (request.data.get("key_type") or row.key_type).strip().lower()
+        new_row, raw_api_key = create_store_api_key(store, name=name, key_type=key_type)
         return Response(
             {
                 "public_id": new_row.public_id,
                 "name": new_row.label,
                 "key_prefix": new_row.key_prefix,
+                "key_type": new_row.key_type,
                 "created_at": new_row.created_at,
                 "api_key": raw_api_key,
             },

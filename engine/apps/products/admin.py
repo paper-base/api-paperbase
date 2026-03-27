@@ -41,7 +41,7 @@ class ProductAdmin(admin.ModelAdmin):
         'is_featured',
         'is_active',
     ]
-    list_editable = ['stock', 'is_active']
+    list_editable = ['is_active']
     list_filter = ['category', 'status', 'badge', 'is_featured', 'is_active']
     search_fields = ['name', 'brand', 'sku']
     prepopulated_fields = {'slug': ('name',)}
@@ -114,7 +114,7 @@ class ProductAdmin(admin.ModelAdmin):
             ),
             ("Pricing", {"fields": ("price", "original_price", "badge")}),
             ("Media", {"fields": ("image",)}),
-            ("Stock", {"fields": ("stock", "stock_tracking")}),
+            ("Stock", {"fields": ("stock_tracking",)}),
             (
                 "Additional Information",
                 {"fields": ("description", "is_featured", "is_active")},
@@ -160,7 +160,7 @@ class ProductAdmin(admin.ModelAdmin):
 
     def formfield_for_dbfield(self, db_field, request, **kwargs):
         field = super().formfield_for_dbfield(db_field, request, **kwargs)
-        if db_field.name == 'stock' and field:
+        if db_field.name == 'stock_tracking' and field:
             field.widget.attrs.update({'style': 'width: 5rem;'})
         return field
 
@@ -237,9 +237,9 @@ class ProductVariantAttributeInline(admin.TabularInline):
 
 @admin.register(ProductVariant)
 class ProductVariantAdmin(admin.ModelAdmin):
-    list_display = ['product', 'sku', 'price_override', 'stock_quantity', 'is_active', 'created_at']
+    list_display = ['product', 'sku', 'price_override', 'is_active', 'created_at']
     list_filter = ['is_active']
-    list_editable = ['stock_quantity', 'is_active']
+    list_editable = ['is_active']
     search_fields = ['sku', 'product__name']
     inlines = [ProductVariantAttributeInline]
     autocomplete_fields = ['product']

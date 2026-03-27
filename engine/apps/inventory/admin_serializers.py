@@ -7,7 +7,16 @@ class StockMovementSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = StockMovement
-        fields = ['public_id', 'change', 'reason', 'reference', 'created_at', 'actor_public_id']
+        fields = [
+            'public_id',
+            'change',
+            'reason',
+            'source',
+            'reference_id',
+            'reference',
+            'created_at',
+            'actor_public_id',
+        ]
         read_only_fields = fields
 
 

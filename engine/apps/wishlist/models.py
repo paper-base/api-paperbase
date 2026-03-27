@@ -6,7 +6,7 @@ from engine.apps.products.models import Product
 
 
 class WishlistItem(models.Model):
-    """Wishlist entry: for authenticated user or anonymous (session_key)."""
+    """Wishlist entry: for authenticated user or anonymous (store_session_id)."""
     public_id = models.CharField(
         max_length=32,
         unique=True,
@@ -18,7 +18,9 @@ class WishlistItem(models.Model):
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
         null=True, blank=True, related_name='wishlist_items',
     )
+    # Legacy field kept for backward compatibility during migration rollout.
     session_key = models.CharField(max_length=40, blank=True, db_index=True)
+    store_session_id = models.CharField(max_length=255, blank=True, db_index=True)
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='wishlist_items')
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -30,15 +32,15 @@ class WishlistItem(models.Model):
                 name='unique_user_wishlist_item',
             ),
             models.UniqueConstraint(
-                fields=['session_key', 'product'],
+                fields=['store_session_id', 'product'],
                 condition=models.Q(user__isnull=True),
-                name='unique_session_wishlist_item',
+                name='unique_store_session_wishlist_item',
             ),
         ]
         ordering = ['-created_at']
 
     def __str__(self):
-        owner = self.user or self.session_key or 'anon'
+        owner = self.user or self.store_session_id or self.session_key or 'anon'
         return f"{owner} - {self.product.name}"
 
     def save(self, *args, **kwargs):

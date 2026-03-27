@@ -7,6 +7,7 @@ from rest_framework.views import APIView
 from config.permissions import IsStorefrontAPIKey
 from engine.apps.analytics.service import meta_conversions
 from engine.apps.products.models import Product
+from engine.core.store_session import resolve_store_session
 from engine.core.tenancy import require_api_key_store
 
 from .models import WishlistItem
@@ -17,9 +18,10 @@ def _wishlist_filter(request):
     """Return a dict of kwargs to filter WishlistItem for the current visitor."""
     if request.user.is_authenticated:
         return {'user': request.user}
-    if not request.session.session_key:
-        request.session.create()
-    return {'user': None, 'session_key': request.session.session_key}
+    session_ctx = resolve_store_session(request)
+    if not session_ctx.store_session_id:
+        return {'user': None, 'store_session_id': '__missing__'}
+    return {'user': None, 'store_session_id': session_ctx.store_session_id}
 
 
 class WishlistListView(ListAPIView):

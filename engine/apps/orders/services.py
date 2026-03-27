@@ -2,9 +2,13 @@ from decimal import Decimal
 
 from django.db import transaction
 from django.db.models import F
+from rest_framework.exceptions import ValidationError
 
 from engine.apps.customers.models import Customer
-from engine.apps.orders.models import Order
+from engine.apps.coupons.services import validate_coupon_for_subtotal
+from django.db import IntegrityError
+
+from engine.apps.orders.models import Order, OrderStatusHistory, StockRestoreLog
 from engine.apps.orders.stock import adjust_stock
 from engine.apps.products.models import Product, ProductVariant
 from engine.apps.shipping.service import quote_shipping
@@ -116,9 +120,21 @@ def recalculate_order_totals(order: Order) -> Order:
     for item in items:
         subtotal += Decimal(str(item.price)) * Decimal(item.quantity)
 
+    discount = Decimal("0.00")
+    coupon = None
+    coupon_code = (order.coupon_code or "").strip()
+    if coupon_code:
+        quote_data = validate_coupon_for_subtotal(
+            store=order.store,
+            code=coupon_code,
+            subtotal=subtotal,
+        )
+        discount = quote_data.discount_amount
+        coupon = quote_data.coupon
+
     quote = quote_shipping(
         store=order.store,
-        order_subtotal=subtotal,
+        order_subtotal=subtotal - discount,
         shipping_zone_id=order.shipping_zone_id,
         shipping_method_id=order.shipping_method_id,
     )
@@ -127,7 +143,9 @@ def recalculate_order_totals(order: Order) -> Order:
     order.shipping_zone = quote.zone
     order.shipping_method = quote.method
     order.shipping_rate = quote.rate
-    order.total = subtotal + quote.shipping_cost
+    order.discount_amount = discount
+    order.coupon = coupon
+    order.total = subtotal - discount + quote.shipping_cost
     order.save(
         update_fields=[
             "subtotal",
@@ -135,14 +153,126 @@ def recalculate_order_totals(order: Order) -> Order:
             "shipping_zone",
             "shipping_method",
             "shipping_rate",
+            "discount_amount",
+            "coupon",
             "total",
         ]
     )
     return order
 
 
-def restore_order_item_stock(*, product_id, variant_id, quantity: int) -> None:
+def restore_order_item_stock(*, store_id: int, product_id, variant_id, quantity: int) -> None:
     """
     Restore stock for an order item removal.
     """
-    adjust_stock(product_id=product_id, variant_id=variant_id, delta_qty=-int(quantity))
+    adjust_stock(
+        store_id=store_id,
+        product_id=product_id,
+        variant_id=variant_id,
+        delta_qty=-int(quantity),
+    )
+
+
+ORDER_STATUS_TRANSITIONS: dict[str, set[str]] = {
+    Order.Status.PENDING: {
+        Order.Status.CONFIRMED,
+        Order.Status.FAILED,
+        Order.Status.CANCELLED,
+    },
+    Order.Status.CONFIRMED: {
+        Order.Status.PROCESSING,
+        Order.Status.FAILED,
+        Order.Status.CANCELLED,
+    },
+    Order.Status.PROCESSING: {
+        Order.Status.SHIPPED,
+        Order.Status.FAILED,
+        Order.Status.CANCELLED,
+    },
+    Order.Status.SHIPPED: {
+        Order.Status.DELIVERED,
+    },
+    Order.Status.DELIVERED: set(),
+    Order.Status.FAILED: set(),
+    Order.Status.CANCELLED: set(),
+    # Legacy status kept as terminal to avoid breaking historical data.
+    Order.Status.RETURNED: set(),
+}
+
+
+def get_allowed_next_order_statuses(current_status: str) -> list[str]:
+    return sorted(ORDER_STATUS_TRANSITIONS.get(current_status, set()))
+
+
+def ensure_valid_order_status_transition(*, from_status: str, to_status: str) -> None:
+    if to_status not in dict(Order.Status.choices):
+        raise ValidationError({"status": "Invalid order status."})
+    allowed = ORDER_STATUS_TRANSITIONS.get(from_status, set())
+    if to_status not in allowed:
+        raise ValidationError(
+            {
+                "status": (
+                    f"Invalid status transition from '{from_status}' to '{to_status}'. "
+                    f"Allowed: {', '.join(sorted(allowed)) or 'none'}."
+                )
+            }
+        )
+
+
+def transition_order_status(
+    *,
+    order: Order,
+    to_status: str,
+    note: str = "",
+    actor_label: str = "",
+) -> Order:
+    terminal_restore_statuses = {
+        Order.Status.FAILED,
+        Order.Status.CANCELLED,
+        Order.Status.RETURNED,
+    }
+    with transaction.atomic():
+        locked = Order.objects.select_for_update().prefetch_related("items").get(pk=order.pk)
+        from_status = locked.status
+        ensure_valid_order_status_transition(from_status=from_status, to_status=to_status)
+        if from_status == to_status:
+            return locked
+
+        if to_status in terminal_restore_statuses:
+            for item in locked.items.all():
+                try:
+                    restore_log, created = StockRestoreLog.objects.get_or_create(
+                        order=locked,
+                        order_item=item,
+                        reason=to_status,
+                        defaults={
+                            "store_id": locked.store_id,
+                            "quantity": int(item.quantity),
+                        },
+                    )
+                except IntegrityError:
+                    # Concurrent transition retries can race; uniqueness preserves idempotency.
+                    continue
+                if not created:
+                    continue
+                restore_order_item_stock(
+                    store_id=locked.store_id,
+                    product_id=item.product_id,
+                    variant_id=item.variant_id,
+                    quantity=item.quantity,
+                )
+                if restore_log.quantity != int(item.quantity):
+                    restore_log.quantity = int(item.quantity)
+                    restore_log.save(update_fields=["quantity"])
+
+        locked.status = to_status
+        locked.save(update_fields=["status", "updated_at"])
+        note_text = (note or "").strip()
+        if actor_label:
+            note_text = f"{actor_label}: {note_text}" if note_text else actor_label
+        OrderStatusHistory.objects.create(
+            order=locked,
+            status=to_status,
+            note=note_text[:255],
+        )
+        return locked

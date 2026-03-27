@@ -76,6 +76,11 @@ class StockMovement(models.Model):
         DAMAGED = 'damaged', 'Damaged / lost'
         OTHER = 'other', 'Other'
 
+    class Source(models.TextChoices):
+        ORDER = "order", "Order lifecycle"
+        ADMIN = "admin", "Admin inventory update"
+        SYSTEM = "system", "System process"
+
     inventory = models.ForeignKey(
         Inventory,
         on_delete=models.CASCADE,
@@ -83,6 +88,8 @@ class StockMovement(models.Model):
     )
     change = models.IntegerField(help_text="Positive for increase, negative for decrease.")
     reason = models.CharField(max_length=20, choices=Reason.choices, default=Reason.ADJUSTMENT)
+    source = models.CharField(max_length=20, choices=Source.choices, default=Source.SYSTEM)
+    reference_id = models.CharField(max_length=100, blank=True, default="")
     reference = models.CharField(max_length=255, blank=True, help_text="e.g. order number, note")
     created_at = models.DateTimeField(auto_now_add=True)
     actor = models.ForeignKey(

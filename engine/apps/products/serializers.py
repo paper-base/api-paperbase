@@ -30,10 +30,11 @@ class ProductVariantPublicSerializer(serializers.ModelSerializer):
     """Storefront: one sellable SKU with options (color/size/etc.)."""
     price = serializers.SerializerMethodField()
     options = serializers.SerializerMethodField()
+    inventory_quantity = serializers.SerializerMethodField()
 
     class Meta:
         model = ProductVariant
-        fields = ['public_id', 'sku', 'stock_quantity', 'is_active', 'price', 'options']
+        fields = ['public_id', 'sku', 'inventory_quantity', 'is_active', 'price', 'options']
 
     def get_price(self, obj):
         return str(obj.effective_price)
@@ -44,6 +45,12 @@ class ProductVariantPublicSerializer(serializers.ModelSerializer):
             av = link.attribute_value
             rows.append({'attribute': av.attribute.name, 'value': av.value})
         return rows
+
+    def get_inventory_quantity(self, obj):
+        inv = getattr(obj, "inventory", None)
+        if inv is None:
+            return 0
+        return int(inv.quantity or 0)
 
 
 class ProductListSerializer(serializers.ModelSerializer):
@@ -85,7 +92,7 @@ class ProductListSerializer(serializers.ModelSerializer):
         if s is None:
             from django.db.models import Sum as SumAgg
 
-            s = obj.variants.filter(is_active=True).aggregate(x=SumAgg('stock_quantity'))['x']
+            s = obj.variants.filter(is_active=True).aggregate(x=SumAgg('inventory__quantity'))['x']
         return int(s or 0)
 
 
@@ -136,7 +143,7 @@ class ProductDetailSerializer(serializers.ModelSerializer):
         if s is None:
             from django.db.models import Sum as SumAgg
 
-            s = obj.variants.filter(is_active=True).aggregate(x=SumAgg('stock_quantity'))['x']
+            s = obj.variants.filter(is_active=True).aggregate(x=SumAgg('inventory__quantity'))['x']
         return int(s or 0)
 
 class CategorySerializer(serializers.ModelSerializer):

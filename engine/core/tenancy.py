@@ -44,6 +44,10 @@ def get_active_store(request: HttpRequest) -> ActiveStoreContext:
             )
         except StoreMembership.DoesNotExist:
             membership = None
+        # Fail-closed for dashboard/authenticated contexts:
+        # selecting a store by header/JWT claim requires explicit membership.
+        if membership is None and not getattr(request.user, "is_superuser", False):
+            store = None
 
     return ActiveStoreContext(store=store, membership=membership)
 

@@ -7,6 +7,8 @@ Query construction logic lives here so views remain thin request/response handle
 
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
+
 from django.conf import settings
 from django.db.models import Count, Prefetch, Q, Sum
 from django.shortcuts import get_object_or_404
@@ -36,6 +38,11 @@ def _normalize_list_params(query_params) -> dict:
         "page": query_params.get("page", "1"),
         "category": query_params.get("category", ""),
         "brand": query_params.get("brand", ""),
+        "search": query_params.get("search", ""),
+        "price_min": query_params.get("price_min", ""),
+        "price_max": query_params.get("price_max", ""),
+        "attributes": query_params.get("attributes", ""),
+        "ordering": query_params.get("ordering", "newest"),
         "featured": query_params.get("featured", ""),
         "hot_deals": query_params.get("hot_deals", ""),
     }
@@ -70,7 +77,7 @@ def build_product_list_queryset(store, query_params):
         .annotate(
             _pub_variant_count=Count("variants", filter=Q(variants__is_active=True)),
             _pub_variant_stock_sum=Sum(
-                "variants__stock_quantity", filter=Q(variants__is_active=True)
+                "variants__inventory__quantity", filter=Q(variants__is_active=True)
             ),
         )
     )
@@ -87,6 +94,35 @@ def build_product_list_queryset(store, query_params):
         if brands:
             qs = qs.filter(brand__in=brands)
 
+    search = (query_params.get("search") or "").strip()
+    if search:
+        qs = qs.filter(
+            Q(name__icontains=search)
+            | Q(description__icontains=search)
+            | Q(brand__icontains=search)
+        )
+
+    try:
+        if "price_min" in query_params:
+            price_min_raw = (query_params.get("price_min") or "").strip()
+            if price_min_raw:
+                qs = qs.filter(price__gte=Decimal(price_min_raw))
+        if "price_max" in query_params:
+            price_max_raw = (query_params.get("price_max") or "").strip()
+            if price_max_raw:
+                qs = qs.filter(price__lte=Decimal(price_max_raw))
+    except (InvalidOperation, ValueError):
+        pass
+
+    attributes = (query_params.get("attributes") or "").strip()
+    if attributes:
+        attr_value_ids = [v.strip() for v in attributes.split(",") if v.strip()]
+        if attr_value_ids:
+            qs = qs.filter(
+                variants__is_active=True,
+                variants__attribute_values__attribute_value__public_id__in=attr_value_ids,
+            ).distinct()
+
     featured = query_params.get("featured")
     if featured and featured.lower() == "true":
         qs = qs.filter(is_featured=True)
@@ -95,6 +131,13 @@ def build_product_list_queryset(store, query_params):
     if hot_deals and hot_deals.lower() == "true":
         qs = qs.filter(badge="sale")
 
+    ordering = (query_params.get("ordering") or "newest").strip().lower()
+    if ordering == "price_asc":
+        return qs.order_by("price", "id")
+    if ordering == "price_desc":
+        return qs.order_by("-price", "id")
+    if ordering == "popularity":
+        return qs.annotate(_order_count=Count("orderitem")).order_by("-_order_count", "-created_at", "id")
     return qs.order_by("-created_at", "id")
 
 
@@ -109,7 +152,7 @@ def get_product_detail(store, identifier: str, request):
     def fetcher():
         active_variant_qs = ProductVariant.objects.filter(
             is_active=True
-        ).prefetch_related(
+        ).select_related("inventory").prefetch_related(
             Prefetch(
                 "attribute_values",
                 queryset=ProductVariantAttribute.objects.select_related(
@@ -132,7 +175,7 @@ def get_product_detail(store, identifier: str, request):
                     "variants", filter=Q(variants__is_active=True)
                 ),
                 _pub_variant_stock_sum=Sum(
-                    "variants__stock_quantity",
+                    "variants__inventory__quantity",
                     filter=Q(variants__is_active=True),
                 ),
             )
@@ -179,7 +222,7 @@ def get_related_products(store, identifier: str, request):
                     "variants", filter=Q(variants__is_active=True)
                 ),
                 _pub_variant_stock_sum=Sum(
-                    "variants__stock_quantity",
+                    "variants__inventory__quantity",
                     filter=Q(variants__is_active=True),
                 ),
             )

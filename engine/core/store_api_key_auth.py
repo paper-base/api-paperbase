@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import logging
 
 from django.conf import settings
 from django.core.cache import caches
@@ -44,7 +43,6 @@ STORE_FRONTEND_ROUTE_POLICY = (
     ("/api/v1/support/tickets/", {"POST"}),
 )
 _API_KEY_VIEW_SCAN_DONE = False
-logger = logging.getLogger(__name__)
 
 
 def _normalized_path(path: str) -> str:
@@ -105,12 +103,14 @@ def resolve_request_api_key(request: HttpRequest):
     raw_api_key = _extract_bearer_token(request)
     if not raw_api_key:
         return None
+    if not _is_api_key_token(raw_api_key):
+        return None
     return resolve_active_store_api_key(raw_api_key)
 
 
 def _is_api_key_token(raw_token: str | None) -> bool:
     token = (raw_token or "").strip()
-    return token.startswith("ak_live_")
+    return token.startswith("ak_pk_") or token.startswith("ak_sk_")
 
 
 def _is_admin_order_read_path(path: str, method: str) -> bool:
@@ -167,16 +167,7 @@ def maybe_validate_storefront_api_key_view_flags() -> None:
     global _API_KEY_VIEW_SCAN_DONE
     if _API_KEY_VIEW_SCAN_DONE:
         return
-    is_test = bool(getattr(settings, "TESTING", False))
-    is_debug = bool(getattr(settings, "DEBUG", False))
-    if not (is_test or is_debug):
-        return
-    try:
-        validate_storefront_api_key_view_flags()
-    except RuntimeError as exc:
-        if is_test:
-            raise
-        logger.warning("Storefront API key allow-list validation warning: %s", exc)
+    validate_storefront_api_key_view_flags()
     _API_KEY_VIEW_SCAN_DONE = True
 
 
@@ -197,6 +188,9 @@ class TenantApiKeyMiddleware(MiddlewareMixin):
             return None
 
         if not requires_tenant_api_key(path):
+            # Fail closed: API-key credentials are never valid on exempt/system routes.
+            if _is_api_key_token(raw_api_key):
+                return JsonResponse({"detail": "API key cannot access this endpoint."}, status=403)
             return None
 
         key_row = resolve_request_api_key(request)
@@ -206,6 +200,8 @@ class TenantApiKeyMiddleware(MiddlewareMixin):
                 response["Retry-After"] = "60"
                 return response
             return JsonResponse({"detail": "Invalid API key."}, status=401)
+        if key_row.key_type != key_row.KeyType.PUBLIC:
+            return JsonResponse({"detail": "Secret API keys cannot access storefront endpoints."}, status=403)
 
         request.api_key = key_row
         request.store = key_row.store
