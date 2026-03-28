@@ -49,7 +49,8 @@ class PricingEngine:
         store,
         lines: list[dict],
         coupon_code: str = "",
-        user=None,
+        coupon_phone: str = "",
+        coupon_email: str = "",
         shipping_zone_id=None,
         shipping_method_id=None,
     ) -> PricingBreakdown:
@@ -94,7 +95,8 @@ class PricingEngine:
                 store=store,
                 code=normalized_code,
                 subtotal=subtotal_after_bulk,
-                user=user,
+                phone=coupon_phone,
+                email=coupon_email,
             )
             applied_coupon = coupon_quote.coupon
             coupon_discount = cls._money(coupon_quote.discount_amount)
@@ -122,3 +124,28 @@ class PricingEngine:
             coupon=applied_coupon,
             lines=breakdown_lines,
         )
+
+
+def pricing_snapshot_from_breakdown(breakdown: PricingBreakdown) -> dict:
+    """JSON-serializable checkout breakdown for persisted orders and storefront APIs."""
+    return {
+        "base_subtotal": str(breakdown.base_subtotal),
+        "bulk_discount_total": str(breakdown.bulk_discount_total),
+        "subtotal_after_bulk": str(breakdown.subtotal_after_bulk),
+        "coupon_discount": str(breakdown.coupon_discount),
+        "subtotal_after_coupon": str(breakdown.subtotal_after_coupon),
+        "shipping_cost": str(breakdown.shipping_cost),
+        "final_total": str(breakdown.final_total),
+        "coupon_public_id": breakdown.coupon.public_id if breakdown.coupon else None,
+        "lines": [
+            {
+                "product_public_id": pl.product_id,
+                "quantity": pl.quantity,
+                "unit_price": str(pl.unit_price),
+                "line_subtotal": str(pl.line_subtotal),
+                "bulk_rule_public_id": pl.bulk_rule_public_id,
+                "bulk_discount_amount": str(pl.bulk_discount_amount),
+            }
+            for pl in breakdown.lines
+        ],
+    }

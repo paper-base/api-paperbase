@@ -18,6 +18,12 @@ class ShippingZone(models.Model):
         related_name="shipping_zones",
     )
     name = models.CharField(max_length=100)
+    estimated_delivery_text = models.CharField(
+        max_length=64,
+        blank=True,
+        default="",
+        help_text='Customer-facing delivery estimate (e.g. "1-2" days).',
+    )
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

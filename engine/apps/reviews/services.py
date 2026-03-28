@@ -12,6 +12,7 @@ from engine.core import cache_service
 
 from .models import Review
 from engine.apps.products.models import Product
+from engine.apps.coupons.services import normalize_coupon_email, normalize_phone_digits
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +117,21 @@ def invalidate_review_cache(store_public_id: str, product_public_id: str = "") -
         cache_service.invalidate_store_resource(store_public_id, "review_summary")
 
 
+def _order_access_allowed(*, order: Order, user, phone_proof: str, email_proof: str) -> bool:
+    if user is not None and getattr(user, "is_authenticated", False):
+        if order.user_id and order.user_id == user.pk:
+            return True
+    phone_o = normalize_phone_digits(order.phone or "")
+    email_o = normalize_coupon_email(order.email or "")
+    phone_p = normalize_phone_digits(phone_proof or "")
+    email_p = normalize_coupon_email(email_proof or "")
+    if phone_p and phone_o and phone_p == phone_o:
+        return True
+    if email_p and email_o and email_p == email_o:
+        return True
+    return False
+
+
 class BaseReviewService:
     """Base boundary for review writes and authorization policy checks."""
 
@@ -130,17 +146,17 @@ class ReviewCreateService(BaseReviewService):
         self,
         *,
         store,
-        store_session_id: str,
         user,
         product,
         order_public_id: str,
         rating: int,
         title: str,
         body: str,
+        phone_proof: str,
+        email_proof: str,
         allow_legacy_binding: bool,
     ) -> Review:
         order_public_id = (order_public_id or "").strip()
-        store_session_id = (store_session_id or "").strip()
         legacy_requested = bool(allow_legacy_binding)
         override_allowed = can_override_review(
             self.request,
@@ -162,50 +178,43 @@ class ReviewCreateService(BaseReviewService):
             raise serializers.ValidationError({"product": "This field is required."})
         if not order_public_id:
             raise serializers.ValidationError({"order_public_id": "This field is required."})
-        if not legacy_requested and not store_session_id:
-            raise serializers.ValidationError({"detail": "store session is required."})
 
-        if override_allowed and legacy_requested:
-            order = Order.objects.filter(public_id=order_public_id, store=store).first()
-            if not order:
+        order = Order.objects.filter(public_id=order_public_id, store=store).first()
+        if not order:
+            raise serializers.ValidationError(
+                {"detail": "Review requires a valid order in the current store."}
+            )
+
+        if not OrderItem.objects.filter(order=order, product=product).exists():
+            raise serializers.ValidationError(
+                {"detail": "Review requires a matching order line for this product."}
+            )
+        if Review.objects.filter(order=order, product=product).exists():
+            raise serializers.ValidationError(
+                {"detail": "A review for this product on this order already exists."}
+            )
+
+        if not (override_allowed and legacy_requested):
+            if not _order_access_allowed(
+                order=order,
+                user=user,
+                phone_proof=phone_proof,
+                email_proof=email_proof,
+            ):
                 raise serializers.ValidationError(
-                    {"detail": "Review requires a valid order in the current store."}
+                    {
+                        "detail": (
+                            "You must prove access to this order "
+                            "(signed-in purchaser or matching phone/email)."
+                        )
+                    }
                 )
-            # Persist the canonical order session for legacy overrides so model-level
-            # invariants remain strict while allowing request-session drift.
-            review_store_session_id = order.store_session_id
-        else:
-            has_matching_order = OrderItem.objects.filter(
-                product=product,
-                order__public_id=order_public_id,
-                order__store=store,
-                order__store_session_id=store_session_id,
-            ).exists()
-            if not has_matching_order:
-                raise serializers.ValidationError(
-                    {"detail": "Review requires a matching order from the same store session."}
-                )
-            order = Order.objects.filter(
-                public_id=order_public_id,
-                store=store,
-                store_session_id=store_session_id,
-            ).first()
-            if not order:
-                raise serializers.ValidationError(
-                    {"detail": "Review requires a valid order from the same store session."}
-                )
-            if Review.objects.filter(product=product, store_session_id=store_session_id).exists():
-                raise serializers.ValidationError(
-                    {"detail": "Only one review per store session is allowed for this product."}
-                )
-            review_store_session_id = store_session_id
 
         review = Review.objects.create(
             store=store,
             product=product,
             order=order,
-            user=user,
-            store_session_id=review_store_session_id,
+            user=user if user and getattr(user, "is_authenticated", False) else None,
             allow_legacy_binding=legacy_requested and override_allowed,
             rating=rating,
             title=title,

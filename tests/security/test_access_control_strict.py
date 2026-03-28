@@ -1,4 +1,3 @@
-import hashlib
 from pathlib import Path
 
 import pytest
@@ -16,9 +15,9 @@ from engine.apps.products.stock_sync import sync_product_stock_from_variants
 from engine.apps.reviews.models import Review
 from engine.apps.reviews import services as review_services
 from engine.apps.shipping.models import ShippingZone
-from engine.apps.stores.models import Store, StoreMembership, StoreSession
+from engine.apps.stores.models import Store, StoreMembership
 from engine.apps.stores.services import create_store_api_key, revoke_store_api_key
-from engine.core.store_session import derive_store_session_id, validate_store_session_consistency
+from engine.core.tenant_execution import tenant_scope_from_store
 from engine.core import store_api_key_auth
 from engine.core.apps import enforce_production_override_safety
 from engine.core.store_api_key_auth import (
@@ -45,20 +44,27 @@ def _make_store(name: str) -> Store:
 
 
 def _make_product(store: Store, *, name: str = "Product", price: int = 100, stock: int = 20) -> Product:
-    category = Category.objects.create(
-        store=store,
-        name=f"{name} Category",
-        slug=f"{name.lower().replace(' ', '-')}-cat",
-    )
-    return Product.objects.create(
-        store=store,
-        category=category,
-        name=name,
-        price=price,
-        stock=stock,
-        status=Product.Status.ACTIVE,
-        is_active=True,
-    )
+    with tenant_scope_from_store(store=store, reason="test fixture"):
+        category = Category.objects.create(
+            store=store,
+            name=f"{name} Category",
+            slug=f"{name.lower().replace(' ', '-')}-cat",
+        )
+        p = Product.objects.create(
+            store=store,
+            category=category,
+            name=name,
+            price=price,
+            stock=stock,
+            status=Product.Status.ACTIVE,
+            is_active=True,
+        )
+        Inventory.objects.get_or_create(
+            product=p,
+            variant=None,
+            defaults={"quantity": max(0, int(stock))},
+        )
+    return p
 
 
 def _make_zone(store: Store) -> ShippingZone:
@@ -69,10 +75,6 @@ def _api_key_client(api_key: str) -> APIClient:
     client = APIClient()
     client.credentials(HTTP_AUTHORIZATION=f"Bearer {api_key}")
     return client
-
-
-def _session_headers(token: str) -> dict:
-    return {"HTTP_X_STORE_SESSION_TOKEN": token}
 
 
 def _admin_client_for_store(store: Store) -> APIClient:
@@ -124,15 +126,13 @@ def test_api_key_can_create_order_valid_payload():
         "shipping_address": "Dhaka",
         "products": [{"public_id": product.public_id, "quantity": 2}],
     }
-    response = client.post("/api/v1/orders/direct/", payload, format="json")
+    response = client.post("/api/v1/orders/", payload, format="json")
 
     assert response.status_code == 201
-    order = Order.objects.get(public_id=response.data["public_id"])
+    with tenant_scope_from_store(store=store, reason="test assertions"):
+        order = Order.objects.get(public_id=response.data["public_id"])
     assert order.store_id == store.id
     assert str(order.subtotal) == "300.00"
-    assert order.store_session_id.startswith("ssn_")
-    assert response.headers.get("X-Store-Session-Id") == order.store_session_id
-    assert response.headers.get("X-Store-Session-Token")
 
 
 @pytest.mark.django_db
@@ -151,7 +151,7 @@ def test_api_key_order_with_fake_price_field_fails():
         "shipping_address": "Dhaka",
         "products": [{"public_id": product.public_id, "quantity": 2, "price": "1.00"}],
     }
-    response = client.post("/api/v1/orders/direct/", payload, format="json")
+    response = client.post("/api/v1/orders/", payload, format="json")
 
     assert response.status_code == 400
 
@@ -173,7 +173,7 @@ def test_api_key_order_with_other_store_product_fails():
         "shipping_address": "Dhaka",
         "products": [{"public_id": product_b.public_id, "quantity": 1}],
     }
-    response = client.post("/api/v1/orders/direct/", payload, format="json")
+    response = client.post("/api/v1/orders/", payload, format="json")
 
     assert response.status_code == 400
 
@@ -239,127 +239,6 @@ def test_cross_tenant_order_access_fails_with_api_key():
     assert response.status_code in {401, 403}
 
 
-@pytest.mark.django_db
-def test_api_key_orders_my_returns_session_scoped_orders_only():
-    store = _make_store("My Orders")
-    zone = _make_zone(store)
-    _key_row, api_key = create_store_api_key(store, name="frontend")
-    client = _api_key_client(api_key)
-    session_token = "session-token-own-orders"
-    store_session_id = derive_store_session_id(store_id=store.id, token=session_token)
-
-    own = Order.objects.create(
-        store=store,
-        order_number="OWN0001",
-        email="guest@example.com",
-        store_session_id=store_session_id,
-        shipping_name="Guest",
-        shipping_address="Addr",
-        phone="01700000000",
-        shipping_zone=zone,
-    )
-    Order.objects.create(
-        store=store,
-        order_number="OTHER0001",
-        email="other@example.com",
-        store_session_id=derive_store_session_id(store_id=store.id, token="other-session"),
-        shipping_name="Other",
-        shipping_address="Addr",
-        phone="01711111111",
-        shipping_zone=zone,
-    )
-
-    response = client.get("/api/v1/orders/my/", **_session_headers(session_token))
-    assert response.status_code == 200
-    assert response.data["count"] == 1
-    assert response.data["results"][0]["public_id"] == own.public_id
-    assert response.data["session_initialized"] is True
-    assert response.data["requires_session_init"] is False
-    assert response.data["session_status"] == "active"
-
-
-@pytest.mark.django_db
-def test_api_key_orders_my_missing_session_context_returns_empty_contract():
-    store = _make_store("My Orders Empty")
-    _make_zone(store)
-    _key_row, api_key = create_store_api_key(store, name="frontend")
-    other_client = _api_key_client(api_key)
-    response = other_client.get("/api/v1/orders/my/")
-    assert response.status_code == 200
-    assert response.data["results"] == []
-    assert response.data["session_initialized"] is False
-    assert response.data["requires_session_init"] is True
-    assert response.data["session_status"] == "missing"
-
-
-@pytest.mark.django_db
-def test_api_key_reused_across_sessions_keeps_orders_isolated():
-    store = _make_store("Session Isolation")
-    product = _make_product(store, price=150, stock=10)
-    zone = _make_zone(store)
-    _key_row, api_key = create_store_api_key(store, name="frontend")
-    client = _api_key_client(api_key)
-
-    base_payload = {
-        "shipping_zone": zone.public_id,
-        "shipping_name": "Alice",
-        "phone": "01712345678",
-        "email": "alice@example.com",
-        "shipping_address": "Dhaka",
-        "products": [{"public_id": product.public_id, "quantity": 1}],
-    }
-
-    create_a = client.post(
-        "/api/v1/orders/direct/",
-        base_payload,
-        format="json",
-        **_session_headers("session-A"),
-    )
-    assert create_a.status_code == 201
-    create_b = client.post(
-        "/api/v1/orders/direct/",
-        base_payload,
-        format="json",
-        **_session_headers("session-B"),
-    )
-    assert create_b.status_code == 201
-
-    list_a = client.get("/api/v1/orders/my/", **_session_headers("session-A"))
-    list_b = client.get("/api/v1/orders/my/", **_session_headers("session-B"))
-    assert list_a.status_code == 200
-    assert list_b.status_code == 200
-    a_ids = {row["public_id"] for row in list_a.data["results"]}
-    b_ids = {row["public_id"] for row in list_b.data["results"]}
-    assert create_a.data["public_id"] in a_ids
-    assert create_b.data["public_id"] not in a_ids
-    assert create_b.data["public_id"] in b_ids
-    assert create_a.data["public_id"] not in b_ids
-
-
-@pytest.mark.django_db
-def test_store_session_id_is_deterministic_for_same_store_and_token():
-    store = _make_store("Deterministic Session")
-    token = "deterministic-token"
-    first = derive_store_session_id(store_id=store.id, token=token)
-    second = derive_store_session_id(store_id=store.id, token=token)
-    assert first == second
-    assert validate_store_session_consistency(
-        store=store,
-        token=token,
-        store_session_id=first,
-    )
-
-
-@pytest.mark.django_db
-def test_store_session_id_differs_for_same_token_across_stores():
-    store_a = _make_store("Store A Session")
-    store_b = _make_store("Store B Session")
-    token = "shared-token"
-    session_a = derive_store_session_id(store_id=store_a.id, token=token)
-    session_b = derive_store_session_id(store_id=store_b.id, token=token)
-    assert session_a != session_b
-
-
 def test_api_key_view_scan_raises_when_allow_flag_missing():
     class MissingAllowView(APIView):
         permission_classes = [IsStorefrontAPIKey]
@@ -413,36 +292,6 @@ def test_maybe_validate_scan_raises_in_prod(monkeypatch, settings):
 
 
 @pytest.mark.django_db
-def test_store_session_metadata_drift_does_not_override_identity():
-    store = _make_store("Session Drift")
-    product = _make_product(store, stock=10)
-    zone = _make_zone(store)
-    _key_row, api_key = create_store_api_key(store, name="frontend")
-    client = _api_key_client(api_key)
-    token = "drift-token"
-    derived_id = derive_store_session_id(store_id=store.id, token=token)
-    StoreSession.objects.create(
-        store=store,
-        token_hash=hashlib.sha256(token.encode("utf-8")).hexdigest(),
-        store_session_id="ssn_drifted_value",
-    )
-    create_payload = {
-        "shipping_zone": zone.public_id,
-        "shipping_name": "Alice",
-        "phone": "01712345678",
-        "email": "alice@example.com",
-        "shipping_address": "Dhaka",
-        "products": [{"public_id": product.public_id, "quantity": 1}],
-    }
-    response = client.post("/api/v1/orders/direct/", create_payload, format="json", **_session_headers(token))
-    assert response.status_code == 201
-    order = Order.objects.get(public_id=response.data["public_id"])
-    assert order.store_session_id == derived_id
-    session_row = StoreSession.objects.get(store=store)
-    assert session_row.store_session_id == "ssn_drifted_value"
-
-
-@pytest.mark.django_db
 def test_admin_can_list_orders_with_jwt():
     store = _make_store("Admin Orders")
     zone = _make_zone(store)
@@ -477,13 +326,13 @@ def test_order_payload_edge_cases_fail_safely():
     }
 
     negative_qty = {**base_payload, "products": [{"public_id": product.public_id, "quantity": -1}]}
-    assert client.post("/api/v1/orders/direct/", negative_qty, format="json").status_code == 400
+    assert client.post("/api/v1/orders/", negative_qty, format="json").status_code == 400
 
     huge_qty = {**base_payload, "products": [{"public_id": product.public_id, "quantity": 999999}]}
-    assert client.post("/api/v1/orders/direct/", huge_qty, format="json").status_code == 400
+    assert client.post("/api/v1/orders/", huge_qty, format="json").status_code == 400
 
     sql_like_qty = {**base_payload, "products": [{"public_id": product.public_id, "quantity": "1 OR 1=1"}]}
-    assert client.post("/api/v1/orders/direct/", sql_like_qty, format="json").status_code == 400
+    assert client.post("/api/v1/orders/", sql_like_qty, format="json").status_code == 400
 
     hidden_fields = {
         **base_payload,
@@ -491,10 +340,10 @@ def test_order_payload_edge_cases_fail_safely():
         "total": "0.01",
         "discount": "999",
     }
-    assert client.post("/api/v1/orders/direct/", hidden_fields, format="json").status_code == 400
+    assert client.post("/api/v1/orders/", hidden_fields, format="json").status_code == 400
 
     missing_required = {"products": [{"public_id": product.public_id, "quantity": 1}]}
-    assert client.post("/api/v1/orders/direct/", missing_required, format="json").status_code == 400
+    assert client.post("/api/v1/orders/", missing_required, format="json").status_code == 400
 
 
 @pytest.mark.django_db
@@ -503,7 +352,6 @@ def test_api_key_can_create_review_valid_payload():
     product = _make_product(store, stock=50)
     _key_row, api_key = create_store_api_key(store, name="frontend")
     client = _api_key_client(api_key)
-    session_token = "review-session-1"
     create_order_payload = {
         "shipping_zone": _make_zone(store).public_id,
         "shipping_name": "Alice",
@@ -513,16 +361,17 @@ def test_api_key_can_create_review_valid_payload():
         "products": [{"public_id": product.public_id, "quantity": 1}],
     }
     order_response = client.post(
-        "/api/v1/orders/direct/",
+        "/api/v1/orders/",
         create_order_payload,
         format="json",
-        **_session_headers(session_token),
     )
     assert order_response.status_code == 201
 
     payload = {
         "product": product.public_id,
         "order_public_id": order_response.data["public_id"],
+        "phone": "01712345678",
+        "email": "alice@example.com",
         "rating": 5,
         "title": "Great",
         "body": "This product works very well.",
@@ -531,7 +380,6 @@ def test_api_key_can_create_review_valid_payload():
         "/api/v1/reviews/create/",
         payload,
         format="json",
-        **_session_headers(session_token),
     )
     assert response.status_code == 201
 
@@ -567,7 +415,6 @@ def test_api_key_review_duplicate_by_guest_is_blocked():
     product = _make_product(store, stock=50)
     _key_row, api_key = create_store_api_key(store, name="frontend")
     client = _api_key_client(api_key)
-    session_token = "review-session-dup"
     create_order_payload = {
         "shipping_zone": _make_zone(store).public_id,
         "shipping_name": "Alice",
@@ -577,29 +424,30 @@ def test_api_key_review_duplicate_by_guest_is_blocked():
         "products": [{"public_id": product.public_id, "quantity": 1}],
     }
     order_response = client.post(
-        "/api/v1/orders/direct/",
+        "/api/v1/orders/",
         create_order_payload,
         format="json",
-        **_session_headers(session_token),
     )
     assert order_response.status_code == 201
     payload = {
         "product": product.public_id,
         "order_public_id": order_response.data["public_id"],
+        "phone": "01712345678",
+        "email": "alice@example.com",
         "rating": 5,
         "title": "Great",
         "body": "Really like this one.",
     }
-    first = client.post("/api/v1/reviews/create/", payload, format="json", **_session_headers(session_token))
+    first = client.post("/api/v1/reviews/create/", payload, format="json")
     assert first.status_code == 201
 
-    second = client.post("/api/v1/reviews/create/", payload, format="json", **_session_headers(session_token))
+    second = client.post("/api/v1/reviews/create/", payload, format="json")
     assert second.status_code == 400
 
 
 @pytest.mark.django_db
-def test_api_key_review_with_mismatched_session_is_blocked():
-    store = _make_store("Review Session Mismatch")
+def test_api_key_review_wrong_phone_proof_is_blocked():
+    store = _make_store("Review Phone Mismatch")
     product = _make_product(store, stock=50)
     zone = _make_zone(store)
     _key_row, api_key = create_store_api_key(store, name="frontend")
@@ -614,25 +462,25 @@ def test_api_key_review_with_mismatched_session_is_blocked():
         "products": [{"public_id": product.public_id, "quantity": 1}],
     }
     order_response = client.post(
-        "/api/v1/orders/direct/",
+        "/api/v1/orders/",
         order_payload,
         format="json",
-        **_session_headers("review-session-match"),
     )
     assert order_response.status_code == 201
 
     review_payload = {
         "product": product.public_id,
         "order_public_id": order_response.data["public_id"],
+        "phone": "01799999999",
+        "email": "alice@example.com",
         "rating": 5,
         "title": "Mismatch",
-        "body": "Should not be accepted due to mismatched session.",
+        "body": "Should not be accepted due to wrong proof phone.",
     }
     review_response = client.post(
         "/api/v1/reviews/create/",
         review_payload,
         format="json",
-        **_session_headers("different-session-token"),
     )
     assert review_response.status_code == 400
 
@@ -672,10 +520,9 @@ def test_admin_override_allows_legacy_review_binding(settings):
         "products": [{"public_id": product.public_id, "quantity": 1}],
     }
     order_response = client.post(
-        "/api/v1/orders/direct/",
+        "/api/v1/orders/",
         order_payload,
         format="json",
-        **_session_headers("session-source"),
     )
     assert order_response.status_code == 201
 
@@ -692,62 +539,40 @@ def test_admin_override_allows_legacy_review_binding(settings):
         review_payload,
         format="json",
         HTTP_X_FORWARDED_FOR="127.0.0.1",
-        **_session_headers("different-session"),
     )
     assert review_response.status_code == 201
 
 
 @pytest.mark.django_db
-def test_model_validation_rejects_cross_session_even_with_legacy_flag():
-    store = _make_store("Persisted Legacy")
-    product = _make_product(store, stock=50)
+def test_model_validation_rejects_review_when_order_lacks_product():
+    store = _make_store("Review Order Line")
+    product_on_order = _make_product(store, name="Ordered", stock=50)
+    other_product = _make_product(store, name="Not on order", stock=50)
     zone = _make_zone(store)
     order = Order.objects.create(
         store=store,
         order_number="LEGACY0001",
         email="legacy@example.com",
-        store_session_id="ssn_original",
         shipping_name="Legacy",
         shipping_address="Addr",
         phone="01700000000",
         shipping_zone=zone,
     )
-    OrderItem.objects.create(order=order, product=product, quantity=1, price=product.price)
-    with pytest.raises(ValidationError):
-        Review.objects.create(
-            store=store,
-            product=product,
-            order=order,
-            store_session_id="ssn_mismatched",
-            allow_legacy_binding=True,
-            rating=5,
-            title="Legacy Imported",
-            body="Imported legacy review binding.",
-            status=Review.Status.PENDING,
-        )
-
-
-@pytest.mark.django_db
-def test_orders_my_missing_session_never_leaks_existing_orders():
-    store = _make_store("Missing Session Isolation")
-    zone = _make_zone(store)
-    session_token = "existing-session"
-    Order.objects.create(
-        store=store,
-        order_number="LEAK0001",
-        email="leak@example.com",
-        store_session_id=derive_store_session_id(store_id=store.id, token=session_token),
-        shipping_name="Leak",
-        shipping_address="Addr",
-        phone="01700000000",
-        shipping_zone=zone,
+    OrderItem.objects.create(
+        order=order, product=product_on_order, quantity=1, price=product_on_order.price
     )
-    _key_row, api_key = create_store_api_key(store, name="frontend")
-    client = _api_key_client(api_key)
-    response = client.get("/api/v1/orders/my/")
-    assert response.status_code == 200
-    assert response.data["results"] == []
-    assert response.data["session_status"] == "missing"
+    with pytest.raises(ValidationError):
+        with tenant_scope_from_store(store=store, reason="test fixture"):
+            Review.objects.create(
+                store=store,
+                product=other_product,
+                order=order,
+                allow_legacy_binding=True,
+                rating=5,
+                title="Legacy Imported",
+                body="Imported legacy review binding.",
+                status=Review.Status.PENDING,
+            )
 
 
 @pytest.mark.django_db
@@ -774,10 +599,9 @@ def test_internal_override_cannot_be_triggered_by_header_alone(settings):
         "products": [{"public_id": product.public_id, "quantity": 1}],
     }
     order_response = client.post(
-        "/api/v1/orders/direct/",
+        "/api/v1/orders/",
         order_payload,
         format="json",
-        **_session_headers("session-source"),
     )
     assert order_response.status_code == 201
 
@@ -794,7 +618,6 @@ def test_internal_override_cannot_be_triggered_by_header_alone(settings):
         review_payload,
         format="json",
         HTTP_X_INTERNAL_REVIEW_BYPASS="1",
-        **_session_headers("different-session"),
     )
     assert review_response.status_code == 400
 
@@ -834,10 +657,9 @@ def test_review_override_enforced_by_central_policy(settings, monkeypatch):
         "products": [{"public_id": product.public_id, "quantity": 1}],
     }
     order_response = client.post(
-        "/api/v1/orders/direct/",
+        "/api/v1/orders/",
         order_payload,
         format="json",
-        **_session_headers("session-source"),
     )
     assert order_response.status_code == 201
 
@@ -854,7 +676,6 @@ def test_review_override_enforced_by_central_policy(settings, monkeypatch):
         "/api/v1/reviews/create/",
         review_payload,
         format="json",
-        **_session_headers("different-session"),
     )
     assert review_response.status_code == 400
     assert "allow_legacy_binding" in review_response.data
@@ -900,14 +721,15 @@ def test_auto_route_policy_with_api_key():
         ("GET", "/api/v1/categories/"),
         ("GET", "/api/v1/banners/"),
         ("GET", "/api/v1/reviews/"),
-        ("GET", "/api/v1/cart/"),
-        ("GET", "/api/v1/wishlist/"),
         ("GET", "/api/v1/shipping/options/"),
     }
     for prefix, methods in STORE_FRONTEND_ROUTE_POLICY:
         for method in methods:
             # Skip state-changing routes that need setup payload to avoid false negatives.
-            if method == "GET" and prefix not in {"/api/v1/orders/", "/api/v1/orders/my/"}:
+            if method == "GET" and prefix not in {
+                "/api/v1/orders/",
+                "/api/v1/wishlist/",
+            }:
                 expected_allowed.add((method, prefix))
 
     checked_routes = sorted(expected_allowed)
@@ -920,7 +742,7 @@ def test_auto_route_policy_with_api_key():
         ("GET", "/api/v1/orders/non-existent/"),
         ("GET", "/api/v1/admin/orders/"),
         ("GET", "/api/v1/admin/customers/"),
-        ("GET", "/api/v1/search/"),
+        ("GET", "/api/v1/admin/search/"),
         ("GET", "/api/v1/settings/network/api-keys/"),
     ]
     for method, path in blocked_routes:
@@ -974,22 +796,35 @@ def test_staff_without_membership_cannot_switch_tenants_via_header():
 
 
 @pytest.mark.django_db
-def test_wishlist_is_isolated_by_store_session_id():
+def test_wishlist_is_isolated_per_authenticated_user():
     store = _make_store("Wishlist Isolation")
     product = _make_product(store, stock=10)
     _key_row, api_key = create_store_api_key(store, name="frontend")
-    client = _api_key_client(api_key)
 
-    add_response = client.post(
+    user_a = User.objects.create_user(email="wish-a@example.com", password="pass1234")
+    user_b = User.objects.create_user(email="wish-b@example.com", password="pass1234")
+    for u in (user_a, user_b):
+        u.is_verified = True
+        u.save(update_fields=["is_verified"])
+
+    def client_for(user):
+        c = APIClient()
+        c.force_login(user)
+        c.credentials(HTTP_AUTHORIZATION=f"Bearer {api_key}")
+        return c
+
+    client_a = client_for(user_a)
+    client_b = client_for(user_b)
+
+    add_response = client_a.post(
         "/api/v1/wishlist/add/",
         {"product_public_id": product.public_id},
         format="json",
-        **_session_headers("wishlist-session-a"),
     )
     assert add_response.status_code == 201
 
-    list_a = client.get("/api/v1/wishlist/", **_session_headers("wishlist-session-a"))
-    list_b = client.get("/api/v1/wishlist/", **_session_headers("wishlist-session-b"))
+    list_a = client_a.get("/api/v1/wishlist/")
+    list_b = client_b.get("/api/v1/wishlist/")
     assert list_a.status_code == 200
     assert list_b.status_code == 200
     assert len(list_a.data["results"]) == 1
@@ -1005,23 +840,22 @@ def test_public_reviews_response_hides_moderation_status():
         store=store,
         order_number="REVIEWS0001",
         email="buyer@example.com",
-        store_session_id=derive_store_session_id(store_id=store.id, token="review-surface"),
         shipping_name="Buyer",
         shipping_address="Addr",
         phone="01700000000",
         shipping_zone=zone,
     )
     OrderItem.objects.create(order=order, product=product, quantity=1, price=product.price)
-    Review.objects.create(
-        store=store,
-        product=product,
-        order=order,
-        store_session_id=order.store_session_id,
-        rating=5,
-        title="Great",
-        body="Great product and quality.",
-        status=Review.Status.APPROVED,
-    )
+    with tenant_scope_from_store(store=store, reason="test fixture"):
+        Review.objects.create(
+            store=store,
+            product=product,
+            order=order,
+            rating=5,
+            title="Great",
+            body="Great product and quality.",
+            status=Review.Status.APPROVED,
+        )
     _key_row, api_key = create_store_api_key(store, name="frontend")
     client = _api_key_client(api_key)
 
@@ -1034,42 +868,43 @@ def test_public_reviews_response_hides_moderation_status():
 @pytest.mark.django_db
 def test_variant_stock_sync_updates_product_total_consistently():
     store = _make_store("Stock Sync")
-    category = Category.objects.create(
-        store=store,
-        name="Stock Category",
-        slug="stock-category",
-    )
-    product = Product.objects.create(
-        store=store,
-        category=category,
-        name="Variant Product",
-        price=120,
-        stock=0,
-        status=Product.Status.ACTIVE,
-        is_active=True,
-    )
-    v1 = ProductVariant.objects.create(
-        product=product,
-        sku="sku-v1",
-        is_active=True,
-    )
-    v2 = ProductVariant.objects.create(
-        product=product,
-        sku="sku-v2",
-        is_active=True,
-    )
-    Inventory.objects.create(product=product, variant=v1, quantity=3)
-    Inventory.objects.create(product=product, variant=v2, quantity=7)
+    with tenant_scope_from_store(store=store, reason="test fixture"):
+        category = Category.objects.create(
+            store=store,
+            name="Stock Category",
+            slug="stock-category",
+        )
+        product = Product.objects.create(
+            store=store,
+            category=category,
+            name="Variant Product",
+            price=120,
+            stock=0,
+            status=Product.Status.ACTIVE,
+            is_active=True,
+        )
+        v1 = ProductVariant.objects.create(
+            product=product,
+            sku="sku-v1",
+            is_active=True,
+        )
+        v2 = ProductVariant.objects.create(
+            product=product,
+            sku="sku-v2",
+            is_active=True,
+        )
+        Inventory.objects.create(product=product, variant=v1, quantity=3)
+        Inventory.objects.create(product=product, variant=v2, quantity=7)
 
-    sync_product_stock_from_variants(product.id)
-    product.refresh_from_db()
-    assert product.stock == 10
+        sync_product_stock_from_variants(product.id)
+        product.refresh_from_db()
+        assert product.stock == 10
 
-    Inventory.objects.filter(product=product, variant=v1).update(quantity=5)
-    Inventory.objects.filter(product=product, variant=v2).update(quantity=1)
-    sync_product_stock_from_variants(product.id)
-    product.refresh_from_db()
-    assert product.stock == 6
+        Inventory.objects.filter(product=product, variant=v1).update(quantity=5)
+        Inventory.objects.filter(product=product, variant=v2).update(quantity=1)
+        sync_product_stock_from_variants(product.id)
+        product.refresh_from_db()
+        assert product.stock == 6
 
 
 @pytest.mark.django_db
@@ -1077,12 +912,13 @@ def test_terminal_status_transition_restores_stock_once_per_item_reason():
     store = _make_store("Restore Once")
     product = _make_product(store, stock=0)
     zone = _make_zone(store)
-    Inventory.objects.create(product=product, variant=None, quantity=3)
+    inv_row = Inventory.objects.get(product=product, variant__isnull=True)
+    inv_row.quantity = 3
+    inv_row.save(update_fields=["quantity"])
     order = Order.objects.create(
         store=store,
         order_number="RESTORE0001",
         email="buyer@example.com",
-        store_session_id=derive_store_session_id(store_id=store.id, token="restore-once"),
         shipping_name="Buyer",
         shipping_address="Addr",
         phone="01700000000",
@@ -1090,8 +926,9 @@ def test_terminal_status_transition_restores_stock_once_per_item_reason():
         status=Order.Status.PENDING,
     )
     item = OrderItem.objects.create(order=order, product=product, quantity=2, price=product.price)
-    transition_order_status(order=order, to_status=Order.Status.FAILED, note="payment-fail", actor_label="test")
-    transition_order_status(order=order, to_status=Order.Status.FAILED, note="retry", actor_label="test")
+    with tenant_scope_from_store(store=store, reason="test fixture"):
+        transition_order_status(order=order, to_status=Order.Status.FAILED, note="payment-fail", actor_label="test")
+        transition_order_status(order=order, to_status=Order.Status.FAILED, note="retry", actor_label="test")
 
     inv = Inventory.objects.get(product=product, variant__isnull=True)
     assert inv.quantity == 5

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Optional
+from typing import Any, Mapping, Optional
 
 from django.db import transaction
 from django.db.models import F, Q
@@ -29,6 +29,44 @@ def _quantize_money(value: Decimal) -> Decimal:
     return value.quantize(Decimal("0.01"))
 
 
+def normalize_phone_digits(phone: str) -> str:
+    """Digits-only phone for stable coupon identity (matches checkout customer resolution style)."""
+    return "".join(c for c in (phone or "").strip() if c.isdigit())
+
+
+def normalize_coupon_email(email: str) -> str:
+    return (email or "").strip().lower()
+
+
+def resolve_customer_identity(_request, data: Mapping[str, Any] | None) -> tuple[str, str]:
+    """
+    Returns (phone, email) for coupon enforcement.
+
+    Priority for *matching* prior usages: phone (if any digits) > email (if non-empty).
+    """
+    data = data or {}
+    get = data.get if hasattr(data, "get") else lambda _k, d=None: d
+    phone = normalize_phone_digits(get("phone", "") or "")
+    email = normalize_coupon_email(get("email", "") or "")
+    return (phone, email)
+
+
+def coupon_identity_from_order(order) -> tuple[str, str]:
+    return (
+        normalize_phone_digits(getattr(order, "phone", "") or ""),
+        normalize_coupon_email(getattr(order, "email", "") or ""),
+    )
+
+
+def _identity_usage_filter(phone: str, email: str) -> Q | None:
+    """Build filter for usages counted against per_identity_max_uses (phone > email)."""
+    if phone:
+        return Q(phone=phone)
+    if email:
+        return Q(email=email)
+    return None
+
+
 def _resolve_discount_amount(*, coupon: Coupon, subtotal: Decimal) -> Decimal:
     if coupon.discount_type == Coupon.DiscountType.PERCENTAGE:
         amount = (subtotal * coupon.discount_value) / Decimal("100")
@@ -49,7 +87,8 @@ class CouponValidator:
         store,
         code: str,
         subtotal: Decimal,
-        user=None,
+        phone: str = "",
+        email: str = "",
     ) -> CouponQuote:
         normalized_code = (code or "").strip()
         if not normalized_code:
@@ -80,17 +119,24 @@ class CouponValidator:
             raise ValidationError(
                 {"coupon_code": f"Minimum order amount is {coupon.min_order_value} for this coupon."}
             )
-        if coupon.per_user_max_uses is not None:
-            if not getattr(user, "is_authenticated", False):
-                raise ValidationError({"coupon_code": "Login is required for this coupon."})
-            user_usage_count = CouponUsage.objects.filter(
+        if coupon.per_identity_max_uses is not None:
+            ident_q = _identity_usage_filter(phone, email)
+            if ident_q is None:
+                raise ValidationError(
+                    {
+                        "coupon_code": (
+                            "This coupon requires a customer identity (phone or email). "
+                            "Ensure checkout includes phone or email."
+                        )
+                    }
+                )
+            usage_count = CouponUsage.objects.filter(
                 store=store,
                 coupon=coupon,
-                user=user,
                 is_reversed=False,
-            ).count()
-            if user_usage_count >= coupon.per_user_max_uses:
-                raise ValidationError({"coupon_code": "Per-user coupon usage limit reached."})
+            ).filter(ident_q).count()
+            if usage_count >= coupon.per_identity_max_uses:
+                raise ValidationError({"coupon_code": "Per-customer coupon usage limit reached."})
 
         discount_amount = _resolve_discount_amount(coupon=coupon, subtotal=subtotal)
         if discount_amount <= Decimal("0.00"):
@@ -132,16 +178,32 @@ class DiscountResolver:
         return BulkDiscountQuote(rule=best_rule, discount_amount=amount)
 
 
-def validate_coupon_for_subtotal(*, store, code: str, subtotal: Decimal, user=None) -> CouponQuote:
+def validate_coupon_for_subtotal(
+    *,
+    store,
+    code: str,
+    subtotal: Decimal,
+    phone: str = "",
+    email: str = "",
+) -> CouponQuote:
     return CouponValidator.validate_for_subtotal(
         store=store,
         code=code,
         subtotal=subtotal,
-        user=user,
+        phone=phone,
+        email=email,
     )
 
 
-def consume_coupon_usage(*, coupon: Coupon, order=None, user=None, email: str = "", phone: str = "") -> None:
+def consume_coupon_usage(
+    *,
+    coupon: Coupon,
+    order=None,
+    email: str = "",
+    phone: str = "",
+) -> None:
+    phone_n = normalize_phone_digits(phone)
+    email_n = normalize_coupon_email(email)
     with transaction.atomic():
         locked = Coupon.objects.select_for_update().get(pk=coupon.pk)
         if locked.max_uses is not None and locked.times_used >= locked.max_uses:
@@ -153,9 +215,8 @@ def consume_coupon_usage(*, coupon: Coupon, order=None, user=None, email: str = 
                 coupon=locked,
                 order=order,
                 defaults={
-                    "user": user if getattr(user, "is_authenticated", False) else None,
-                    "email": (email or "").strip(),
-                    "phone": (phone or "").strip(),
+                    "email": email_n,
+                    "phone": phone_n,
                 },
             )
 

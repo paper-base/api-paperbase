@@ -50,14 +50,14 @@ def in_tenant_scope() -> bool:
 
 
 @contextmanager
-def tenant_scope(*, store_id: int, session_id: str | None = None, reason: str = "") -> Iterator["Store"]:
+def tenant_scope(*, store_id: int, reason: str = "") -> Iterator["Store"]:
     from engine.apps.stores.models import Store
 
     store = Store.objects.filter(id=store_id, is_active=True).first()
     if store is None:
         raise RuntimeError(f"Store {store_id} does not exist or is inactive.")
     scope_token = _set_execution_scope(kind="tenant", reason=reason or f"tenant:{store_id}")
-    context_token = _set_tenant_context(store=store, session_id=session_id)
+    context_token = _set_tenant_context(store=store)
     try:
         yield store
     finally:
@@ -66,9 +66,9 @@ def tenant_scope(*, store_id: int, session_id: str | None = None, reason: str = 
 
 
 @contextmanager
-def tenant_scope_from_store(*, store: "Store", session_id: str | None = None, reason: str = "") -> Iterator["Store"]:
+def tenant_scope_from_store(*, store: "Store", reason: str = "") -> Iterator["Store"]:
     scope_token = _set_execution_scope(kind="tenant", reason=reason or f"tenant:{store.id}")
-    context_token = _set_tenant_context(store=store, session_id=session_id)
+    context_token = _set_tenant_context(store=store)
     try:
         yield store
     finally:
@@ -81,7 +81,7 @@ def system_scope(*, reason: str) -> Iterator[None]:
     if not reason.strip():
         raise RuntimeError("SYSTEM scope requires an explicit reason.")
     scope_token = _set_execution_scope(kind="system", reason=reason.strip())
-    context_token = _set_tenant_context(store=None, session_id=None)
+    context_token = _set_tenant_context(store=None)
     try:
         yield None
     finally:

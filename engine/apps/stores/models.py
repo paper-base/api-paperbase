@@ -85,6 +85,11 @@ class StoreSettings(models.Model):
         default=False,
         help_text="Allow public storefront read endpoints without API key for this store.",
     )
+    storefront_public = models.JSONField(
+        blank=True,
+        default=dict,
+        help_text="Public storefront-only data: theme_settings, country, seo, policy_urls, etc.",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -280,48 +285,3 @@ class StoreApiKey(models.Model):
         if not self.public_id:
             self.public_id = generate_public_id("storeapikey")
         super().save(*args, **kwargs)
-
-
-class StoreSession(models.Model):
-    """
-    Persistent storefront session lifecycle metadata.
-
-    IMPORTANT:
-    - This model is not an authorization source of truth.
-    - Authorization identity remains the deterministic store_session_id derived
-      from (store_id, store_session_token).
-    - Rows here exist for lifecycle/observability only (created_at/last_seen_at).
-    """
-
-    store = models.ForeignKey(
-        Store,
-        on_delete=models.CASCADE,
-        related_name="sessions",
-    )
-    token_hash = models.CharField(
-        max_length=64,
-        help_text="SHA256 hash of store_session_token.",
-    )
-    store_session_id = models.CharField(
-        max_length=64,
-        db_index=True,
-        help_text="Deterministic HMAC-derived storefront session id.",
-    )
-    created_at = models.DateTimeField(auto_now_add=True)
-    last_seen_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        constraints = [
-            models.UniqueConstraint(
-                fields=["store", "token_hash"],
-                name="uniq_store_session_store_token_hash",
-            ),
-        ]
-        indexes = [
-            models.Index(fields=["store", "store_session_id"]),
-            models.Index(fields=["store", "last_seen_at"]),
-        ]
-
-    def __str__(self) -> str:
-        return f"StoreSession({self.store_id}, {self.store_session_id})"
-

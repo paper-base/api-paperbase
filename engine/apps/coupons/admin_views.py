@@ -13,7 +13,7 @@ from engine.apps.shipping.models import ShippingMethod, ShippingZone
 
 from .models import BulkDiscount, Coupon
 from .admin_serializers import AdminBulkDiscountSerializer, AdminCouponSerializer
-from .services import validate_coupon_for_subtotal
+from .services import resolve_customer_identity, validate_coupon_for_subtotal
 
 
 class AdminCouponViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
@@ -77,11 +77,13 @@ class AdminCouponViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
         except Exception:
             return Response({"subtotal": "Invalid subtotal."}, status=status.HTTP_400_BAD_REQUEST)
 
+        phone, email = resolve_customer_identity(request, request.data)
         quote = validate_coupon_for_subtotal(
             store=ctx.store,
             code=code,
             subtotal=subtotal,
-            user=request.user if request.user.is_authenticated else None,
+            phone=phone,
+            email=email,
         )
         return Response(
             {
@@ -143,11 +145,13 @@ class AdminCouponViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
                 is_active=True,
             ).first()
 
+        phone, email = resolve_customer_identity(request, request.data)
         breakdown = PricingEngine.compute(
             store=ctx.store,
             lines=pricing_lines,
             coupon_code=(request.data.get("coupon_code") or "").strip(),
-            user=request.user if request.user.is_authenticated else None,
+            coupon_phone=phone,
+            coupon_email=email,
             shipping_zone_id=zone.id if zone else None,
             shipping_method_id=method.id if method else None,
         )

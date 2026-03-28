@@ -1,0 +1,105 @@
+from decimal import Decimal
+
+import pytest
+from django.test import override_settings
+from rest_framework.test import APIClient
+
+from engine.apps.shipping.models import ShippingMethod, ShippingRate, ShippingZone
+from engine.apps.stores.models import StoreSettings
+from engine.apps.stores.services import create_store_api_key
+from tests.apps.stores.test_api_keys import make_product, make_store
+
+
+def _api_key_client(api_key: str) -> APIClient:
+    client = APIClient()
+    client.credentials(HTTP_AUTHORIZATION=f"Bearer {api_key}")
+    return client
+
+
+@override_settings(TENANT_API_KEY_ENFORCE=True)
+@pytest.mark.django_db
+def test_catalog_filters_store_public_and_search():
+    store = make_store("StorefrontCX")
+    settings_obj, _ = StoreSettings.objects.get_or_create(store=store)
+    settings_obj.storefront_public = {
+        "country": "BD",
+        "theme_settings": {"primary_color": "#111111"},
+    }
+    settings_obj.modules_enabled = {"reviews": True, "wishlist": False}
+    settings_obj.extra_field_schema = [
+        {"id": "fld_1", "entityType": "product", "name": "Warranty", "fieldType": "text"},
+    ]
+    settings_obj.save(
+        update_fields=["storefront_public", "modules_enabled", "extra_field_schema"]
+    )
+    make_product(store, name="Alpha AX")
+    _row, key = create_store_api_key(store, name="fe")
+    client = _api_key_client(key)
+
+    fr = client.get("/api/v1/catalog/filters/")
+    assert fr.status_code == 200
+    body = fr.json()
+    assert set(body.keys()) >= {"categories", "attributes", "brands", "price_range"}
+    assert body["price_range"]["min"] <= body["price_range"]["max"]
+
+    sr = client.get("/api/v1/store/public/")
+    assert sr.status_code == 200
+    pub = sr.json()
+    assert pub["store_name"] == "StorefrontCX"
+    assert pub["currency"] == "BDT"
+    assert pub["country"] == "BD"
+    assert pub["theme_settings"]["primary_color"] == "#111111"
+    assert pub["modules_enabled"] == {"reviews": True, "wishlist": False}
+    assert len(pub["extra_field_schema"]) == 1
+    assert pub["extra_field_schema"][0]["id"] == "fld_1"
+
+    z = client.get("/api/v1/search/?q=al")
+    assert z.status_code == 200
+    s = z.json()
+    assert "products" in s and "categories" in s and "suggestions" in s
+    assert s["trending"] is False
+
+    tr = client.get("/api/v1/search/?trending=true")
+    assert tr.status_code == 200
+    assert tr.json()["trending"] is True
+
+
+@override_settings(TENANT_API_KEY_ENFORCE=True)
+@pytest.mark.django_db
+def test_shipping_zones_and_product_detail_enrichment():
+    store = make_store("ShipCX")
+    p = make_product(store, name="Ship Product")
+    zone = ShippingZone.objects.create(
+        store=store,
+        name="Dhaka",
+        is_active=True,
+        estimated_delivery_text="1-2",
+    )
+    method = ShippingMethod.objects.create(store=store, name="Standard", is_active=True)
+    method.zones.add(zone)
+    ShippingRate.objects.create(
+        store=store,
+        shipping_method=method,
+        shipping_zone=zone,
+        price=Decimal("60.00"),
+        min_order_total=None,
+    )
+    _row, key = create_store_api_key(store, name="fe")
+    client = _api_key_client(key)
+
+    zr = client.get("/api/v1/shipping/zones/")
+    assert zr.status_code == 200
+    zones = zr.json()
+    assert len(zones) >= 1
+    assert zones[0]["estimated_days"] == "1-2"
+    assert zones[0]["cost_rules"]
+
+    dr = client.get(f"/api/v1/products/{p.public_id}/")
+    assert dr.status_code == 200
+    detail = dr.json()
+    assert detail["breadcrumbs"][0] == "Home"
+    assert detail["breadcrumbs"][-1] == "Ship Product"
+    assert "related_products" in detail
+    assert "variant_matrix" in detail
+    assert detail["stock_status"] in ("in_stock", "low", "out_of_stock")
+    assert "available_quantity" in detail

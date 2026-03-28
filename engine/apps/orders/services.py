@@ -5,7 +5,7 @@ from django.db.models import F
 from rest_framework.exceptions import ValidationError
 
 from engine.apps.customers.models import Customer
-from engine.apps.coupons.services import reverse_coupon_usage_for_order
+from engine.apps.coupons.services import coupon_identity_from_order, reverse_coupon_usage_for_order
 from django.db import IntegrityError
 
 from engine.apps.orders.models import Order, OrderStatusHistory, StockRestoreLog
@@ -127,11 +127,13 @@ def recalculate_order_totals(order: Order) -> Order:
                 "unit_price": Decimal(str(item.price)),
             }
         )
+    c_phone, c_email = coupon_identity_from_order(order)
     breakdown = PricingEngine.compute(
         store=order.store,
         lines=pricing_lines,
         coupon_code=order.coupon_code,
-        user=order.user,
+        coupon_phone=c_phone,
+        coupon_email=c_email,
         shipping_zone_id=order.shipping_zone_id,
         shipping_method_id=order.shipping_method_id,
     )
@@ -231,9 +233,9 @@ def transition_order_status(
     with transaction.atomic():
         locked = Order.objects.select_for_update().prefetch_related("items").get(pk=order.pk)
         from_status = locked.status
-        ensure_valid_order_status_transition(from_status=from_status, to_status=to_status)
         if from_status == to_status:
             return locked
+        ensure_valid_order_status_transition(from_status=from_status, to_status=to_status)
 
         if to_status in terminal_restore_statuses:
             for item in locked.items.all():

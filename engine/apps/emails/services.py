@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import copy
 
+from django.conf import settings
 from django.template import Context, Template
 from django.utils import timezone
 
 from .models import EmailLog, EmailTemplate
 from .template_catalog import DEFAULT_EMAIL_TEMPLATES
+
 from .providers.base import BaseEmailProvider
+from .providers.django_mail import DjangoCoreMailProvider
 from .providers.resend import ResendEmailProvider
 
 _ERROR_MAX_LEN = 8000
@@ -18,6 +21,8 @@ def _render(template_string: str, context: dict) -> str:
 
 
 def get_email_provider() -> BaseEmailProvider:
+    if getattr(settings, "TESTING", False):
+        return DjangoCoreMailProvider()
     return ResendEmailProvider()
 
 
@@ -58,15 +63,16 @@ def send_email(
     html = _render(template.html_body, ctx)
     text = _render(template.text_body, ctx) if (template.text_body or "").strip() else None
 
+    mailer = provider or get_email_provider()
+    provider_name = getattr(mailer, "provider_key", "resend")
+
     log = EmailLog.objects.create(
         to_email=to_email,
         type=email_type,
         status=EmailLog.Status.PENDING,
-        provider="resend",
+        provider=provider_name,
         metadata=ctx,
     )
-
-    mailer = provider or get_email_provider()
     try:
         mailer.send(to_email, subject, html, text, from_email=from_email)
     except Exception as exc:  # noqa: BLE001 — record any failure on the log

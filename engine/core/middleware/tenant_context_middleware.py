@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from django.utils.deprecation import MiddlewareMixin
 
-from engine.core.store_session import resolve_store_session
 from engine.core.tenancy import get_active_store
 from engine.core.tenant_context import _clear_tenant_context, _set_tenant_context
 
@@ -14,11 +13,7 @@ class TenantContextMiddleware(MiddlewareMixin):
 
     def process_request(self, request):
         ctx = get_active_store(request)
-        session_id = None
-        if ctx.store is not None and getattr(request, "api_key", None):
-            session_ctx = resolve_store_session(request)
-            session_id = session_ctx.store_session_id
-        token = _set_tenant_context(store=ctx.store, session_id=session_id)
+        token = _set_tenant_context(store=ctx.store)
         request._tenant_context_token = token
         return None
 

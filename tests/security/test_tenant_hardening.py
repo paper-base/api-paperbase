@@ -7,7 +7,7 @@ from rest_framework.test import APIClient
 
 from engine.apps.notifications.models import StaffNotification
 from engine.apps.products.models import ProductAttribute
-from engine.apps.stores.models import Store
+from engine.apps.stores.models import Store, StoreMembership
 from engine.core.middleware.internal_override_middleware import InternalOverrideMiddleware
 
 User = get_user_model()
@@ -62,6 +62,12 @@ def test_admin_product_attributes_are_scoped_by_store():
         password="secret123",
         is_staff=True,
         is_verified=True,
+    )
+    StoreMembership.objects.create(
+        user=staff,
+        store=store_a,
+        role=StoreMembership.Role.ADMIN,
+        is_active=True,
     )
     client = APIClient()
     client.force_authenticate(user=staff)

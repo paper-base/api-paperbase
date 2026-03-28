@@ -14,6 +14,6 @@ class JWTAuthenticationAllowAPIKey(JWTAuthentication):
         if raw_token is None:
             return None
         token = raw_token.decode("utf-8")
-        if token.startswith("ak_live_"):
+        if token.startswith(("ak_live_", "ak_pk_", "ak_sk_")):
             return None
         return super().authenticate(request)

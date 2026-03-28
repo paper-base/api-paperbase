@@ -1,34 +1,26 @@
 from rest_framework import status
+from rest_framework.authentication import SessionAuthentication
 from rest_framework.exceptions import NotFound
 from rest_framework.generics import ListAPIView
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from config.permissions import IsStorefrontAPIKey
+from engine.core.authentication import JWTAuthenticationAllowAPIKey
 from engine.apps.analytics.service import meta_conversions
 from engine.apps.products.models import Product
-from engine.core.store_session import resolve_store_session
 from engine.core.tenancy import require_api_key_store
 
 from .models import WishlistItem
 from .serializers import WishlistAddSerializer, WishlistItemSerializer
 
 
-def _wishlist_filter(request):
-    """Return a dict of kwargs to filter WishlistItem for the current visitor."""
-    if request.user.is_authenticated:
-        return {'user': request.user}
-    session_ctx = resolve_store_session(request)
-    if not session_ctx.store_session_id:
-        return {'user': None, 'store_session_id': '__missing__'}
-    return {'user': None, 'store_session_id': session_ctx.store_session_id}
-
-
 class WishlistListView(ListAPIView):
-    """List current visitor's wishlist items."""
+    """List current user's wishlist items (JWT + storefront API key)."""
     serializer_class = WishlistItemSerializer
-    permission_classes = [IsStorefrontAPIKey]
-    authentication_classes = []
+    permission_classes = [IsStorefrontAPIKey, IsAuthenticated]
+    authentication_classes = [JWTAuthenticationAllowAPIKey, SessionAuthentication]
     allow_api_key = True
     access_scope = "storefront"
 
@@ -36,14 +28,14 @@ class WishlistListView(ListAPIView):
         store = require_api_key_store(self.request)
         return WishlistItem.objects.filter(
             product__store=store,
-            **_wishlist_filter(self.request),
+            user=self.request.user,
         ).select_related('product').prefetch_related('product__images')
 
 
 class WishlistAddView(APIView):
     """Add product to wishlist. Idempotent."""
-    permission_classes = [IsStorefrontAPIKey]
-    authentication_classes = []
+    permission_classes = [IsStorefrontAPIKey, IsAuthenticated]
+    authentication_classes = [JWTAuthenticationAllowAPIKey, SessionAuthentication]
     allow_api_key = True
     access_scope = "storefront"
 
@@ -59,8 +51,10 @@ class WishlistAddView(APIView):
         ).first()
         if not product:
             raise NotFound()
-        filt = _wishlist_filter(request)
-        _, created = WishlistItem.objects.get_or_create(product=product, **filt)
+        _, created = WishlistItem.objects.get_or_create(
+            product=product,
+            user=request.user,
+        )
         if created:
             meta_conversions.track_add_to_wishlist(request, product)
         return Response(
@@ -71,8 +65,8 @@ class WishlistAddView(APIView):
 
 class WishlistRemoveView(APIView):
     """Remove product from wishlist."""
-    permission_classes = [IsStorefrontAPIKey]
-    authentication_classes = []
+    permission_classes = [IsStorefrontAPIKey, IsAuthenticated]
+    authentication_classes = [JWTAuthenticationAllowAPIKey, SessionAuthentication]
     allow_api_key = True
     access_scope = "storefront"
 
@@ -87,15 +81,16 @@ class WishlistRemoveView(APIView):
         if not product:
             raise NotFound()
         deleted, _ = WishlistItem.objects.filter(
-            product=product, **_wishlist_filter(request)
+            product=product,
+            user=request.user,
         ).delete()
         return Response({'status': 'removed', 'deleted': deleted > 0})
 
 
 class WishlistClearView(APIView):
-    """Remove all items from the current visitor's wishlist."""
-    permission_classes = [IsStorefrontAPIKey]
-    authentication_classes = []
+    """Remove all items from the current user's wishlist."""
+    permission_classes = [IsStorefrontAPIKey, IsAuthenticated]
+    authentication_classes = [JWTAuthenticationAllowAPIKey, SessionAuthentication]
     allow_api_key = True
     access_scope = "storefront"
 
@@ -103,6 +98,6 @@ class WishlistClearView(APIView):
         store = require_api_key_store(request)
         deleted, _ = WishlistItem.objects.filter(
             product__store=store,
-            **_wishlist_filter(request)
+            user=request.user,
         ).delete()
         return Response({'status': 'cleared', 'deleted': deleted})

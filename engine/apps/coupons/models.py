@@ -1,4 +1,3 @@
-from django.conf import settings
 from django.db import models
 from django.core.exceptions import ValidationError
 
@@ -37,10 +36,13 @@ class Coupon(models.Model):
         blank=True,
     )
     max_uses = models.PositiveIntegerField(null=True, blank=True)
-    per_user_max_uses = models.PositiveIntegerField(
+    per_identity_max_uses = models.PositiveIntegerField(
         null=True,
         blank=True,
-        help_text="Max successful usages per authenticated user within this store.",
+        help_text=(
+            "Max successful usages per customer identity within this store "
+            "(phone > email)."
+        ),
     )
     times_used = models.PositiveIntegerField(default=0)
     valid_from = models.DateTimeField(null=True, blank=True)
@@ -90,13 +92,6 @@ class CouponUsage(models.Model):
     order = models.ForeignKey(
         "orders.Order",
         on_delete=models.CASCADE,
-        related_name="coupon_usages",
-    )
-    user = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
         related_name="coupon_usages",
     )
     email = models.EmailField(blank=True, default="")

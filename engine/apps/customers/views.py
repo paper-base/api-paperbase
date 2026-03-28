@@ -1,3 +1,15 @@
+"""
+Customer profile and saved addresses for **authenticated dashboard users** only.
+
+These routes use ``DenyAPIKeyAccess``: Bearer tokens ``ak_pk_`` / ``ak_sk_`` are rejected.
+Call them with a **JWT** from ``POST /api/v1/auth/token/`` and resolve the store via
+``X-Store-Public-ID`` (or the token's ``active_store_public_id`` claim).
+
+Headless storefront checkout uses the publishable key with ``POST /api/v1/orders/`` and a
+stateless line-items payload (no server-side cart or storefront session). Account center
+APIs on this module require this separate JWT + store header channel.
+"""
+
 from rest_framework import status
 from rest_framework.generics import RetrieveAPIView, UpdateAPIView, ListCreateAPIView, RetrieveUpdateDestroyAPIView
 from rest_framework.permissions import IsAuthenticated

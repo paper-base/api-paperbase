@@ -13,6 +13,8 @@ RESEND_API_URL = "https://api.resend.com/emails"
 class ResendEmailProvider(BaseEmailProvider):
     """Send mail via Resend HTTP API."""
 
+    provider_key = "resend"
+
     def __init__(self, api_key: str | None = None, from_email: str | None = None):
         self.api_key = api_key if api_key is not None else getattr(settings, "RESEND_API_KEY", "") or ""
         configured = getattr(settings, "RESEND_FROM_EMAIL", "") or ""

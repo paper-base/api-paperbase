@@ -65,11 +65,6 @@ class Order(models.Model):
         related_name="orders",
     )
     email = models.EmailField(blank=True, default='')
-    store_session_id = models.CharField(
-        max_length=255,
-        db_index=True,
-        help_text="Deterministic storefront session identity scoped to store.",
-    )
     status = models.CharField(
         max_length=20, choices=Status.choices, default=Status.PENDING, db_index=True
     )
@@ -123,6 +118,11 @@ class Order(models.Model):
         blank=True,
         default=dict,
         help_text="Dynamic extra fields per extra_field_schema.",
+    )
+    pricing_snapshot = models.JSONField(
+        blank=True,
+        default=dict,
+        help_text="Snapshot of PricingEngine breakdown at checkout (bulk/coupon/shipping composition).",
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

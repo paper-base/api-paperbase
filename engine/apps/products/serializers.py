@@ -7,6 +7,7 @@ from .models import (
     ProductVariant,
     ProductVariantAttribute,
 )
+from .stock_signals import stock_status_for_quantity
 
 
 def _image_url(img, request):
@@ -31,10 +32,24 @@ class ProductVariantPublicSerializer(serializers.ModelSerializer):
     price = serializers.SerializerMethodField()
     options = serializers.SerializerMethodField()
     inventory_quantity = serializers.SerializerMethodField()
+    available_quantity = serializers.SerializerMethodField()
+    stock_status = serializers.SerializerMethodField()
 
     class Meta:
         model = ProductVariant
-        fields = ['public_id', 'sku', 'inventory_quantity', 'is_active', 'price', 'options']
+        fields = [
+            'public_id',
+            'sku',
+            'inventory_quantity',
+            'available_quantity',
+            'stock_status',
+            'is_active',
+            'price',
+            'options',
+        ]
+
+    def _low_threshold(self) -> int:
+        return int(self.context.get("low_stock_threshold", 5))
 
     def get_price(self, obj):
         return str(obj.effective_price)
@@ -52,6 +67,15 @@ class ProductVariantPublicSerializer(serializers.ModelSerializer):
             return 0
         return int(inv.quantity or 0)
 
+    def get_available_quantity(self, obj):
+        return self.get_inventory_quantity(obj)
+
+    def get_stock_status(self, obj):
+        return stock_status_for_quantity(
+            int(self.get_available_quantity(obj)),
+            self._low_threshold(),
+        )
+
 
 class ProductListSerializer(serializers.ModelSerializer):
     """For list views: matches frontend Product shape."""
@@ -61,6 +85,8 @@ class ProductListSerializer(serializers.ModelSerializer):
         read_only=True, allow_null=True
     )
     totalStock = serializers.SerializerMethodField()
+    available_quantity = serializers.SerializerMethodField()
+    stock_status = serializers.SerializerMethodField()
     variantCount = serializers.SerializerMethodField()
     # Return category slug for frontend URL generation
     category = serializers.SlugRelatedField(slug_field="slug", read_only=True)
@@ -69,8 +95,12 @@ class ProductListSerializer(serializers.ModelSerializer):
         model = Product
         fields = [
             'public_id', 'name', 'brand', 'price', 'originalPrice', 'image',
-            'badge', 'category', 'slug', 'stock', 'totalStock', 'variantCount', 'extra_data',
+            'badge', 'category', 'slug', 'stock', 'totalStock', 'available_quantity',
+            'stock_status', 'variantCount', 'extra_data',
         ]
+
+    def _low_threshold(self) -> int:
+        return int(self.context.get("low_stock_threshold", 5))
 
     def get_image(self, obj):
         return _image_url(obj.image, self.context.get('request'))
@@ -95,6 +125,15 @@ class ProductListSerializer(serializers.ModelSerializer):
             s = obj.variants.filter(is_active=True).aggregate(x=SumAgg('inventory__quantity'))['x']
         return int(s or 0)
 
+    def get_available_quantity(self, obj):
+        return self.get_totalStock(obj)
+
+    def get_stock_status(self, obj):
+        return stock_status_for_quantity(
+            int(self.get_totalStock(obj)),
+            self._low_threshold(),
+        )
+
 
 class ProductDetailSerializer(serializers.ModelSerializer):
     """For detail view: adds images, description, variants, aggregated stock."""
@@ -105,6 +144,8 @@ class ProductDetailSerializer(serializers.ModelSerializer):
         read_only=True, allow_null=True
     )
     totalStock = serializers.SerializerMethodField()
+    available_quantity = serializers.SerializerMethodField()
+    stock_status = serializers.SerializerMethodField()
     variantCount = serializers.SerializerMethodField()
     variants = ProductVariantPublicSerializer(many=True, read_only=True)
     # Return category slug for frontend compatibility
@@ -115,9 +156,13 @@ class ProductDetailSerializer(serializers.ModelSerializer):
         fields = [
             'public_id', 'name', 'brand', 'slug', 'price', 'originalPrice', 'image', 'images',
             'badge', 'category', 'description',
-            'is_featured', 'created_at', 'stock', 'totalStock', 'variantCount', 'variants',
+            'is_featured', 'created_at', 'stock', 'totalStock', 'available_quantity',
+            'stock_status', 'variantCount', 'variants',
             'extra_data',
         ]
+
+    def _low_threshold(self) -> int:
+        return int(self.context.get("low_stock_threshold", 5))
 
     def get_image(self, obj):
         return _image_url(obj.image, self.context.get('request'))
@@ -145,6 +190,16 @@ class ProductDetailSerializer(serializers.ModelSerializer):
 
             s = obj.variants.filter(is_active=True).aggregate(x=SumAgg('inventory__quantity'))['x']
         return int(s or 0)
+
+    def get_available_quantity(self, obj):
+        return self.get_totalStock(obj)
+
+    def get_stock_status(self, obj):
+        return stock_status_for_quantity(
+            int(self.get_totalStock(obj)),
+            self._low_threshold(),
+        )
+
 
 class CategorySerializer(serializers.ModelSerializer):
     """Serializer for category tree nodes."""

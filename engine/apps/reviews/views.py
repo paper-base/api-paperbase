@@ -6,7 +6,6 @@ from rest_framework.views import APIView
 
 from config.permissions import IsStorefrontAPIKey
 from engine.core.tenancy import get_active_store
-from engine.core.store_session import resolve_store_session
 
 from .serializers import ReviewSerializer, ReviewCreateSerializer
 from . import services
@@ -56,22 +55,20 @@ class ReviewCreateView(CreateAPIView):
         request_ctx = get_active_store(self.request)
         store = request_ctx.store
         ctx["store"] = store
-        session_ctx = resolve_store_session(self.request)
-        ctx["store_session_id"] = session_ctx.store_session_id
         return ctx
 
     def perform_create(self, serializer):
-        session_ctx = resolve_store_session(self.request)
         request_ctx = get_active_store(self.request)
         review = services.ReviewCreateService(self.request).create_review(
             store=request_ctx.store,
-            store_session_id=session_ctx.store_session_id,
             user=self.request.user if self.request.user.is_authenticated else None,
             product=serializer.validated_data["product"],
             order_public_id=serializer.validated_data["order_public_id"],
             rating=serializer.validated_data["rating"],
             title=serializer.validated_data.get("title", ""),
             body=serializer.validated_data.get("body", ""),
+            phone_proof=serializer.validated_data.get("phone") or "",
+            email_proof=serializer.validated_data.get("email") or "",
             allow_legacy_binding=bool(serializer.validated_data.get("allow_legacy_binding", False)),
         )
         serializer.instance = review

@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from django.db.models import Q
 from rest_framework.generics import ListAPIView, RetrieveAPIView
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from config.permissions import IsStorefrontAPIKey
 from engine.apps.analytics.service import meta_conversions
@@ -23,6 +24,15 @@ class StorefrontTenantMixin:
     def initial(self, request, *args, **kwargs):
         super().initial(request, *args, **kwargs)
         require_resolved_store(request)
+
+    def get_serializer_context(self):
+        ctx = super().get_serializer_context()
+        store = getattr(self.request, "store", None)
+        if store:
+            from .stock_signals import get_low_stock_threshold
+
+            ctx["low_stock_threshold"] = get_low_stock_threshold(store)
+        return ctx
 
 
 class ProductListView(StorefrontTenantMixin, ListAPIView):
@@ -130,6 +140,20 @@ class CategoryDetailView(StorefrontTenantMixin, RetrieveAPIView):
         store = require_api_key_store(request)
         slug = self.kwargs.get('slug')
         data = services.get_category_detail(store, slug, request)
+        return Response(data)
+
+
+class CatalogFiltersView(StorefrontTenantMixin, APIView):
+    """Aggregate filter metadata for product list UI (categories, attributes, brands, price range)."""
+
+    permission_classes = [IsStorefrontAPIKey]
+    authentication_classes = []
+    allow_api_key = True
+    access_scope = "storefront"
+
+    def get(self, request):
+        store = require_api_key_store(request)
+        data = services.get_catalog_filters(store)
         return Response(data)
 
 

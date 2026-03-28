@@ -59,3 +59,6 @@ SESSION_COOKIE_SECURE = False
 SESSION_COOKIE_AGE = 60 * 60 * 8
 SESSION_EXPIRE_AT_BROWSER_CLOSE = True
 
+# Tests: never call Resend; use in-memory outbox via Django mail.
+if TESTING:  # noqa: F405
+    EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"

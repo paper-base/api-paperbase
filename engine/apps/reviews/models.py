@@ -45,11 +45,6 @@ class Review(models.Model):
         blank=True,
         related_name='product_reviews',
     )
-    store_session_id = models.CharField(
-        max_length=255,
-        db_index=True,
-        help_text="Deterministic storefront session identity scoped to store.",
-    )
     allow_legacy_binding = models.BooleanField(
         default=False,
         help_text="Internal override to allow legacy/support review binding exceptions.",
@@ -76,12 +71,6 @@ class Review(models.Model):
     def clean(self):
         if not self.order_id:
             raise ValidationError({"order": "Review must reference an order."})
-        if not self.store_session_id:
-            raise ValidationError({"store_session_id": "store_session_id is required."})
-        if self.order.store_session_id != self.store_session_id:
-            raise ValidationError(
-                {"store_session_id": "Review store_session_id must match order store_session_id."}
-            )
         if self.store_id != self.product.store_id:
             raise ValidationError({"store": "Review store must match product store."})
         if self.store_id != self.order.store_id:

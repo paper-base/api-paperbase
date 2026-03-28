@@ -8,6 +8,8 @@ from rest_framework.test import APIClient
 
 from config.asgi import application
 from engine.core.store_api_key_auth import requires_tenant_api_key
+from engine.core.tenant_execution import tenant_scope_from_store
+from engine.apps.inventory.models import Inventory
 from engine.apps.notifications.models import PlatformNotification
 from engine.apps.products.models import Category, Product
 from engine.apps.stores.models import Store, StoreMembership
@@ -26,20 +28,27 @@ def make_store(name: str) -> Store:
 
 
 def make_product(store: Store, *, name: str) -> Product:
-    category = Category.objects.create(
-        store=store,
-        name=f"{name} Cat",
-        slug=f"{name.lower().replace(' ', '-')}-cat",
-    )
-    return Product.objects.create(
-        store=store,
-        category=category,
-        name=name,
-        price=10,
-        stock=5,
-        status=Product.Status.ACTIVE,
-        is_active=True,
-    )
+    with tenant_scope_from_store(store=store, reason="test fixture"):
+        category = Category.objects.create(
+            store=store,
+            name=f"{name} Cat",
+            slug=f"{name.lower().replace(' ', '-')}-cat",
+        )
+        p = Product.objects.create(
+            store=store,
+            category=category,
+            name=name,
+            price=10,
+            stock=5,
+            status=Product.Status.ACTIVE,
+            is_active=True,
+        )
+        Inventory.objects.get_or_create(
+            product=p,
+            variant=None,
+            defaults={"quantity": 5},
+        )
+    return p
 
 
 @override_settings(TENANT_API_KEY_ENFORCE=True)
@@ -114,7 +123,7 @@ class APIKeyTenantEnforcementTests(TestCase):
         self.assertFalse(requires_tenant_api_key("/api/v1/system-notifications/active/"))
         self.assertFalse(requires_tenant_api_key("/api/v1/settings/network/api-keys/"))
         self.assertTrue(requires_tenant_api_key("/api/v1/products/"))
-        self.assertTrue(requires_tenant_api_key("/api/v1/cart/"))
+        self.assertTrue(requires_tenant_api_key("/api/v1/wishlist/"))
         self.assertTrue(requires_tenant_api_key("/api/v1/support/"))
         self.assertFalse(requires_tenant_api_key("/health"))
 
@@ -245,7 +254,7 @@ class JWTExemptRoutesTests(TestCase):
         )
         self.assertEqual(regen_response.status_code, 201)
         new_key = regen_response.data["api_key"]
-        self.assertTrue(new_key.startswith("ak_live_"))
+        self.assertTrue(new_key.startswith("ak_pk_"))
 
         self.client.force_authenticate(user=None)
         old_key_response = self.client.get(

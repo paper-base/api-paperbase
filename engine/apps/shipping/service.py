@@ -157,3 +157,110 @@ def invalidate_shipping_cache(store_public_id: str) -> None:
     """Clear shipping option caches for a store."""
     cache_service.invalidate_store_resource(store_public_id, "shipping_options")
 
+
+# ---------------------------------------------------------------------------
+# Storefront: zone catalog + cart-based preview
+# ---------------------------------------------------------------------------
+
+
+def build_shipping_zones_catalog(store: Store) -> list[dict]:
+    """
+    List active zones with estimated delivery text and merged cost bands.
+
+    For each distinct (min_order_total, max_order_total) band on rates that
+    apply to the zone (and method-zone eligibility), expose the lowest price.
+    """
+    zones = ShippingZone.objects.filter(store=store, is_active=True).order_by("name")
+    out: list[dict] = []
+    for zone in zones:
+        out.append(
+            {
+                "id": zone.public_id,
+                "name": zone.name,
+                "estimated_days": zone.estimated_delivery_text or "",
+                "cost_rules": _zone_cost_rules(store, zone),
+            }
+        )
+    return out
+
+
+def _zone_cost_rules(store: Store, zone: ShippingZone) -> list[dict]:
+    best: dict[tuple[Decimal, Decimal | None], Decimal] = {}
+    rates = (
+        ShippingRate.objects.filter(
+            store=store, is_active=True, shipping_zone=zone
+        )
+        .select_related("shipping_method")
+        .order_by("price", "id")
+    )
+    for rate in rates:
+        method = rate.shipping_method
+        if not method.is_active:
+            continue
+        method_zone_ids = set(method.zones.values_list("id", flat=True))
+        if method_zone_ids and zone.id not in method_zone_ids:
+            continue
+        mn = (
+            rate.min_order_total
+            if rate.min_order_total is not None
+            else Decimal("0.00")
+        )
+        mx = rate.max_order_total
+        key = (mn, mx)
+        if key not in best or rate.price < best[key]:
+            best[key] = rate.price
+    rows: list[dict] = []
+    for (mn, mx), price in sorted(
+        best.items(),
+        key=lambda kv: (
+            kv[0][0],
+            kv[0][1] is not None,
+            kv[0][1] or Decimal("0.00"),
+        ),
+    ):
+        row = {"min_order": float(mn), "cost": float(price)}
+        if mx is not None:
+            row["max_order"] = float(mx)
+        rows.append(row)
+    return rows
+
+
+def preview_shipping_for_lines(
+    *,
+    store: Store,
+    zone_public_id: str,
+    lines: list[dict],
+) -> dict:
+    """
+    Server-side shipping quote for explicit line items and zone.
+
+    Uses PricingEngine (subtotal_after_coupon with no coupon == after bulk)
+    as the order subtotal for rate matching, consistent with checkout.
+    """
+    from django.core.exceptions import ValidationError
+
+    from engine.apps.orders.pricing import PricingEngine
+
+    zone = ShippingZone.objects.filter(
+        store=store,
+        is_active=True,
+        public_id=(zone_public_id or "").strip(),
+    ).first()
+    if zone is None:
+        raise ValidationError({"zone_id": "Unknown or inactive shipping zone."})
+
+    if not lines:
+        raise ValidationError({"items": "At least one line item is required."})
+
+    breakdown = PricingEngine.compute(
+        store=store,
+        lines=lines,
+        shipping_zone_id=zone.id,
+        shipping_method_id=None,
+    )
+    return {
+        "shipping_cost": str(breakdown.shipping_cost),
+        "estimated_days": zone.estimated_delivery_text or "",
+        "currency": store.currency,
+    }
+

@@ -23,6 +23,8 @@ class ReviewCreateSerializer(serializers.ModelSerializer):
     )
     body = serializers.CharField(min_length=5, max_length=2000, allow_blank=False)
     order_public_id = serializers.CharField(write_only=True)
+    phone = serializers.CharField(max_length=20, required=False, allow_blank=True, default="")
+    email = serializers.EmailField(required=False, allow_blank=True, default="")
     allow_legacy_binding = serializers.BooleanField(write_only=True, required=False, default=False)
 
     def __init__(self, *args, **kwargs):
@@ -40,7 +42,16 @@ class ReviewCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Review
-        fields = ['product', 'rating', 'title', 'body', 'order_public_id', 'allow_legacy_binding']
+        fields = [
+            'product',
+            'rating',
+            'title',
+            'body',
+            'order_public_id',
+            'phone',
+            'email',
+            'allow_legacy_binding',
+        ]
 
     def validate_rating(self, value):
         if value < 1 or value > 5:

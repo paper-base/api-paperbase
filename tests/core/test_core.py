@@ -13,11 +13,12 @@ from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken
 
 from engine.apps.stores.models import Store, StoreMembership
 from engine.apps.stores.services import create_store_api_key
-from engine.core.store_session import derive_store_session_id
+from engine.core.tenant_execution import tenant_scope_from_store
 from engine.core.tenancy import get_active_store
 from engine.core.ids import generate_public_id
 from engine.core.models import ActivityLog
 from engine.apps.support.models import SupportTicket
+from engine.apps.inventory.models import Inventory
 from engine.apps.products.models import Product, Category
 from engine.apps.orders.models import Order, OrderItem
 from engine.apps.shipping.models import ShippingZone
@@ -25,7 +26,6 @@ from engine.apps.orders.services import resolve_and_attach_customer
 from engine.apps.customers.models import Customer, CustomerAddress
 from engine.apps.coupons.models import BulkDiscount, Coupon, CouponUsage
 from engine.apps.coupons.services import consume_coupon_usage, validate_coupon_for_subtotal
-from engine.apps.cart.models import Cart, CartItem
 from engine.apps.wishlist.models import WishlistItem
 from engine.apps.reviews.models import Review
 from engine.apps.notifications.models import StorefrontCTA
@@ -63,10 +63,17 @@ def _make_category(store, name="Cat", slug=None):
 
 
 def _make_product(store, category, name="Product", price=10, stock=5):
-    return Product.objects.create(
-        store=store, category=category, name=name, price=price, stock=stock,
-        status=Product.Status.ACTIVE, is_active=True,
-    )
+    with tenant_scope_from_store(store=store, reason="test fixture"):
+        p = Product.objects.create(
+            store=store, category=category, name=name, price=price, stock=stock,
+            status=Product.Status.ACTIVE, is_active=True,
+        )
+        Inventory.objects.get_or_create(
+            product=p,
+            variant=None,
+            defaults={"quantity": max(0, int(stock))},
+        )
+    return p
 
 
 def _default_shipping_zone(store):
@@ -304,11 +311,6 @@ class PublicIdGenerationTests(TestCase):
         ids = {generate_public_id("product") for _ in range(1000)}
         self.assertEqual(len(ids), 1000, "Generated IDs must all be unique")
 
-    def test_generate_public_id_domain_prefix(self):
-        pid = generate_public_id("domain")
-        self.assertTrue(pid.startswith("dom_"), pid)
-        self.assertEqual(len(pid), 24)
-
     def test_generate_public_id_prefixes(self):
         expected = [
             ("user", "usr_"),
@@ -319,8 +321,7 @@ class PublicIdGenerationTests(TestCase):
             ("image", "img_"),
             ("customer", "cus_"),
             ("address", "adr_"),
-            ("cart", "crt_"),
-            ("cartitem", "cit_"),
+            ("wishlist", "wsh_"),
             ("coupon", "cpn_"),
             ("couponusage", "cpu_"),
             ("bulkdiscount", "bdk_"),
@@ -439,30 +440,41 @@ class PublicIdApiTests(TestCase):
         )
         self.assertEqual(resp.status_code, 200)
 
-    def test_cart_item_exposes_public_id(self):
+    def test_wishlist_item_exposes_public_id(self):
         cat = Category.objects.create(
             store=self.store,
             name="Test Cat",
             slug="test-cat",
         )
-        product = Product.objects.create(
-            store=self.store,
-            name="Test Product",
-            price=10,
-            category=cat,
-            stock=5,
-        )
+        with tenant_scope_from_store(store=self.store, reason="test fixture"):
+            product = Product.objects.create(
+                store=self.store,
+                name="Test Product",
+                price=10,
+                category=cat,
+                stock=5,
+            )
+            Inventory.objects.get_or_create(
+                product=product,
+                variant=None,
+                defaults={"quantity": 5},
+            )
+        self.client.force_login(self.user)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {self.api_key}")
         resp = self.client.post(
-            "/api/v1/cart/add/",
-            {"product_public_id": product.public_id, "quantity": 1},
+            "/api/v1/wishlist/add/",
+            {"product_public_id": product.public_id},
             format="json",
             HTTP_HOST="apitest.local",
-            HTTP_AUTHORIZATION=f"Bearer {self.api_key}",
         )
         self.assertEqual(resp.status_code, 201)
-        item_public_id = resp.data.get("public_id")
+        list_resp = self.client.get("/api/v1/wishlist/", HTTP_HOST="apitest.local")
+        self.assertEqual(list_resp.status_code, 200)
+        results = list_resp.data.get("results", list_resp.data)
+        self.assertEqual(len(results), 1)
+        item_public_id = results[0].get("public_id")
         self.assertIsNotNone(item_public_id)
-        self.assertTrue(str(item_public_id).startswith("cit_"))
+        self.assertTrue(str(item_public_id).startswith("wsh_"))
 
     def test_switch_store_accepts_public_id(self):
         self._authenticate()
@@ -876,30 +888,50 @@ class IdrSecurityTests(TestCase):
         )
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {resp.data['access']}")
 
-    def test_cart_item_update_requires_ownership(self):
-        """User B cannot update User A's cart item using a public_id."""
-        cart_a = Cart.objects.create(
-            user=self.user_a,
-            store=self.store,
-            store_session_id=derive_store_session_id(store_id=self.store.id, token="idor-cart-a"),
-        )
+    def test_wishlist_remove_does_not_remove_peer_wishlist(self):
+        """User B removing a product from their wishlist must not affect User A's entry."""
         cat = Category.objects.create(store=self.store, name="Cat", slug="cat")
-        product = Product.objects.create(
-            store=self.store, name="Prod", price=10, category=cat, stock=5
-        )
-        item_a = CartItem.objects.create(cart=cart_a, product=product, quantity=1)
+        with tenant_scope_from_store(store=self.store, reason="test fixture"):
+            product = Product.objects.create(
+                store=self.store, name="Prod", price=10, category=cat, stock=5
+            )
+            Inventory.objects.get_or_create(
+                product=product,
+                variant=None,
+                defaults={"quantity": 5},
+            )
+        _key_row, api_key = create_store_api_key(self.store, name="idor-wishlist")
+        for user in (self.user_a, self.user_b):
+            c = APIClient()
+            c.force_login(user)
+            c.credentials(HTTP_AUTHORIZATION=f"Bearer {api_key}")
+            r = c.post(
+                "/api/v1/wishlist/add/",
+                {"product_public_id": product.public_id},
+                format="json",
+                HTTP_HOST="sec.local",
+            )
+            self.assertEqual(r.status_code, 201, getattr(r, "data", None))
 
-        self._auth_as(self.user_b)
-        resp = self.client.patch(
-            f"/api/v1/cart/items/{item_a.public_id}/update/",
-            {"quantity": 99},
+        ca = APIClient()
+        ca.force_login(self.user_a)
+        ca.credentials(HTTP_AUTHORIZATION=f"Bearer {api_key}")
+        list_a_before = ca.get("/api/v1/wishlist/", HTTP_HOST="sec.local")
+        self.assertEqual(list_a_before.status_code, 200)
+        self.assertEqual(len(list_a_before.data.get("results", [])), 1)
+
+        cb = APIClient()
+        cb.force_login(self.user_b)
+        cb.credentials(HTTP_AUTHORIZATION=f"Bearer {api_key}")
+        rem = cb.post(
+            f"/api/v1/wishlist/remove/{product.public_id}/",
             format="json",
+            HTTP_HOST="sec.local",
         )
-        self.assertIn(
-            resp.status_code,
-            [401, 403, 404],
-            "User B should not be able to modify User A's cart item",
-        )
+        self.assertEqual(rem.status_code, 200, getattr(rem, "data", None))
+
+        list_a_after = ca.get("/api/v1/wishlist/", HTTP_HOST="sec.local")
+        self.assertEqual(len(list_a_after.data.get("results", [])), 1)
 
     def test_customer_address_requires_ownership(self):
         """User B cannot access User A's customer address."""
@@ -971,11 +1003,6 @@ class CrossTenantAdminIsolationTests(TestCase):
         self.order_b = _make_order(self.store_b, "cust-b@example.com")
         self.shared_order_a = _make_order(self.store_a, "shared@example.com", user=self.shared_user)
         self.shared_order_b = _make_order(self.store_b, "shared@example.com", user=self.shared_user)
-        self.shared_order_b.store_session_id = derive_store_session_id(
-            store_id=self.store_b.id,
-            token="review-b",
-        )
-        self.shared_order_b.save(update_fields=["store_session_id"])
         OrderItem.objects.create(order=self.shared_order_b, product=self.product_b, quantity=1, price=self.product_b.price)
 
         self.customer_a = _make_customer(self.store_a, self.admin_a)
@@ -998,30 +1025,21 @@ class CrossTenantAdminIsolationTests(TestCase):
             store=self.store_b, cta_text="CTA Store B", is_active=True
         )
 
-        self.cart_item_b = CartItem.objects.create(
-            cart=Cart.objects.create(
-                user=self.shared_user,
-                store=self.store_b,
-                store_session_id=derive_store_session_id(store_id=self.store_b.id, token="cart-b"),
-            ),
-            product=self.product_b,
-            quantity=1,
-        )
         self.wishlist_item_b = WishlistItem.objects.create(
             user=self.shared_user,
             product=self.product_b,
         )
-        self.review_b = Review.objects.create(
-            store=self.store_b,
-            product=self.product_b,
-            order=self.shared_order_b,
-            user=self.shared_user,
-            store_session_id=derive_store_session_id(store_id=self.store_b.id, token="review-b"),
-            rating=5,
-            title="Great",
-            body="Great product",
-            status=Review.Status.APPROVED,
-        )
+        with tenant_scope_from_store(store=self.store_b, reason="test fixture"):
+            self.review_b = Review.objects.create(
+                store=self.store_b,
+                product=self.product_b,
+                order=self.shared_order_b,
+                user=self.shared_user,
+                rating=5,
+                title="Great",
+                body="Great product",
+                status=Review.Status.APPROVED,
+            )
 
     def _auth_as(self, user, store):
         self.client.force_authenticate(user=user)
@@ -1082,36 +1100,14 @@ class CrossTenantAdminIsolationTests(TestCase):
         )
         self.assertIn(resp.status_code, [401, 403, 404])
 
-    def test_storefront_order_list_isolated_by_active_store(self):
-        """Storefront `/orders/my/` is scoped by API-key store and guest identity."""
-        _key_row, raw_key_a = create_store_api_key(self.store_a, name="storefront-a")
-        token = "core-session-a"
-        shared_session_id = derive_store_session_id(store_id=self.store_a.id, token=token)
-        self.shared_order_a.store_session_id = shared_session_id
-        self.shared_order_a.save(update_fields=["store_session_id"])
-        self.shared_order_b.store_session_id = derive_store_session_id(
-            store_id=self.store_b.id,
-            token=token,
-        )
-        self.shared_order_b.save(update_fields=["store_session_id"])
-        self.client.credentials(
-            HTTP_AUTHORIZATION=f"Bearer {raw_key_a}",
-            HTTP_X_STORE_SESSION_TOKEN=token,
-        )
-        resp = self.client.get("/api/v1/orders/my/")
-        self.assertEqual(resp.status_code, 200)
-        public_ids = [item.get("public_id") for item in resp.data.get("results", resp.data)]
-        self.assertIn(self.shared_order_a.public_id, public_ids)
-        self.assertNotIn(self.shared_order_b.public_id, public_ids)
-
-    def test_cart_add_cross_store_product_is_blocked(self):
+    def test_cart_routes_return_404(self):
         resp = self.client.post(
             "/api/v1/cart/add/",
             {"product_public_id": self.product_b.public_id, "quantity": 1},
             format="json",
             HTTP_HOST="admin-a.local",
         )
-        self.assertIn(resp.status_code, [401, 403, 404])
+        self.assertEqual(resp.status_code, 404)
 
     def test_wishlist_add_cross_store_product_is_blocked(self):
         resp = self.client.post(
@@ -1169,21 +1165,21 @@ class CrossTenantAdminIsolationTests(TestCase):
         self.assertIn(by_slug.status_code, [401, 403, 404])
 
     def test_cross_store_cart_access(self):
-        """Cart add/remove with Store B product from Store A context must fail."""
+        """Legacy cart routes are removed."""
         add_resp = self.client.post(
             "/api/v1/cart/add/",
             {"product_public_id": self.product_b.public_id, "quantity": 1},
             format="json",
             HTTP_HOST="admin-a.local",
         )
-        self.assertIn(add_resp.status_code, [401, 403, 404])
+        self.assertEqual(add_resp.status_code, 404)
 
         remove_resp = self.client.post(
             f"/api/v1/cart/remove-by-product/{self.product_b.public_id}/",
             format="json",
             HTTP_HOST="admin-a.local",
         )
-        self.assertIn(remove_resp.status_code, [401, 403, 404])
+        self.assertEqual(remove_resp.status_code, 404)
 
     def test_cross_store_wishlist_access(self):
         """Wishlist add/remove with Store B product from Store A context must fail."""
@@ -1222,33 +1218,6 @@ class CrossTenantAdminIsolationTests(TestCase):
             HTTP_HOST="admin-a.local",
         )
         self.assertIn(valid.status_code, [401, 403, 404], valid.data)
-
-    def test_order_list_store_isolation(self):
-        """
-        `/orders/my/` must return only active-store orders and no internal ids.
-        """
-        _key_row, raw_key = create_store_api_key(self.store_a, name="storefront-a")
-        token = "core-session-b"
-        self.shared_order_a.store_session_id = derive_store_session_id(store_id=self.store_a.id, token=token)
-        self.shared_order_a.save(update_fields=["store_session_id"])
-        self.shared_order_b.store_session_id = derive_store_session_id(
-            store_id=self.store_a.id,
-            token="other-token",
-        )
-        self.shared_order_b.save(update_fields=["store_session_id"])
-        self.client.credentials(
-            HTTP_AUTHORIZATION=f"Bearer {raw_key}",
-            HTTP_X_STORE_SESSION_TOKEN=token,
-        )
-        resp = self.client.get("/api/v1/orders/my/")
-        self.assertEqual(resp.status_code, 200)
-        rows = resp.data.get("results", resp.data)
-        ids = [row.get("public_id") for row in rows]
-        self.assertIn(self.shared_order_a.public_id, ids)
-        self.assertNotIn(self.shared_order_b.public_id, ids)
-        for row in rows:
-            self.assertIn("public_id", row)
-            self.assertNotIn("id", row)
 
     def test_invalid_public_id_returns_404(self):
         """

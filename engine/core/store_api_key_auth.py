@@ -13,7 +13,6 @@ from engine.apps.stores.services import (
     resolve_active_store_api_key,
     touch_store_api_key_last_used,
 )
-from engine.core.store_session import attach_store_session_to_response
 
 API_KEY_EXEMPT_PATHS = (
     "/api/v1/auth/",
@@ -30,17 +29,21 @@ API_KEY_EXACT_EXEMPT_PATHS = (
 # Kept for tests/documentation only; authorization is enforced via permission classes.
 STORE_FRONTEND_ROUTE_POLICY = (
     ("/api/v1/products/", {"GET"}),
+    ("/api/v1/catalog/", {"GET"}),
+    ("/api/v1/store/", {"GET"}),
     ("/api/v1/categories/", {"GET"}),
     ("/api/v1/banners/", {"GET"}),
     ("/api/v1/reviews/", {"GET", "POST"}),
-    ("/api/v1/cart/", {"GET", "POST", "PATCH"}),
     ("/api/v1/wishlist/", {"GET", "POST"}),
     ("/api/v1/shipping/options/", {"GET"}),
-    ("/api/v1/orders/direct/", {"POST"}),
+    ("/api/v1/shipping/zones/", {"GET"}),
+    ("/api/v1/shipping/preview/", {"POST"}),
     ("/api/v1/orders/initiate-checkout/", {"POST"}),
     ("/api/v1/orders/", {"POST"}),
-    ("/api/v1/orders/my/", {"GET"}),
     ("/api/v1/support/tickets/", {"POST"}),
+    ("/api/v1/pricing/", {"POST"}),
+    ("/api/v1/promotions/", {"GET"}),
+    ("/api/v1/search/", {"GET"}),
 )
 _API_KEY_VIEW_SCAN_DONE = False
 
@@ -219,6 +222,4 @@ class TenantApiKeyMiddleware(MiddlewareMixin):
         return JsonResponse({"detail": "API key cannot access this endpoint."}, status=403)
 
     def process_response(self, request: HttpRequest, response):
-        if getattr(request, "api_key", None):
-            attach_store_session_to_response(request, response)
         return response

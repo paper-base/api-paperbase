@@ -20,7 +20,7 @@ class AdminCouponSerializer(serializers.ModelSerializer):
             "discount_value",
             "min_order_value",
             "max_uses",
-            "per_user_max_uses",
+            "per_identity_max_uses",
             "times_used",
             "successful_uses",
             "reversed_uses",

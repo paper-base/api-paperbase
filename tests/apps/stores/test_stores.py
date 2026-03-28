@@ -14,8 +14,10 @@ from engine.apps.billing.services import activate_subscription
 from engine.apps.customers.models import Customer
 from engine.apps.orders.models import Order
 from engine.apps.shipping.models import ShippingZone
+from engine.apps.inventory.models import Inventory
 from engine.apps.products.models import Category, Product
 from engine.apps.stores.models import Store, StoreDeletionJob, StoreMembership, StoreSettings
+from engine.core.tenant_execution import tenant_scope_from_store
 
 
 User = get_user_model()
@@ -98,15 +100,21 @@ def _make_catalog_data(store: Store, user: User):
         name="Electronics",
         slug="electronics",
     )
-    product = Product.objects.create(
-        store=store,
-        category=cat,
-        name="Product Alpha",
-        price=10,
-        stock=5,
-        status=Product.Status.ACTIVE,
-        is_active=True,
-    )
+    with tenant_scope_from_store(store=store, reason="test fixture"):
+        product = Product.objects.create(
+            store=store,
+            category=cat,
+            name="Product Alpha",
+            price=10,
+            stock=5,
+            status=Product.Status.ACTIVE,
+            is_active=True,
+        )
+        Inventory.objects.get_or_create(
+            product=product,
+            variant=None,
+            defaults={"quantity": 5},
+        )
     zone = ShippingZone.objects.create(store=store, name="Store Zone", is_active=True)
     order = Order.objects.create(store=store, email="cust@example.com", shipping_zone=zone)
     customer = Customer.objects.create(store=store, user=user)
@@ -173,7 +181,8 @@ class DeleteStoreEndpointTests(TestCase):
             self.assertFalse(Store.objects.get(id=store.id).is_active)
 
         if job.status == StoreDeletionJob.Status.SUCCESS:
-            self.assertEqual(Order.objects.filter(store_id=store.id).count(), 0)
+            with tenant_scope_from_store(store=store, reason="test assertions"):
+                self.assertEqual(Order.objects.filter(store_id=store.id).count(), 0)
             self.assertEqual(Customer.objects.filter(store_id=store.id).count(), 0)
             self.assertEqual(StoreAnalytics.objects.filter(store_id=store.id).count(), 0)
 

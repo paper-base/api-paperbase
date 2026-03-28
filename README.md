@@ -67,8 +67,8 @@ core/
       products/            # Products, variants, attributes, images
       categories/          # (Reserved for category tree)
       inventory/           # Stock and stock movements
-      cart/                # Cart (guest + user)
-      wishlist/            # Wishlist
+      cart/                # Legacy app label (models removed; migrations only)
+      wishlist/            # Wishlist (authenticated)
       orders/              # Orders and order lifecycle
       payments/            # Payment methods and transactions (gateway-ready)
       shipping/            # Shipping zones, methods, rates
@@ -92,18 +92,13 @@ core/
 | GET | `/api/v1/products/<id>/related/` | no | Related products |
 | GET | `/api/v1/categories/` | no | Category tree (tenant-scoped) |
 | GET | `/api/v1/banners/` | no | Active store banners (tenant-scoped) |
-| **Cart & wishlist** |
-| GET | `/api/v1/cart/` | session | Get cart |
-| POST | `/api/v1/cart/add/` | session | `{"product_id": "uuid", "quantity": 1, "size": ""}` |
-| PATCH | `/api/v1/cart/items/<id>/update/` | session | `{"quantity": 2}` |
-| POST | `/api/v1/cart/items/<id>/remove/` | session | Remove item |
-| GET | `/api/v1/wishlist/` | session/JWT | List wishlist |
-| POST | `/api/v1/wishlist/add/` | session/JWT | `{"product_id": "uuid"}` |
-| POST | `/api/v1/wishlist/remove/<uuid:product_id>/` | session/JWT | Remove |
+| **Wishlist** |
+| GET | `/api/v1/wishlist/` | JWT + API key | List wishlist (session auth or JWT; not anonymous) |
+| POST | `/api/v1/wishlist/add/` | JWT + API key | `{"product_public_id": "prd_..."}` |
+| POST | `/api/v1/wishlist/remove/<product_public_id>/` | JWT + API key | Remove |
 | **Orders** |
-| POST | `/api/v1/orders/` | no | Create order from cart |
-| GET | `/api/v1/orders/my/` | JWT | My orders |
-| GET | `/api/v1/orders/<id>/` | no | Order detail (guests: `?email=...`) |
+| POST | `/api/v1/orders/` | API key | Create order from payload: `products`, shipping fields, `phone` / `email` (no server cart) |
+| GET | `/api/v1/orders/<public_id>/` | staff/JWT | Order detail (store-scoped admin) |
 | **Payments** |
 | GET | `/api/v1/payments/methods/` | no | List payment methods |
 | POST | `/api/v1/payments/initiate/` | no | Placeholder – plug in Stripe/Razorpay etc. |
@@ -121,7 +116,7 @@ core/
 | GET | `/api/v1/notifications/active/` | no | Active banner notifications |
 | POST | `/api/v1/support/tickets/` | no | Submit support ticket (tenant host / store context) |
 
-**Admin API** (staff only): `/api/v1/admin/` – stats (`support_tickets`, `supportTickets` in analytics series), analytics, branding, CRUD including `support-tickets/`, products, orders, cart, wishlist, inventory, notifications, etc.
+**Admin API** (staff only): `/api/v1/admin/` – stats (`support_tickets`, `supportTickets` in analytics series), analytics, branding, CRUD including `support-tickets/`, products, orders, wishlist, inventory, notifications, etc.
 
 ## Environment variables
 
@@ -140,7 +135,7 @@ See `.env.example` for the full list. Production requires at least:
 ## Auth
 
 - **JWT**: `POST /api/v1/auth/token/` with `username` and `password`. Use header: `Authorization: Bearer <access_token>`.
-- **Session**: Cart and wishlist support anonymous sessions; optional JWT for logged-in users.
+- **Session**: Wishlist may use session-backed login with the storefront API key; there is no anonymous guest wishlist or `X-Store-Session-Token` flow.
 
 ## Using as a template
 
