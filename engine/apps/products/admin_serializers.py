@@ -1,5 +1,7 @@
 from rest_framework import serializers
 
+from engine.core.serializers import SafeModelSerializer
+
 from .constants import MAX_PRODUCT_IMAGES_TOTAL
 from .models import (
     Category,
@@ -74,15 +76,16 @@ def ensure_unique_variant_sku(*, product: Product, base_sku: str, exclude_id: in
     return f"{sku}-{n}"
 
 
-class AdminProductImageSerializer(serializers.ModelSerializer):
-    product = serializers.SlugRelatedField(
+class AdminProductImageSerializer(SafeModelSerializer):
+    product_public_id = serializers.SlugRelatedField(
         slug_field='public_id',
         queryset=Product.objects.none(),
+        source='product',
     )
 
     class Meta:
         model = ProductImage
-        fields = ['public_id', 'product', 'image', 'order']
+        fields = ['public_id', 'product_public_id', 'image', 'order']
         read_only_fields = ['public_id']
 
     def validate(self, attrs):
@@ -107,22 +110,24 @@ class AdminProductImageSerializer(serializers.ModelSerializer):
         store_id = (self.context or {}).get("store_id")
         if store_id is not None:
             qs = Product.objects.filter(store_id=store_id)
-        self.fields["product"].queryset = qs
+        self.fields["product_public_id"].queryset = qs
 
 
-class AdminProductListSerializer(serializers.ModelSerializer):
+class AdminProductListSerializer(SafeModelSerializer):
     category_public_id = serializers.CharField(source='category.public_id', read_only=True)
     category_name = serializers.CharField(source='category.name', read_only=True)
     image_url = serializers.SerializerMethodField()
     variant_count = serializers.SerializerMethodField()
     total_stock = serializers.SerializerMethodField()
+    available_quantity = serializers.SerializerMethodField()
+    stock_source = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
         fields = [
             'public_id', 'name', 'brand', 'slug', 'price', 'original_price',
             'image_url', 'badge', 'category_public_id', 'category_name',
-            'stock', 'variant_count', 'total_stock',
+            'variant_count', 'total_stock', 'available_quantity', 'stock_source',
             'is_featured', 'is_active', 'extra_data', 'created_at',
         ]
 
@@ -151,8 +156,19 @@ class AdminProductListSerializer(serializers.ModelSerializer):
             s = obj.variants.aggregate(x=SumAgg('inventory__quantity'))['x']
         return int(s or 0)
 
+    def get_available_quantity(self, obj):
+        return self.get_total_stock(obj)
 
-class AdminProductSerializer(serializers.ModelSerializer):
+    def get_stock_source(self, obj):
+        n = getattr(obj, '_admin_variant_count', None)
+        if n is None:
+            n = obj.variants.count()
+        if n > 0:
+            return "variant_inventory_sum"
+        return "product_inventory"
+
+
+class AdminProductSerializer(SafeModelSerializer):
     images = AdminProductImageSerializer(many=True, read_only=True)
     brand = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     original_price = AllowBlankNullDecimalField(
@@ -166,6 +182,8 @@ class AdminProductSerializer(serializers.ModelSerializer):
     category_name = serializers.CharField(source='category.name', read_only=True)
     variant_count = serializers.SerializerMethodField()
     total_stock = serializers.SerializerMethodField()
+    available_quantity = serializers.SerializerMethodField()
+    stock_source = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
@@ -173,11 +191,14 @@ class AdminProductSerializer(serializers.ModelSerializer):
             'public_id', 'name', 'brand', 'slug', 'price', 'original_price',
             'image', 'badge', 'category', 'category_name',
             'description',
-            'stock', 'variant_count', 'total_stock',
+            'variant_count', 'total_stock', 'available_quantity', 'stock_source',
             'is_featured', 'is_active', 'extra_data', 'images',
             'created_at', 'updated_at',
         ]
-        read_only_fields = ['public_id', 'slug', 'stock', 'created_at', 'updated_at', 'variant_count', 'total_stock']
+        read_only_fields = [
+            'public_id', 'slug', 'created_at', 'updated_at',
+            'variant_count', 'total_stock', 'available_quantity', 'stock_source',
+        ]
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -206,6 +227,17 @@ class AdminProductSerializer(serializers.ModelSerializer):
             s = obj.variants.aggregate(x=SumAgg('inventory__quantity'))['x']
         return int(s or 0)
 
+    def get_available_quantity(self, obj):
+        return self.get_total_stock(obj)
+
+    def get_stock_source(self, obj):
+        n = getattr(obj, '_admin_variant_count', None)
+        if n is None:
+            n = obj.variants.count()
+        if n > 0:
+            return "variant_inventory_sum"
+        return "product_inventory"
+
     def validate_brand(self, value):
         if value is None:
             return None
@@ -220,7 +252,7 @@ class AdminProductSerializer(serializers.ModelSerializer):
         return super().validate(attrs)
 
 
-class AdminParentCategorySerializer(serializers.ModelSerializer):
+class AdminParentCategorySerializer(SafeModelSerializer):
     """Serializer for top-level (parent) categories in nested hierarchy."""
     child_count = serializers.SerializerMethodField()
 
@@ -236,7 +268,7 @@ class AdminParentCategorySerializer(serializers.ModelSerializer):
         return obj.children.count()
 
 
-class AdminCategorySerializer(serializers.ModelSerializer):
+class AdminCategorySerializer(SafeModelSerializer):
     """Serializer for child categories (nested under a parent)."""
     product_count = serializers.SerializerMethodField()
     parent = serializers.SlugRelatedField(
@@ -271,7 +303,7 @@ class AdminCategorySerializer(serializers.ModelSerializer):
         return obj.parent.name if obj.parent else ''
 
 
-class AdminProductAttributeValueSerializer(serializers.ModelSerializer):
+class AdminProductAttributeValueSerializer(SafeModelSerializer):
     attribute = serializers.SlugRelatedField(
         slug_field="public_id",
         queryset=ProductAttribute.objects.none(),
@@ -290,7 +322,7 @@ class AdminProductAttributeValueSerializer(serializers.ModelSerializer):
             self.fields["attribute"].queryset = ProductAttribute.objects.filter(store_id=store_id)
 
 
-class AdminProductAttributeSerializer(serializers.ModelSerializer):
+class AdminProductAttributeSerializer(SafeModelSerializer):
     values = AdminProductAttributeValueSerializer(many=True, read_only=True)
 
     class Meta:
@@ -342,7 +374,7 @@ class AdminProductAttributeSerializer(serializers.ModelSerializer):
         return super().update(instance, validated_data)
 
 
-class AdminProductVariantSerializer(serializers.ModelSerializer):
+class AdminProductVariantSerializer(SafeModelSerializer):
     """Dashboard CRUD for variants; links attribute values via attribute_value_public_ids."""
 
     sku = serializers.CharField(required=False, allow_blank=True)
@@ -352,23 +384,37 @@ class AdminProductVariantSerializer(serializers.ModelSerializer):
         default=list,
     )
     option_labels = serializers.SerializerMethodField(read_only=True)
-    inventory_quantity = serializers.SerializerMethodField(read_only=True)
+    available_quantity = serializers.SerializerMethodField(read_only=True)
+    stock_source = serializers.SerializerMethodField(read_only=True)
+    product_public_id = serializers.SlugRelatedField(
+        slug_field="public_id",
+        queryset=Product.objects.all(),
+        source="product",
+    )
 
     class Meta:
         model = ProductVariant
         fields = [
             "public_id",
-            "product",
+            "product_public_id",
             "sku",
             "price_override",
             "is_active",
             "attribute_value_public_ids",
             "option_labels",
-            "inventory_quantity",
+            "available_quantity",
+            "stock_source",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["public_id", "option_labels", "inventory_quantity", "created_at", "updated_at"]
+        read_only_fields = [
+            "public_id",
+            "option_labels",
+            "available_quantity",
+            "stock_source",
+            "created_at",
+            "updated_at",
+        ]
         # DRF auto-adds UniqueTogetherValidator for the model constraint (product, sku) and
         # enforces both fields as required on create. We generate SKU when omitted, so we
         # disable auto validators and keep our own uniqueness checks + generation.
@@ -380,7 +426,7 @@ class AdminProductVariantSerializer(serializers.ModelSerializer):
         store_id = (self.context or {}).get("store_id")
         if store_id is not None:
             qs = qs.filter(store_id=store_id)
-        self.fields["product"] = serializers.SlugRelatedField(slug_field="public_id", queryset=qs)
+        self.fields["product_public_id"].queryset = qs
 
     def get_option_labels(self, obj):
         links = (
@@ -393,11 +439,14 @@ class AdminProductVariantSerializer(serializers.ModelSerializer):
             for link in links
         ]
 
-    def get_inventory_quantity(self, obj):
+    def get_available_quantity(self, obj):
         inv = getattr(obj, "inventory", None)
         if inv is None:
             return 0
         return int(inv.quantity or 0)
+
+    def get_stock_source(self, obj):
+        return "variant_inventory"
 
     def to_representation(self, instance):
         data = super().to_representation(instance)

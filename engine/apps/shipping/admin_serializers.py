@@ -1,9 +1,10 @@
 from rest_framework import serializers
+from engine.core.serializers import SafeModelSerializer
 
 from .models import ShippingZone, ShippingMethod, ShippingRate
 
 
-class AdminShippingZoneSerializer(serializers.ModelSerializer):
+class AdminShippingZoneSerializer(SafeModelSerializer):
     class Meta:
         model = ShippingZone
         fields = [
@@ -16,7 +17,7 @@ class AdminShippingZoneSerializer(serializers.ModelSerializer):
         read_only_fields = ["public_id", "created_at", "updated_at"]
 
 
-class AdminShippingMethodSerializer(serializers.ModelSerializer):
+class AdminShippingMethodSerializer(SafeModelSerializer):
     zone_public_ids = serializers.SlugRelatedField(
         many=True,
         required=False,
@@ -40,22 +41,24 @@ class AdminShippingMethodSerializer(serializers.ModelSerializer):
         read_only_fields = ["public_id", "created_at", "updated_at"]
 
 
-class AdminShippingRateSerializer(serializers.ModelSerializer):
-    shipping_method = serializers.SlugRelatedField(
+class AdminShippingRateSerializer(SafeModelSerializer):
+    shipping_method_public_id = serializers.SlugRelatedField(
         slug_field="public_id",
         queryset=ShippingMethod.objects.all(),
+        source="shipping_method",
     )
-    shipping_zone = serializers.SlugRelatedField(
+    shipping_zone_public_id = serializers.SlugRelatedField(
         slug_field="public_id",
         queryset=ShippingZone.objects.all(),
+        source="shipping_zone",
     )
 
     class Meta:
         model = ShippingRate
         fields = [
             "public_id",
-            "shipping_method",
-            "shipping_zone",
+            "shipping_method_public_id",
+            "shipping_zone_public_id",
             "rate_type",
             "min_order_total",
             "max_order_total",

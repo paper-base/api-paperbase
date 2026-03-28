@@ -1,12 +1,13 @@
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
+from engine.core.serializers import SafeModelSerializer
 
 from .models import ActivityLog
 
 User = get_user_model()
 
 
-class ActivityActorSerializer(serializers.ModelSerializer):
+class ActivityActorSerializer(SafeModelSerializer):
     full_name = serializers.CharField(read_only=True)
 
     class Meta:
@@ -14,7 +15,7 @@ class ActivityActorSerializer(serializers.ModelSerializer):
         fields = ["public_id", "email", "full_name"]
 
 
-class AdminActivityLogSerializer(serializers.ModelSerializer):
+class AdminActivityLogSerializer(SafeModelSerializer):
     actor = ActivityActorSerializer(read_only=True)
 
     class Meta:

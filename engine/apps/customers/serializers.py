@@ -1,8 +1,9 @@
 from rest_framework import serializers
+from engine.core.serializers import SafeModelSerializer
 from .models import Customer, CustomerAddress
 
 
-class CustomerAddressSerializer(serializers.ModelSerializer):
+class CustomerAddressSerializer(SafeModelSerializer):
     class Meta:
         model = CustomerAddress
         fields = [
@@ -13,7 +14,7 @@ class CustomerAddressSerializer(serializers.ModelSerializer):
         read_only_fields = ['public_id', 'created_at']
 
 
-class CustomerProfileSerializer(serializers.ModelSerializer):
+class CustomerProfileSerializer(SafeModelSerializer):
     user_public_id = serializers.CharField(source='user.public_id', read_only=True, allow_null=True)
     addresses = CustomerAddressSerializer(many=True, read_only=True)
 
@@ -25,7 +26,7 @@ class CustomerProfileSerializer(serializers.ModelSerializer):
         ]
 
 
-class CustomerSerializer(serializers.ModelSerializer):
+class CustomerSerializer(SafeModelSerializer):
     class Meta:
         model = Customer
         fields = ['public_id', 'name', 'phone', 'email', 'address', 'total_orders']

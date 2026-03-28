@@ -10,9 +10,11 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 
 from django.conf import settings
-from django.db.models import Count, Max, Min, Prefetch, Q, Sum
+from django.db.models import Count, Max, Min, OuterRef, Prefetch, Q, Subquery, Sum
+from django.db.models.fields import PositiveIntegerField
 from django.shortcuts import get_object_or_404
 
+from engine.apps.inventory.models import Inventory
 from engine.core import cache_service
 
 from .models import (
@@ -29,6 +31,24 @@ from .serializers import (
     ProductListSerializer,
 )
 from .stock_signals import get_low_stock_threshold
+
+
+def annotate_storefront_product_stock(qs):
+    """
+    Attach variant stock aggregates and product-level Inventory.quantity (variant NULL).
+    Checkout uses Inventory as source of truth; storefront display uses the same for simple products.
+    """
+    inv_sq = Inventory.objects.filter(
+        product_id=OuterRef("pk"),
+        variant__isnull=True,
+    ).values("quantity")[:1]
+    return qs.annotate(
+        _pub_variant_count=Count("variants", filter=Q(variants__is_active=True)),
+        _pub_variant_stock_sum=Sum(
+            "variants__inventory__quantity", filter=Q(variants__is_active=True)
+        ),
+        _pub_base_inventory_qty=Subquery(inv_sq, output_field=PositiveIntegerField()),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -77,7 +97,7 @@ def set_cached_product_list(store_public_id: str, query_params, data) -> None:
 
 def build_product_list_queryset(store, query_params):
     """Build the filtered, annotated product queryset for the storefront list."""
-    qs = (
+    qs = annotate_storefront_product_stock(
         Product.objects.filter(
             store=store,
             is_active=True,
@@ -85,12 +105,6 @@ def build_product_list_queryset(store, query_params):
         )
         .select_related("category")
         .prefetch_related("images")
-        .annotate(
-            _pub_variant_count=Count("variants", filter=Q(variants__is_active=True)),
-            _pub_variant_stock_sum=Sum(
-                "variants__inventory__quantity", filter=Q(variants__is_active=True)
-            ),
-        )
     )
 
     category = query_params.get("category")
@@ -161,7 +175,7 @@ def build_product_list_queryset(store, query_params):
 
 def _serialize_related_products(store, product, request):
     threshold = get_low_stock_threshold(store)
-    qs = (
+    qs = annotate_storefront_product_stock(
         Product.objects.filter(
             is_active=True,
             status=Product.Status.ACTIVE,
@@ -171,17 +185,7 @@ def _serialize_related_products(store, product, request):
         .exclude(id=product.id)
         .select_related("category")
         .prefetch_related("images")
-        .annotate(
-            _pub_variant_count=Count(
-                "variants", filter=Q(variants__is_active=True)
-            ),
-            _pub_variant_stock_sum=Sum(
-                "variants__inventory__quantity",
-                filter=Q(variants__is_active=True),
-            ),
-        )
-        .order_by("-created_at", "id")[:4]
-    )
+    ).order_by("-created_at", "id")[:4]
     return ProductListSerializer(
         qs,
         many=True,
@@ -189,23 +193,30 @@ def _serialize_related_products(store, product, request):
     ).data
 
 
-def _variant_matrix_for_product(product) -> dict[str, list[dict[str, str]]]:
-    matrix: dict[str, list[dict[str, str]]] = {}
+def _variant_matrix_for_product(product) -> dict[str, dict]:
+    """Per attribute slug: metadata + distinct values (slug remains the stable filter key)."""
+    matrix: dict[str, dict] = {}
     seen: dict[str, set[str]] = {}
     for variant in product.variants.all():
         if not variant.is_active:
             continue
-        for link in variant.attribute_values.all():
+        for link in variant.attribute_values.select_related("attribute_value__attribute").all():
             av = link.attribute_value
-            slug = av.attribute.slug
-            if slug not in seen:
+            attr = av.attribute
+            slug = attr.slug
+            if slug not in matrix:
+                matrix[slug] = {
+                    "slug": slug,
+                    "attribute_public_id": attr.public_id,
+                    "attribute_name": attr.name,
+                    "values": [],
+                }
                 seen[slug] = set()
-                matrix[slug] = []
             pid = av.public_id
             if pid in seen[slug]:
                 continue
             seen[slug].add(pid)
-            matrix[slug].append({"value": av.value, "id": pid})
+            matrix[slug]["values"].append({"value_public_id": pid, "value": av.value})
     return matrix
 
 
@@ -237,7 +248,7 @@ def get_product_detail(store, identifier: str, request):
                 ),
             )
         )
-        qs = (
+        qs = annotate_storefront_product_stock(
             Product.objects.filter(
                 store=store,
                 is_active=True,
@@ -246,15 +257,6 @@ def get_product_detail(store, identifier: str, request):
             .select_related("category")
             .prefetch_related(
                 "images", Prefetch("variants", queryset=active_variant_qs)
-            )
-            .annotate(
-                _pub_variant_count=Count(
-                    "variants", filter=Q(variants__is_active=True)
-                ),
-                _pub_variant_stock_sum=Sum(
-                    "variants__inventory__quantity",
-                    filter=Q(variants__is_active=True),
-                ),
             )
         )
         if identifier.startswith("prd_"):
@@ -402,9 +404,11 @@ def _fetch_catalog_filters_payload(store) -> dict:
     categories = (
         Category.objects.filter(store=store, is_active=True, id__in=cat_ids)
         .order_by("order", "name")
-        .only("public_id", "name")
+        .only("public_id", "name", "slug")
     )
-    categories_data = [{"id": c.public_id, "name": c.name} for c in categories]
+    categories_data = [
+        {"public_id": c.public_id, "name": c.name, "slug": c.slug} for c in categories
+    ]
 
     brands = list(
         base_p.exclude(brand__isnull=True)
@@ -456,7 +460,7 @@ def _fetch_catalog_filters_payload(store) -> dict:
             if v.public_id in seen:
                 continue
             seen.add(v.public_id)
-            rows.append({"id": v.public_id, "value": v.value})
+            rows.append({"public_id": v.public_id, "value": v.value})
         if rows:
             attributes_out[attr.slug] = rows
 

@@ -5,7 +5,6 @@ from django.db.models import F
 from rest_framework.exceptions import ValidationError
 
 from engine.apps.customers.models import Customer
-from engine.apps.coupons.services import coupon_identity_from_order, reverse_coupon_usage_for_order
 from django.db import IntegrityError
 
 from engine.apps.orders.models import Order, OrderStatusHistory, StockRestoreLog
@@ -127,23 +126,17 @@ def recalculate_order_totals(order: Order) -> Order:
                 "unit_price": Decimal(str(item.price)),
             }
         )
-    c_phone, c_email = coupon_identity_from_order(order)
     breakdown = PricingEngine.compute(
         store=order.store,
         lines=pricing_lines,
-        coupon_code=order.coupon_code,
-        coupon_phone=c_phone,
-        coupon_email=c_email,
-        shipping_zone_id=order.shipping_zone_id,
-        shipping_method_id=order.shipping_method_id,
+        shipping_zone_pk=order.shipping_zone_id,
+        shipping_method_pk=order.shipping_method_id,
     )
     order.subtotal = breakdown.base_subtotal
     order.shipping_cost = breakdown.shipping_cost
     order.shipping_zone = breakdown.shipping_zone
     order.shipping_method = breakdown.shipping_method
     order.shipping_rate = breakdown.shipping_rate
-    order.discount_amount = breakdown.bulk_discount_total + breakdown.coupon_discount
-    order.coupon = breakdown.coupon
     order.total = breakdown.final_total
     order.save(
         update_fields=[
@@ -152,8 +145,6 @@ def recalculate_order_totals(order: Order) -> Order:
             "shipping_zone",
             "shipping_method",
             "shipping_rate",
-            "discount_amount",
-            "coupon",
             "total",
         ]
     )
@@ -263,7 +254,6 @@ def transition_order_status(
                 if restore_log.quantity != int(item.quantity):
                     restore_log.quantity = int(item.quantity)
                     restore_log.save(update_fields=["quantity"])
-            reverse_coupon_usage_for_order(order=locked, reason=to_status)
 
         locked.status = to_status
         locked.save(update_fields=["status", "updated_at"])

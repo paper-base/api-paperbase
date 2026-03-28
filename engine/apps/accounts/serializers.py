@@ -5,6 +5,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils.encoding import force_bytes, force_str
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from rest_framework import serializers
+from engine.core.serializers import SafeModelSerializer
 
 from engine.apps.emails.tasks import send_email_task  # Backwards-compatible test patch target.
 from engine.apps.stores.models import StoreMembership
@@ -91,7 +92,7 @@ class RegisterSerializer(serializers.Serializer):
 # Me / Profile
 # ---------------------------------------------------------------------------
 
-class StoreSummarySerializer(serializers.ModelSerializer):
+class StoreSummarySerializer(SafeModelSerializer):
     role = serializers.CharField(source="get_role_display")
     store_public_id = serializers.CharField(source="store.public_id", read_only=True)
 
@@ -100,7 +101,7 @@ class StoreSummarySerializer(serializers.ModelSerializer):
         fields = ["store_public_id", "role"]
 
 
-class MeSerializer(serializers.ModelSerializer):
+class MeSerializer(SafeModelSerializer):
     full_name = serializers.CharField(read_only=True)
     stores = serializers.SerializerMethodField()
     active_store_public_id = serializers.SerializerMethodField()

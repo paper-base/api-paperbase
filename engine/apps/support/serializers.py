@@ -1,9 +1,11 @@
 from rest_framework import serializers
 
+from engine.core.serializers import SafeModelSerializer
+
 from .models import SupportTicket, SupportTicketAttachment
 
 
-class SupportTicketCreateSerializer(serializers.ModelSerializer):
+class SupportTicketCreateSerializer(SafeModelSerializer):
     attachments = serializers.ListField(
         child=serializers.FileField(),
         required=False,
@@ -33,7 +35,22 @@ class SupportTicketCreateSerializer(serializers.ModelSerializer):
         return ticket
 
 
-class SupportTicketPublicResponseSerializer(serializers.ModelSerializer):
+class SupportTicketPublicResponseSerializer(SafeModelSerializer):
+    """Echo submitted storefront-safe fields; never internal_notes."""
+
     class Meta:
         model = SupportTicket
-        fields = ["public_id", "created_at", "status"]
+        fields = [
+            "public_id",
+            "name",
+            "email",
+            "phone",
+            "subject",
+            "message",
+            "order_number",
+            "category",
+            "priority",
+            "status",
+            "created_at",
+            "updated_at",
+        ]

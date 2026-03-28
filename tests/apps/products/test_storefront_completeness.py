@@ -41,6 +41,9 @@ def test_catalog_filters_store_public_and_search():
     body = fr.json()
     assert set(body.keys()) >= {"categories", "attributes", "brands", "price_range"}
     assert body["price_range"]["min"] <= body["price_range"]["max"]
+    assert body["categories"]
+    cat0 = body["categories"][0]
+    assert set(cat0.keys()) >= {"public_id", "name", "slug"}
 
     sr = client.get("/api/v1/store/public/")
     assert sr.status_code == 200
@@ -93,6 +96,8 @@ def test_shipping_zones_and_product_detail_enrichment():
     assert len(zones) >= 1
     assert zones[0]["estimated_days"] == "1-2"
     assert zones[0]["cost_rules"]
+    assert zones[0]["is_active"] is True
+    assert "created_at" in zones[0] and "updated_at" in zones[0]
 
     dr = client.get(f"/api/v1/products/{p.public_id}/")
     assert dr.status_code == 200
@@ -101,5 +106,13 @@ def test_shipping_zones_and_product_detail_enrichment():
     assert detail["breadcrumbs"][-1] == "Ship Product"
     assert "related_products" in detail
     assert "variant_matrix" in detail
+    assert "sku" in detail and "stock_tracking" in detail
+    assert "category_public_id" in detail
+    assert "category_slug" in detail
+    assert "category_name" in detail
+    assert "image_url" in detail
+    assert "category" not in detail
     assert detail["stock_status"] in ("in_stock", "low", "out_of_stock")
     assert "available_quantity" in detail
+    assert "stock_source" in detail
+    assert "stock" not in detail

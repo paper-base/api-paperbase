@@ -1,5 +1,6 @@
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
+from engine.core.serializers import SafeModelSerializer
 
 from engine.apps.billing.feature_gate import has_feature
 
@@ -9,7 +10,7 @@ from .services import ORDER_EMAIL_NOTIFICATIONS_FEATURE
 User = get_user_model()
 
 
-class StoreSettingsSerializer(serializers.ModelSerializer):
+class StoreSettingsSerializer(SafeModelSerializer):
     class Meta:
         model = StoreSettings
         fields = [
@@ -63,7 +64,7 @@ class StoreSettingsSerializer(serializers.ModelSerializer):
         return attrs
 
 
-class StoreSerializer(serializers.ModelSerializer):
+class StoreSerializer(SafeModelSerializer):
     settings = StoreSettingsSerializer(read_only=True)
 
     class Meta:
@@ -83,7 +84,7 @@ class StoreSerializer(serializers.ModelSerializer):
         read_only_fields = ["public_id", "created_at", "updated_at", "settings"]
 
 
-class StoreMembershipSerializer(serializers.ModelSerializer):
+class StoreMembershipSerializer(SafeModelSerializer):
     user_public_id = serializers.CharField(source="user.public_id", read_only=True)
     user_email = serializers.EmailField(source="user.email", read_only=True)
     store_public_id = serializers.CharField(source="store.public_id", read_only=True)

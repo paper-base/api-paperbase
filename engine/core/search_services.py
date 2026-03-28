@@ -41,6 +41,7 @@ def _search_products(query: str, store: Store, limit: int) -> list[SearchResultI
     qs = Product.objects.select_related("category").filter(
         store=store,
         is_active=True,
+        status=Product.Status.ACTIVE,
     )
     if _product_supports_is_deleted():
         qs = qs.filter(is_deleted=False)

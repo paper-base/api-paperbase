@@ -119,12 +119,12 @@ def test_api_key_can_create_order_valid_payload():
     client = _api_key_client(api_key)
 
     payload = {
-        "shipping_zone": zone.public_id,
+        "shipping_zone_public_id": zone.public_id,
         "shipping_name": "Alice",
         "phone": "01712345678",
         "email": "alice@example.com",
         "shipping_address": "Dhaka",
-        "products": [{"public_id": product.public_id, "quantity": 2}],
+        "products": [{"product_public_id": product.public_id, "quantity": 2}],
     }
     response = client.post("/api/v1/orders/", payload, format="json")
 
@@ -144,12 +144,12 @@ def test_api_key_order_with_fake_price_field_fails():
     client = _api_key_client(api_key)
 
     payload = {
-        "shipping_zone": zone.public_id,
+        "shipping_zone_public_id": zone.public_id,
         "shipping_name": "Alice",
         "phone": "01712345678",
         "email": "alice@example.com",
         "shipping_address": "Dhaka",
-        "products": [{"public_id": product.public_id, "quantity": 2, "price": "1.00"}],
+        "products": [{"product_public_id": product.public_id, "quantity": 2, "price": "1.00"}],
     }
     response = client.post("/api/v1/orders/", payload, format="json")
 
@@ -166,12 +166,12 @@ def test_api_key_order_with_other_store_product_fails():
     client = _api_key_client(api_key_a)
 
     payload = {
-        "shipping_zone": zone_a.public_id,
+        "shipping_zone_public_id": zone_a.public_id,
         "shipping_name": "Alice",
         "phone": "01712345678",
         "email": "alice@example.com",
         "shipping_address": "Dhaka",
-        "products": [{"public_id": product_b.public_id, "quantity": 1}],
+        "products": [{"product_public_id": product_b.public_id, "quantity": 1}],
     }
     response = client.post("/api/v1/orders/", payload, format="json")
 
@@ -318,31 +318,31 @@ def test_order_payload_edge_cases_fail_safely():
     client = _api_key_client(api_key)
 
     base_payload = {
-        "shipping_zone": zone.public_id,
+        "shipping_zone_public_id": zone.public_id,
         "shipping_name": "Edge User",
         "phone": "01712345678",
         "email": "edge@example.com",
         "shipping_address": "Address",
     }
 
-    negative_qty = {**base_payload, "products": [{"public_id": product.public_id, "quantity": -1}]}
+    negative_qty = {**base_payload, "products": [{"product_public_id": product.public_id, "quantity": -1}]}
     assert client.post("/api/v1/orders/", negative_qty, format="json").status_code == 400
 
-    huge_qty = {**base_payload, "products": [{"public_id": product.public_id, "quantity": 999999}]}
+    huge_qty = {**base_payload, "products": [{"product_public_id": product.public_id, "quantity": 999999}]}
     assert client.post("/api/v1/orders/", huge_qty, format="json").status_code == 400
 
-    sql_like_qty = {**base_payload, "products": [{"public_id": product.public_id, "quantity": "1 OR 1=1"}]}
+    sql_like_qty = {**base_payload, "products": [{"product_public_id": product.public_id, "quantity": "1 OR 1=1"}]}
     assert client.post("/api/v1/orders/", sql_like_qty, format="json").status_code == 400
 
     hidden_fields = {
         **base_payload,
-        "products": [{"public_id": product.public_id, "quantity": 1}],
+        "products": [{"product_public_id": product.public_id, "quantity": 1}],
         "total": "0.01",
         "discount": "999",
     }
     assert client.post("/api/v1/orders/", hidden_fields, format="json").status_code == 400
 
-    missing_required = {"products": [{"public_id": product.public_id, "quantity": 1}]}
+    missing_required = {"products": [{"product_public_id": product.public_id, "quantity": 1}]}
     assert client.post("/api/v1/orders/", missing_required, format="json").status_code == 400
 
 
@@ -353,12 +353,12 @@ def test_api_key_can_create_review_valid_payload():
     _key_row, api_key = create_store_api_key(store, name="frontend")
     client = _api_key_client(api_key)
     create_order_payload = {
-        "shipping_zone": _make_zone(store).public_id,
+        "shipping_zone_public_id": _make_zone(store).public_id,
         "shipping_name": "Alice",
         "phone": "01712345678",
         "email": "alice@example.com",
         "shipping_address": "Dhaka",
-        "products": [{"public_id": product.public_id, "quantity": 1}],
+        "products": [{"product_public_id": product.public_id, "quantity": 1}],
     }
     order_response = client.post(
         "/api/v1/orders/",
@@ -368,7 +368,7 @@ def test_api_key_can_create_review_valid_payload():
     assert order_response.status_code == 201
 
     payload = {
-        "product": product.public_id,
+        "product_public_id": product.public_id,
         "order_public_id": order_response.data["public_id"],
         "phone": "01712345678",
         "email": "alice@example.com",
@@ -392,7 +392,7 @@ def test_api_key_review_invalid_payload_fails():
     client = _api_key_client(api_key)
 
     short_body = {
-        "product": product.public_id,
+        "product_public_id": product.public_id,
         "order_public_id": "ord_invalid",
         "rating": 4,
         "title": "Bad",
@@ -416,12 +416,12 @@ def test_api_key_review_duplicate_by_guest_is_blocked():
     _key_row, api_key = create_store_api_key(store, name="frontend")
     client = _api_key_client(api_key)
     create_order_payload = {
-        "shipping_zone": _make_zone(store).public_id,
+        "shipping_zone_public_id": _make_zone(store).public_id,
         "shipping_name": "Alice",
         "phone": "01712345678",
         "email": "alice@example.com",
         "shipping_address": "Dhaka",
-        "products": [{"public_id": product.public_id, "quantity": 1}],
+        "products": [{"product_public_id": product.public_id, "quantity": 1}],
     }
     order_response = client.post(
         "/api/v1/orders/",
@@ -430,7 +430,7 @@ def test_api_key_review_duplicate_by_guest_is_blocked():
     )
     assert order_response.status_code == 201
     payload = {
-        "product": product.public_id,
+        "product_public_id": product.public_id,
         "order_public_id": order_response.data["public_id"],
         "phone": "01712345678",
         "email": "alice@example.com",
@@ -454,12 +454,12 @@ def test_api_key_review_wrong_phone_proof_is_blocked():
     client = _api_key_client(api_key)
 
     order_payload = {
-        "shipping_zone": zone.public_id,
+        "shipping_zone_public_id": zone.public_id,
         "shipping_name": "Alice",
         "phone": "01712345678",
         "email": "alice@example.com",
         "shipping_address": "Dhaka",
-        "products": [{"public_id": product.public_id, "quantity": 1}],
+        "products": [{"product_public_id": product.public_id, "quantity": 1}],
     }
     order_response = client.post(
         "/api/v1/orders/",
@@ -469,7 +469,7 @@ def test_api_key_review_wrong_phone_proof_is_blocked():
     assert order_response.status_code == 201
 
     review_payload = {
-        "product": product.public_id,
+        "product_public_id": product.public_id,
         "order_public_id": order_response.data["public_id"],
         "phone": "01799999999",
         "email": "alice@example.com",
@@ -512,12 +512,12 @@ def test_admin_override_allows_legacy_review_binding(settings):
     )
 
     order_payload = {
-        "shipping_zone": zone.public_id,
+        "shipping_zone_public_id": zone.public_id,
         "shipping_name": "Alice",
         "phone": "01712345678",
         "email": "alice@example.com",
         "shipping_address": "Dhaka",
-        "products": [{"public_id": product.public_id, "quantity": 1}],
+        "products": [{"product_public_id": product.public_id, "quantity": 1}],
     }
     order_response = client.post(
         "/api/v1/orders/",
@@ -527,7 +527,7 @@ def test_admin_override_allows_legacy_review_binding(settings):
     assert order_response.status_code == 201
 
     review_payload = {
-        "product": product.public_id,
+        "product_public_id": product.public_id,
         "order_public_id": order_response.data["public_id"],
         "allow_legacy_binding": True,
         "rating": 5,
@@ -591,12 +591,12 @@ def test_internal_override_cannot_be_triggered_by_header_alone(settings):
     client.force_authenticate(user=non_staff)
 
     order_payload = {
-        "shipping_zone": zone.public_id,
+        "shipping_zone_public_id": zone.public_id,
         "shipping_name": "Alice",
         "phone": "01712345678",
         "email": "alice@example.com",
         "shipping_address": "Dhaka",
-        "products": [{"public_id": product.public_id, "quantity": 1}],
+        "products": [{"product_public_id": product.public_id, "quantity": 1}],
     }
     order_response = client.post(
         "/api/v1/orders/",
@@ -606,7 +606,7 @@ def test_internal_override_cannot_be_triggered_by_header_alone(settings):
     assert order_response.status_code == 201
 
     review_payload = {
-        "product": product.public_id,
+        "product_public_id": product.public_id,
         "order_public_id": order_response.data["public_id"],
         "allow_legacy_binding": True,
         "rating": 5,
@@ -649,12 +649,12 @@ def test_review_override_enforced_by_central_policy(settings, monkeypatch):
     )
 
     order_payload = {
-        "shipping_zone": zone.public_id,
+        "shipping_zone_public_id": zone.public_id,
         "shipping_name": "Alice",
         "phone": "01712345678",
         "email": "alice@example.com",
         "shipping_address": "Dhaka",
-        "products": [{"public_id": product.public_id, "quantity": 1}],
+        "products": [{"product_public_id": product.public_id, "quantity": 1}],
     }
     order_response = client.post(
         "/api/v1/orders/",
@@ -665,7 +665,7 @@ def test_review_override_enforced_by_central_policy(settings, monkeypatch):
 
     monkeypatch.setattr(review_services, "can_override_review", lambda request, action_context: False)
     review_payload = {
-        "product": product.public_id,
+        "product_public_id": product.public_id,
         "order_public_id": order_response.data["public_id"],
         "allow_legacy_binding": True,
         "rating": 5,

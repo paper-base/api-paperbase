@@ -71,6 +71,17 @@ You are a senior full-stack engineer working inside a production-grade, multi-te
   - `id` → internal database key (NEVER expose externally)
   - `public_id` → external reference (ALWAYS used in APIs, URLs, frontend)
 
+- Public HTTP API contract (MANDATORY):
+  - External entity references use **only** `public_id` on the resource itself or **`*_public_id`** fields (e.g. `product_public_id`, `shipping_zone_public_id`). Do not expose Django FK names like `product_id`, `variant_id`, or `zone_id` as API input/output keys.
+  - Do not accept legacy aliases for the same concept (one canonical name per field).
+  - Serializers that expose model data MUST inherit from `SafeModelSerializer` (see `engine.core.serializers`) so `Meta.fields` cannot accidentally include internal `"id"` unless explicitly opted in with `allow_id = True`.
+
+- Stock surfaced to clients:
+  - Storefront product payloads expose **`available_quantity`**, **`total_stock`**, and **`stock_source`** only (not raw `Product.stock`, which remains an internal cache synchronized from inventory).
+
+- Pricing:
+  - **PricingEngine** is the single source of truth for cart totals (merchandise line subtotals, then shipping). Use **`POST /api/v1/pricing/breakdown/`** (and admin **`POST /api/v1/admin/orders/pricing-preview/`**) with cart `items` for server-side totals.
+
 - NEVER expose internal IDs anywhere outside backend
 
 - All queries MUST:
@@ -120,7 +131,7 @@ You are a senior full-stack engineer working inside a production-grade, multi-te
 - Use existing state management only:
   - Do NOT introduce new state libraries
 
-- Use `public_id` when interacting with backend
+- Use `public_id` / `*_public_id` only when interacting with backend APIs and when typing client state (never mirror internal DB `id` or ambiguous `*_id` names for external references)
 
 - Follow existing:
   - API integration patterns
@@ -173,7 +184,7 @@ You are a senior full-stack engineer working inside a production-grade, multi-te
 - Write clean, maintainable, and production-quality code
 - Keep changes minimal and focused
 - Ensure all changes are predictable and safe
-- Maintain backward compatibility unless explicitly instructed otherwise
+- Maintain backward compatibility unless explicitly instructed otherwise (intentional contract freezes may override this for public API field names)
 
 ---
 
@@ -191,3 +202,14 @@ All changes must respect:
 - Tenant isolation
 - Existing patterns
 - System consistency
+
+---
+
+# =========================
+# CONTRACT VERIFICATION (MANUAL / CI)
+# =========================
+After API contract changes, confirm:
+- Storefront order create body uses `shipping_zone_public_id`, `shipping_method_public_id`, and each line item uses `product_public_id` (not `public_id` / `product_id`).
+- Order serializers expose line `product_public_id` (string), not nested product objects mixed with strings across endpoints.
+- Order responses expose `subtotal`, `shipping_cost`, and `total` (and optional `pricing_snapshot` with the same pricing engine shape).
+- No `GET`/`POST` storefront product payload includes a top-level `stock` field; use `stock_source` (not `total_stock_source`) on list/detail serializers.

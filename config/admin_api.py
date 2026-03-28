@@ -18,6 +18,7 @@ from engine.apps.orders.admin_serializers import AdminOrderListSerializer
 from engine.apps.billing.feature_gate import require_feature
 from engine.apps.products.models import Product, Category
 from engine.apps.support.models import SupportTicket
+from engine.apps.customers.models import Customer
 from engine.apps.notifications.models import StorefrontCTA
 from engine.apps.analytics.models import StoreDashboardStatsSnapshot
 
@@ -147,16 +148,22 @@ class DashboardStatsOverviewView(APIView):
             created_at__date__gte=start_date,
             created_at__date__lte=end_date,
         )
+        customer_qs = Customer.objects.filter(
+            created_at__date__gte=start_date,
+            created_at__date__lte=end_date,
+        )
 
         if store:
             order_qs = order_qs.filter(store=store)
             product_qs = product_qs.filter(store=store)
             support_ticket_qs = support_ticket_qs.filter(store=store)
+            customer_qs = customer_qs.filter(store=store)
 
         summary = {
             "totalOrders": order_qs.count(),
             "totalProducts": product_qs.count(),
             "totalSupportTickets": support_ticket_qs.count(),
+            "totalCustomers": customer_qs.count(),
         }
 
         series_map: dict[str, dict] = {}
@@ -175,6 +182,7 @@ class DashboardStatsOverviewView(APIView):
                         "orders": 0,
                         "products": 0,
                         "supportTickets": 0,
+                        "customers": 0,
                     },
                 )
                 entry[key] = row["total"]
@@ -182,6 +190,7 @@ class DashboardStatsOverviewView(APIView):
         _update_series(order_qs, "orders")
         _update_series(product_qs, "products")
         _update_series(support_ticket_qs, "supportTickets")
+        _update_series(customer_qs, "customers")
 
         series = sorted(series_map.values(), key=lambda x: x["label"])
 
@@ -201,6 +210,7 @@ class DashboardStatsOverviewView(APIView):
                         "orders": 0,
                         "products": 0,
                         "supportTickets": 0,
+                        "customers": 0,
                     }
                 filled_series.append(entry)
                 current += timedelta(days=1)
@@ -327,15 +337,21 @@ class DashboardAnalyticsView(APIView):
             created_at__date__gte=start_date,
             created_at__date__lte=end_date,
         )
+        customer_qs = Customer.objects.filter(
+            created_at__date__gte=start_date,
+            created_at__date__lte=end_date,
+        )
 
         order_qs = order_qs.filter(store=store)
         product_qs = product_qs.filter(store=store)
         support_ticket_qs = support_ticket_qs.filter(store=store)
+        customer_qs = customer_qs.filter(store=store)
 
         summary = {
             'totalOrders': order_qs.count(),
             'totalProducts': product_qs.count(),
             'totalSupportTickets': support_ticket_qs.count(),
+            'totalCustomers': customer_qs.count(),
         }
 
         # Build time-series across all entities keyed by bucket label.
@@ -358,6 +374,7 @@ class DashboardAnalyticsView(APIView):
                         'orders': 0,
                         'products': 0,
                         'supportTickets': 0,
+                        'customers': 0,
                     },
                 )
                 entry[key] = row['total']
@@ -365,6 +382,7 @@ class DashboardAnalyticsView(APIView):
         _update_series(order_qs, 'orders')
         _update_series(product_qs, 'products')
         _update_series(support_ticket_qs, 'supportTickets')
+        _update_series(customer_qs, 'customers')
 
         # Sort existing buckets.
         series = sorted(series_map.values(), key=lambda x: x['label'])
@@ -385,6 +403,7 @@ class DashboardAnalyticsView(APIView):
                         'orders': 0,
                         'products': 0,
                         'supportTickets': 0,
+                        'customers': 0,
                     }
                 filled_series.append(entry)
                 current += timedelta(days=1)

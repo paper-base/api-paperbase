@@ -176,7 +176,7 @@ class ProductSearchView(StorefrontTenantMixin, ListAPIView):
         if not query or len(query) < 2:
             return Product.objects.none()
 
-        qs = (
+        qs = services.annotate_storefront_product_stock(
             Product.objects.filter(
                 is_active=True, status=Product.Status.ACTIVE, store=store
             )

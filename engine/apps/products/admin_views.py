@@ -393,9 +393,9 @@ class AdminProductVariantViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet
         if not ctx.store:
             return qs.none()
         qs = qs.filter(product__store=ctx.store)
-        product_id = self.request.query_params.get("product")
-        if product_id:
-            qs = qs.filter(product__public_id=product_id)
+        product_public_id = self.request.query_params.get("product_public_id")
+        if product_public_id:
+            qs = qs.filter(product__public_id=product_public_id)
         return qs.order_by("product__public_id", "sku", "id")
 
     def get_serializer_context(self):

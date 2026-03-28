@@ -59,8 +59,8 @@ class ShippingZonesView(APIView):
 
 class ShippingPreviewView(APIView):
     """
-    POST { "zone_id": "szn_...", "items": [{ "product_public_id", "quantity", "variant_public_id"? }] }
-    Stateless quote using the same pricing engine as checkout (bulk; no coupon in preview).
+    POST { "zone_public_id": "szn_...", "items": [...] }
+    Stateless quote using the same pricing engine as checkout (merchandise subtotal + shipping).
     """
 
     permission_classes = [IsStorefrontAPIKey]
@@ -74,11 +74,11 @@ class ShippingPreviewView(APIView):
 
     def post(self, request):
         store = require_api_key_store(request)
-        zone_id = (request.data.get("zone_id") or "").strip()
+        zone_public_id = (request.data.get("zone_public_id") or "").strip()
         items = request.data.get("items") or []
-        if not zone_id:
+        if not zone_public_id:
             return Response(
-                {"detail": "zone_id is required."},
+                {"zone_public_id": ["This field is required."]},
                 status=400,
             )
         if not isinstance(items, list) or not items:
@@ -118,7 +118,7 @@ class ShippingPreviewView(APIView):
 
         try:
             payload = preview_shipping_for_lines(
-                store=store, zone_public_id=zone_id, lines=pricing_lines
+                store=store, zone_public_id=zone_public_id, lines=pricing_lines
             )
         except ValidationError as exc:
             if hasattr(exc, "message_dict") and exc.message_dict:

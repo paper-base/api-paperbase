@@ -4,16 +4,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from config.permissions import IsStorefrontAPIKey
+from engine.core.media_urls import absolute_media_url
 from engine.core.tenancy import require_api_key_store, require_resolved_store
-
-
-def _absolute_media_url(request, file_field) -> str | None:
-    if not file_field or not getattr(file_field, "name", None):
-        return None
-    url = file_field.url
-    if request:
-        return request.build_absolute_uri(url)
-    return url
 
 
 class StorePublicView(APIView):
@@ -60,7 +52,7 @@ class StorePublicView(APIView):
 
         payload = {
             "store_name": store.name,
-            "logo_url": _absolute_media_url(request, store.logo),
+            "logo_url": absolute_media_url(store.logo, request),
             "currency": store.currency,
             "currency_symbol": store.currency_symbol or "",
             "country": public_extra.get("country") or "",

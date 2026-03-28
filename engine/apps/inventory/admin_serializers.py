@@ -1,8 +1,9 @@
 from rest_framework import serializers
+from engine.core.serializers import SafeModelSerializer
 from .models import Inventory, StockMovement
 
 
-class StockMovementSerializer(serializers.ModelSerializer):
+class StockMovementSerializer(SafeModelSerializer):
     actor_public_id = serializers.CharField(source='actor.public_id', read_only=True, allow_null=True)
 
     class Meta:
@@ -20,7 +21,7 @@ class StockMovementSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
-class InventoryListSerializer(serializers.ModelSerializer):
+class InventoryListSerializer(SafeModelSerializer):
     product_public_id = serializers.CharField(source='product.public_id', read_only=True)
     product_name = serializers.CharField(source='product.name', read_only=True)
     variant_public_id = serializers.CharField(source='variant.public_id', read_only=True, allow_null=True)

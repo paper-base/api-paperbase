@@ -3,6 +3,8 @@ from decimal import Decimal
 from rest_framework import serializers
 
 from django.core.exceptions import ValidationError as DjangoValidationError
+
+from engine.core.serializers import SafeModelSerializer
 from django.db import transaction
 
 from engine.apps.products.models import Product, ProductVariant
@@ -39,9 +41,9 @@ class StoreScopedProductSlugRelatedField(serializers.SlugRelatedField):
         )
 
 
-class AdminOrderItemSerializer(serializers.ModelSerializer):
+class AdminOrderItemSerializer(SafeModelSerializer):
     # Expose public_id only — do NOT expose product UUID/integer PK
-    product = serializers.SerializerMethodField()
+    product_public_id = serializers.SerializerMethodField()
     product_name = serializers.SerializerMethodField()
     product_brand = serializers.SerializerMethodField()
     status = serializers.SerializerMethodField()
@@ -55,14 +57,14 @@ class AdminOrderItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = OrderItem
         fields = [
-            'public_id', 'product', 'product_name', 'product_brand', 'product_image',
+            'public_id', 'product_public_id', 'product_name', 'product_brand', 'product_image',
             'status',
             'variant_public_id', 'variant_sku', 'variant_inventory_quantity', 'variant_option_labels',
             'quantity', 'price', 'original_price',
         ]
         read_only_fields = ['public_id']
 
-    def get_product(self, obj):
+    def get_product_public_id(self, obj):
         return obj.product.public_id if obj.product else None
 
     def get_product_name(self, obj):
@@ -108,7 +110,7 @@ class AdminOrderItemSerializer(serializers.ModelSerializer):
         return int(inv.quantity or 0)
 
 
-class AdminOrderListSerializer(serializers.ModelSerializer):
+class AdminOrderListSerializer(SafeModelSerializer):
     items_count = serializers.SerializerMethodField()
     customer = serializers.SerializerMethodField()
 
@@ -116,7 +118,6 @@ class AdminOrderListSerializer(serializers.ModelSerializer):
         model = Order
         fields = [
             'public_id', 'order_number', 'email', 'status', 'subtotal', 'shipping_cost', 'total',
-            'coupon_code', 'discount_amount',
             'shipping_name', 'phone', 'district',
             'items_count', 'customer', 'extra_data',
             'courier_provider', 'courier_consignment_id', 'courier_tracking_code',
@@ -134,11 +135,14 @@ class AdminOrderListSerializer(serializers.ModelSerializer):
         return {"public_id": customer.public_id, "name": customer.name, "phone": customer.phone}
 
 
-class AdminOrderSerializer(serializers.ModelSerializer):
+class AdminOrderSerializer(SafeModelSerializer):
     items = AdminOrderItemSerializer(many=True, read_only=True)
     user_public_id = serializers.CharField(source="user.public_id", read_only=True, allow_null=True)
     shipping_zone_public_id = serializers.CharField(source="shipping_zone.public_id", read_only=True, allow_null=True)
     shipping_method_public_id = serializers.CharField(source="shipping_method.public_id", read_only=True, allow_null=True)
+    shipping_rate_public_id = serializers.CharField(
+        source="shipping_rate.public_id", read_only=True, allow_null=True
+    )
     customer = serializers.SerializerMethodField()
     allowed_next_statuses = serializers.SerializerMethodField()
 
@@ -146,20 +150,20 @@ class AdminOrderSerializer(serializers.ModelSerializer):
         model = Order
         fields = [
             'public_id', 'order_number', 'user_public_id', 'email', 'status',
-            'subtotal', 'shipping_cost', 'discount_amount', 'total', 'coupon_code',
-            'shipping_zone_public_id', 'shipping_method_public_id',
+            'subtotal', 'shipping_cost', 'total',
+            'shipping_zone_public_id', 'shipping_method_public_id', 'shipping_rate_public_id',
             'shipping_name', 'shipping_address', 'phone',
             'district',
             'tracking_number', 'customer',
             'courier_provider', 'courier_consignment_id', 'courier_tracking_code',
             'courier_status', 'sent_to_courier', 'customer_confirmation_sent_at',
-            'extra_data', 'items', 'allowed_next_statuses', 'created_at', 'updated_at',
+            'pricing_snapshot', 'extra_data', 'items', 'allowed_next_statuses', 'created_at', 'updated_at',
         ]
         read_only_fields = [
-            'public_id', 'order_number', 'status', 'subtotal', 'shipping_cost', 'discount_amount', 'total', 'coupon_code',
+            'public_id', 'order_number', 'status', 'subtotal', 'shipping_cost', 'total',
             'courier_provider', 'courier_consignment_id', 'courier_tracking_code',
             'courier_status', 'sent_to_courier', 'customer_confirmation_sent_at',
-            'created_at', 'updated_at',
+            'pricing_snapshot', 'created_at', 'updated_at',
         ]
 
     def get_customer(self, obj):
@@ -179,7 +183,7 @@ class AdminOrderItemUpdateSerializer(serializers.Serializer):
     """
 
     public_id = serializers.CharField(required=False)
-    product = serializers.CharField(required=False)
+    product_public_id = serializers.CharField(required=False)
     remove = serializers.BooleanField(required=False, default=False)
     variant_public_id = serializers.CharField(required=False, allow_null=True, allow_blank=True)
     quantity = serializers.IntegerField(min_value=1, required=False)
@@ -190,7 +194,7 @@ class AdminOrderItemUpdateSerializer(serializers.Serializer):
             attrs["variant_public_id"] = None
         is_remove = bool(attrs.get("remove"))
         has_public_id = bool(attrs.get("public_id"))
-        has_product = bool(attrs.get("product"))
+        has_product = bool(attrs.get("product_public_id"))
 
         if is_remove:
             if not has_public_id:
@@ -207,25 +211,27 @@ class AdminOrderItemUpdateSerializer(serializers.Serializer):
                 raise serializers.ValidationError("quantity is required for new items.")
             return attrs
 
-        raise serializers.ValidationError("Either public_id or product is required.")
+        raise serializers.ValidationError("Either public_id or product_public_id is required.")
 
 
-class AdminOrderUpdateSerializer(serializers.ModelSerializer):
+class AdminOrderUpdateSerializer(SafeModelSerializer):
     """
     Update an order and its items (variants/quantity/price) from the dashboard.
     """
 
-    shipping_zone = serializers.SlugRelatedField(
+    shipping_zone_public_id = serializers.SlugRelatedField(
         slug_field='public_id',
         queryset=ShippingZone.objects.all(),
         allow_null=False,
         required=False,
+        source='shipping_zone',
     )
-    shipping_method = serializers.SlugRelatedField(
+    shipping_method_public_id = serializers.SlugRelatedField(
         slug_field='public_id',
         queryset=ShippingMethod.objects.all(),
         allow_null=True,
         required=False,
+        source='shipping_method',
     )
     # Write-only: we accept item edits in PATCH/PUT, but we do not serialize them back
     # with this serializer (response uses AdminOrderSerializer).
@@ -237,15 +243,14 @@ class AdminOrderUpdateSerializer(serializers.ModelSerializer):
             "public_id",
             "order_number",
             "email",
-            "shipping_zone",
-            "shipping_method",
+            "shipping_zone_public_id",
+            "shipping_method_public_id",
             "shipping_name",
             "shipping_address",
             "phone",
             "district",
             "tracking_number",
             "extra_data",
-            "coupon_code",
             "items",
             "total",
             "created_at",
@@ -257,11 +262,13 @@ class AdminOrderUpdateSerializer(serializers.ModelSerializer):
         super().__init__(*args, **kwargs)
         active_store = self.context.get("active_store")
         if not active_store:
-            self.fields["shipping_zone"].queryset = ShippingZone.objects.none()
-            self.fields["shipping_method"].queryset = ShippingMethod.objects.none()
+            self.fields["shipping_zone_public_id"].queryset = ShippingZone.objects.none()
+            self.fields["shipping_method_public_id"].queryset = ShippingMethod.objects.none()
             return
-        self.fields["shipping_zone"].queryset = ShippingZone.objects.filter(store=active_store)
-        self.fields["shipping_method"].queryset = ShippingMethod.objects.filter(store=active_store)
+        self.fields["shipping_zone_public_id"].queryset = ShippingZone.objects.filter(store=active_store)
+        self.fields["shipping_method_public_id"].queryset = ShippingMethod.objects.filter(
+            store=active_store
+        )
 
     def update(self, instance: Order, validated_data):
         try:
@@ -281,7 +288,7 @@ class AdminOrderUpdateSerializer(serializers.ModelSerializer):
                 }
                 for item in items:
                     item_public_id = item.get("public_id")
-                    product_public_id = item.get("product")
+                    product_public_id = item.get("product_public_id")
                     is_remove = bool(item.get("remove"))
 
                     if is_remove:
@@ -362,7 +369,9 @@ class AdminOrderUpdateSerializer(serializers.ModelSerializer):
                         continue
 
                     if not product_public_id:
-                        raise serializers.ValidationError({"items": ["product is required for new item."]})
+                        raise serializers.ValidationError(
+                            {"items": ["product_public_id is required for new item."]}
+                        )
                     try:
                         product_obj = resolve_active_store_product(
                             store=store,
@@ -410,8 +419,11 @@ class AdminOrderUpdateSerializer(serializers.ModelSerializer):
 
 
 class AdminOrderItemWriteSerializer(serializers.Serializer):
-    # Accept product_public_id (e.g. prd_xxx) — do NOT accept internal UUID/integer PKs
-    product = StoreScopedProductSlugRelatedField(slug_field="public_id", queryset=Product.objects.all())
+    product_public_id = StoreScopedProductSlugRelatedField(
+        slug_field="public_id",
+        queryset=Product.objects.all(),
+        source="product",
+    )
     variant_public_id = serializers.CharField(required=False, allow_null=True, allow_blank=True)
     quantity = serializers.IntegerField(min_value=1)
     price = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)
@@ -422,22 +434,24 @@ class AdminOrderItemWriteSerializer(serializers.Serializer):
         return attrs
 
 
-class AdminOrderCreateSerializer(serializers.ModelSerializer):
+class AdminOrderCreateSerializer(SafeModelSerializer):
     """
     Create orders from the dashboard with inline items (similar to Django admin UI).
     """
 
-    shipping_zone = serializers.SlugRelatedField(
+    shipping_zone_public_id = serializers.SlugRelatedField(
         slug_field='public_id',
         queryset=ShippingZone.objects.all(),
         allow_null=False,
         required=True,
+        source='shipping_zone',
     )
-    shipping_method = serializers.SlugRelatedField(
+    shipping_method_public_id = serializers.SlugRelatedField(
         slug_field='public_id',
         queryset=ShippingMethod.objects.all(),
         allow_null=True,
         required=False,
+        source='shipping_method',
     )
     items = AdminOrderItemWriteSerializer(many=True, write_only=True)
     phone = serializers.CharField(max_length=20)
@@ -449,15 +463,14 @@ class AdminOrderCreateSerializer(serializers.ModelSerializer):
             "public_id",
             "order_number",
             "email",
-            "shipping_zone",
-            "shipping_method",
+            "shipping_zone_public_id",
+            "shipping_method_public_id",
             "shipping_name",
             "shipping_address",
             "phone",
             "district",
             "tracking_number",
             "extra_data",
-            "coupon_code",
             "items",
             "total",
             "created_at",
@@ -469,11 +482,13 @@ class AdminOrderCreateSerializer(serializers.ModelSerializer):
         super().__init__(*args, **kwargs)
         active_store = self.context.get("active_store")
         if not active_store:
-            self.fields["shipping_zone"].queryset = ShippingZone.objects.none()
-            self.fields["shipping_method"].queryset = ShippingMethod.objects.none()
+            self.fields["shipping_zone_public_id"].queryset = ShippingZone.objects.none()
+            self.fields["shipping_method_public_id"].queryset = ShippingMethod.objects.none()
             return
-        self.fields["shipping_zone"].queryset = ShippingZone.objects.filter(store=active_store)
-        self.fields["shipping_method"].queryset = ShippingMethod.objects.filter(store=active_store)
+        self.fields["shipping_zone_public_id"].queryset = ShippingZone.objects.filter(store=active_store)
+        self.fields["shipping_method_public_id"].queryset = ShippingMethod.objects.filter(
+            store=active_store
+        )
 
     def validate_items(self, items):
         if not items:

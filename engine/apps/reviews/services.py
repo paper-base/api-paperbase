@@ -12,7 +12,14 @@ from engine.core import cache_service
 
 from .models import Review
 from engine.apps.products.models import Product
-from engine.apps.coupons.services import normalize_coupon_email, normalize_phone_digits
+
+
+def _normalize_phone_digits(phone: str) -> str:
+    return "".join(c for c in (phone or "").strip() if c.isdigit())
+
+
+def _normalize_email_compare(email: str) -> str:
+    return (email or "").strip().lower()
 
 
 # ---------------------------------------------------------------------------
@@ -121,10 +128,10 @@ def _order_access_allowed(*, order: Order, user, phone_proof: str, email_proof: 
     if user is not None and getattr(user, "is_authenticated", False):
         if order.user_id and order.user_id == user.pk:
             return True
-    phone_o = normalize_phone_digits(order.phone or "")
-    email_o = normalize_coupon_email(order.email or "")
-    phone_p = normalize_phone_digits(phone_proof or "")
-    email_p = normalize_coupon_email(email_proof or "")
+    phone_o = _normalize_phone_digits(order.phone or "")
+    email_o = _normalize_email_compare(order.email or "")
+    phone_p = _normalize_phone_digits(phone_proof or "")
+    email_p = _normalize_email_compare(email_proof or "")
     # If the client supplies a phone, it must match; do not fall through to email-only.
     if phone_p:
         if not phone_o or phone_p != phone_o:

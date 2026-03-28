@@ -5,7 +5,7 @@ import requests as http_requests
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import Q
 from django.utils import timezone
-from rest_framework import viewsets, mixins, status
+from rest_framework import serializers, viewsets, mixins, status
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
@@ -20,8 +20,12 @@ from engine.apps.emails.triggers import (
     should_send_customer_confirmation_order_email,
 )
 from engine.apps.couriers.status_mapping import courier_status_implies_order_confirmed
+from engine.apps.products.models import Product
+from engine.apps.products.variant_utils import resolve_storefront_variant, unit_price_for_line
+from engine.apps.shipping.models import ShippingMethod, ShippingZone
 
 from .models import Order
+from .pricing import PricingEngine, storefront_pricing_breakdown_response
 from .services import (
     get_allowed_next_order_statuses,
     transition_order_status,
@@ -56,7 +60,9 @@ class AdminOrderViewSet(
     mixins.DestroyModelMixin,
     viewsets.GenericViewSet,
 ):
-    queryset = Order.objects.select_related("customer", "user").prefetch_related('items__product').all()
+    queryset = Order.objects.select_related(
+        "customer", "user", "shipping_zone", "shipping_method", "shipping_rate"
+    ).prefetch_related('items__product').all()
     lookup_field = 'public_id'
 
     def _send_customer_confirmation_if_enabled(self, order: Order) -> None:
@@ -81,6 +87,72 @@ class AdminOrderViewSet(
         if self.action in ("update", "partial_update"):
             return AdminOrderUpdateSerializer
         return AdminOrderSerializer
+
+    @action(detail=False, methods=["post"], url_path="pricing-preview")
+    def pricing_preview(self, request):
+        ctx = get_active_store(request)
+        if not ctx.store:
+            return Response({"detail": "No active store."}, status=status.HTTP_403_FORBIDDEN)
+        items = request.data.get("items") or []
+        if not isinstance(items, list) or not items:
+            return Response({"items": "At least one item is required."}, status=status.HTTP_400_BAD_REQUEST)
+        product_public_ids = [str(item.get("product_public_id", "")).strip() for item in items]
+        products = {
+            p.public_id: p
+            for p in Product.objects.filter(
+                store=ctx.store,
+                public_id__in=product_public_ids,
+                is_active=True,
+                status=Product.Status.ACTIVE,
+            ).select_related("category", "category__parent")
+        }
+        pricing_lines = []
+        for item in items:
+            public_id = str(item.get("product_public_id", "")).strip()
+            quantity = int(item.get("quantity") or 0)
+            product = products.get(public_id)
+            if not product or quantity <= 0:
+                return Response({"items": "Invalid product_public_id or quantity."}, status=status.HTTP_400_BAD_REQUEST)
+            try:
+                variant = resolve_storefront_variant(
+                    product=product,
+                    variant_public_id=item.get("variant_public_id"),
+                )
+            except serializers.ValidationError as exc:
+                return Response(exc.detail, status=status.HTTP_400_BAD_REQUEST)
+            unit_price = unit_price_for_line(product, variant)
+            pricing_lines.append(
+                {
+                    "product": product,
+                    "quantity": quantity,
+                    "unit_price": unit_price,
+                }
+            )
+        shipping_zone_public_id = (request.data.get("shipping_zone_public_id") or "").strip()
+        shipping_method_public_id = (request.data.get("shipping_method_public_id") or "").strip()
+        zone = ShippingZone.objects.filter(
+            store=ctx.store,
+            public_id=shipping_zone_public_id,
+            is_active=True,
+        ).first()
+        method = None
+        if shipping_method_public_id:
+            method = ShippingMethod.objects.filter(
+                store=ctx.store,
+                public_id=shipping_method_public_id,
+                is_active=True,
+            ).first()
+
+        breakdown = PricingEngine.compute(
+            store=ctx.store,
+            lines=pricing_lines,
+            shipping_zone_pk=zone.id if zone else None,
+            shipping_method_pk=method.id if method else None,
+        )
+        return Response(
+            storefront_pricing_breakdown_response(breakdown),
+            status=status.HTTP_200_OK,
+        )
 
     def update(self, request, *args, **kwargs):
         """

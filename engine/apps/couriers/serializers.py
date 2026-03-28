@@ -1,11 +1,12 @@
 from rest_framework import serializers
+from engine.core.serializers import SafeModelSerializer
 
 from engine.core.encryption import decrypt_value, encrypt_value, mask_value
 
 from .models import Courier
 
 
-class CourierSerializer(serializers.ModelSerializer):
+class CourierSerializer(SafeModelSerializer):
     """Read serializer — returns masked credentials, never raw values."""
 
     api_key_masked = serializers.SerializerMethodField()

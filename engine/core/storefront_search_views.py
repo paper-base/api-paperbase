@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from django.db.models import Count, Q, Sum
+from django.db.models import Q
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from config.permissions import IsStorefrontAPIKey
 from engine.apps.analytics.service import meta_conversions
 from engine.apps.products.models import Category, Product
-from engine.apps.products.serializers import ProductListSerializer
-from engine.apps.products.services import build_product_list_queryset
+from engine.apps.products.serializers import CategorySerializer, ProductListSerializer
+from engine.apps.products.services import annotate_storefront_product_stock, build_product_list_queryset
 from engine.apps.products.stock_signals import get_low_stock_threshold
 from engine.core.tenancy import require_api_key_store, require_resolved_store
 
@@ -58,26 +58,19 @@ class StorefrontSearchView(APIView):
         meta_conversions.track_search(request, q)
 
         prod_qs = (
-            Product.objects.filter(
-                store=store,
-                is_active=True,
-                status=Product.Status.ACTIVE,
-            )
-            .filter(
-                Q(name__icontains=q)
-                | Q(brand__icontains=q)
-                | Q(description__icontains=q)
-            )
-            .select_related("category")
-            .prefetch_related("images")
-            .annotate(
-                _pub_variant_count=Count(
-                    "variants", filter=Q(variants__is_active=True)
-                ),
-                _pub_variant_stock_sum=Sum(
-                    "variants__inventory__quantity",
-                    filter=Q(variants__is_active=True),
-                ),
+            annotate_storefront_product_stock(
+                Product.objects.filter(
+                    store=store,
+                    is_active=True,
+                    status=Product.Status.ACTIVE,
+                )
+                .filter(
+                    Q(name__icontains=q)
+                    | Q(brand__icontains=q)
+                    | Q(description__icontains=q)
+                )
+                .select_related("category")
+                .prefetch_related("images")
             )
             .order_by("name", "id")[:10]
         )
@@ -90,10 +83,9 @@ class StorefrontSearchView(APIView):
             Category.objects.filter(store=store, is_active=True, name__icontains=q)
             .order_by("name", "id")[:8]
         )
-        categories = [
-            {"public_id": c.public_id, "name": c.name, "slug": c.slug}
-            for c in cat_qs
-        ]
+        categories = CategorySerializer(
+            cat_qs, many=True, context={"request": request}
+        ).data
 
         suggestions: list[str] = []
         for row in product_rows:

@@ -21,10 +21,6 @@ from .services import resolve_and_attach_customer
 from .utils import get_next_order_number
 from .stock import adjust_stock
 from .throttles import DirectOrderRateThrottle
-from engine.apps.coupons.services import (
-    consume_coupon_usage,
-    coupon_identity_from_order,
-)
 from engine.apps.emails.triggers import notify_store_new_order
 from engine.core.realtime import emit_store_event
 
@@ -68,15 +64,14 @@ class OrderCreateView(CreateAPIView):
     @transaction.atomic
     def create(self, request, *args, **kwargs):
         allowed_top_level_fields = {
-            "shipping_zone",
-            "shipping_method",
+            "shipping_zone_public_id",
+            "shipping_method_public_id",
             "shipping_name",
             "phone",
             "email",
             "shipping_address",
             "district",
             "products",
-            "coupon_code",
         }
         unknown_fields = set(request.data.keys()) - allowed_top_level_fields
         if unknown_fields:
@@ -97,7 +92,7 @@ class OrderCreateView(CreateAPIView):
         from engine.apps.inventory.models import Inventory
         from engine.apps.products.variant_utils import unit_price_for_line
 
-        product_public_ids = [p["public_id"] for p in products_data]
+        product_public_ids = [p["product_public_id"] for p in products_data]
         variant_public_ids = [
             (p.get("variant_public_id") or "").strip()
             for p in products_data
@@ -171,7 +166,7 @@ class OrderCreateView(CreateAPIView):
 
         stock_errors = []
         for product_data in products_data:
-            product_id_str = product_data["public_id"]
+            product_id_str = product_data["product_public_id"]
             quantity = product_data["quantity"]
             product = locked_products.get(product_id_str)
             if not product:
@@ -217,7 +212,6 @@ class OrderCreateView(CreateAPIView):
             status=Order.Status.PENDING,
             user=request.user if request.user.is_authenticated else None,
             email=email,
-            coupon_code=(ser.validated_data.get("coupon_code") or "").strip(),
             shipping_name=ser.validated_data['shipping_name'],
             shipping_address=ser.validated_data['shipping_address'],
             phone=ser.validated_data['phone'],
@@ -227,7 +221,7 @@ class OrderCreateView(CreateAPIView):
         )
 
         for product_data in products_data:
-            product_id_str = product_data["public_id"]
+            product_id_str = product_data["product_public_id"]
             quantity = product_data["quantity"]
             product = locked_products[product_id_str]
             vpid = (product_data.get("variant_public_id") or "").strip()
@@ -262,19 +256,13 @@ class OrderCreateView(CreateAPIView):
             for oi in order.items.select_related("product").all()
             if oi.product is not None
         ]
-        c_phone, c_email = coupon_identity_from_order(order)
         breakdown = PricingEngine.compute(
             store=order.store,
             lines=pricing_lines,
-            coupon_code=order.coupon_code,
-            coupon_phone=c_phone,
-            coupon_email=c_email,
-            shipping_zone_id=order.shipping_zone_id,
-            shipping_method_id=order.shipping_method_id,
+            shipping_zone_pk=order.shipping_zone_id,
+            shipping_method_pk=order.shipping_method_id,
         )
         order.subtotal = breakdown.base_subtotal
-        order.discount_amount = breakdown.bulk_discount_total + breakdown.coupon_discount
-        order.coupon = breakdown.coupon
         order.shipping_cost = breakdown.shipping_cost
         order.shipping_zone = breakdown.shipping_zone
         order.shipping_method = breakdown.shipping_method
@@ -284,8 +272,6 @@ class OrderCreateView(CreateAPIView):
         order.save(
             update_fields=[
                 "subtotal",
-                "discount_amount",
-                "coupon",
                 "shipping_cost",
                 "shipping_zone",
                 "shipping_method",
@@ -294,13 +280,6 @@ class OrderCreateView(CreateAPIView):
                 "pricing_snapshot",
             ]
         )
-        if breakdown.coupon is not None:
-            consume_coupon_usage(
-                coupon=breakdown.coupon,
-                order=order,
-                email=order.email,
-                phone=order.phone,
-            )
         resolve_and_attach_customer(
             order,
             store=order_store,
@@ -328,7 +307,9 @@ class OrderCreateView(CreateAPIView):
 class OrderDetailView(RetrieveAPIView):
     """Get order by public_id (dashboard staff). Not available with publishable API key."""
     serializer_class = OrderSerializer
-    queryset = Order.objects.prefetch_related(
+    queryset = Order.objects.select_related(
+        "shipping_zone", "shipping_method", "shipping_rate", "customer"
+    ).prefetch_related(
         'items__product',
         'items__product__images',
         'items__variant__attribute_values__attribute_value__attribute',

@@ -1,9 +1,10 @@
 from rest_framework import serializers
+from engine.core.serializers import SafeModelSerializer
 
 from .models import Review
 
 
-class AdminReviewSerializer(serializers.ModelSerializer):
+class AdminReviewSerializer(SafeModelSerializer):
     product_public_id = serializers.CharField(source="product.public_id", read_only=True)
     product_name = serializers.CharField(source="product.name", read_only=True)
     user_public_id = serializers.CharField(source="user.public_id", read_only=True)

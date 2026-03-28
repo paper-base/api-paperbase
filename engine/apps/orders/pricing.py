@@ -4,39 +4,30 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Optional
 
-from engine.apps.coupons.models import Coupon
-from engine.apps.coupons.services import CouponValidator, DiscountResolver
 from engine.apps.shipping.service import quote_shipping
 
 
 @dataclass(frozen=True)
 class PricingLineBreakdown:
-    product_id: str
+    product_public_id: str
     quantity: int
     unit_price: Decimal
     line_subtotal: Decimal
-    bulk_rule_public_id: Optional[str]
-    bulk_discount_amount: Decimal
 
 
 @dataclass(frozen=True)
 class PricingBreakdown:
     base_subtotal: Decimal
-    bulk_discount_total: Decimal
-    subtotal_after_bulk: Decimal
-    coupon_discount: Decimal
-    subtotal_after_coupon: Decimal
     shipping_cost: Decimal
     shipping_zone: object
     shipping_method: object
     shipping_rate: object
     final_total: Decimal
-    coupon: Optional[Coupon]
     lines: list[PricingLineBreakdown]
 
 
 class PricingEngine:
-    """Centralized order pricing with strict rule order: bulk -> coupon -> shipping."""
+    """Centralized order pricing: merchandise subtotal then shipping."""
 
     @staticmethod
     def _money(value: Decimal) -> Decimal:
@@ -48,14 +39,10 @@ class PricingEngine:
         *,
         store,
         lines: list[dict],
-        coupon_code: str = "",
-        coupon_phone: str = "",
-        coupon_email: str = "",
-        shipping_zone_id=None,
-        shipping_method_id=None,
+        shipping_zone_pk=None,
+        shipping_method_pk=None,
     ) -> PricingBreakdown:
         base_subtotal = Decimal("0.00")
-        bulk_discount_total = Decimal("0.00")
         breakdown_lines: list[PricingLineBreakdown] = []
 
         for line in lines:
@@ -64,64 +51,31 @@ class PricingEngine:
             unit_price = cls._money(line["unit_price"])
             line_subtotal = cls._money(unit_price * quantity)
             base_subtotal += line_subtotal
-
-            bulk_quote = DiscountResolver.resolve_bulk_discount_for_product(
-                store=store,
-                product=product,
-                line_subtotal=line_subtotal,
-            )
-            bulk_amount = cls._money(bulk_quote.discount_amount)
-            bulk_discount_total += bulk_amount
             breakdown_lines.append(
                 PricingLineBreakdown(
-                    product_id=str(product.public_id),
+                    product_public_id=str(product.public_id),
                     quantity=quantity,
                     unit_price=unit_price,
                     line_subtotal=line_subtotal,
-                    bulk_rule_public_id=getattr(bulk_quote.rule, "public_id", None),
-                    bulk_discount_amount=bulk_amount,
                 )
             )
 
         base_subtotal = cls._money(base_subtotal)
-        bulk_discount_total = cls._money(bulk_discount_total)
-        subtotal_after_bulk = cls._money(max(Decimal("0.00"), base_subtotal - bulk_discount_total))
-
-        applied_coupon = None
-        coupon_discount = Decimal("0.00")
-        normalized_code = (coupon_code or "").strip()
-        if normalized_code:
-            coupon_quote = CouponValidator.validate_for_subtotal(
-                store=store,
-                code=normalized_code,
-                subtotal=subtotal_after_bulk,
-                phone=coupon_phone,
-                email=coupon_email,
-            )
-            applied_coupon = coupon_quote.coupon
-            coupon_discount = cls._money(coupon_quote.discount_amount)
-
-        subtotal_after_coupon = cls._money(max(Decimal("0.00"), subtotal_after_bulk - coupon_discount))
         shipping_quote = quote_shipping(
             store=store,
-            order_subtotal=subtotal_after_coupon,
-            shipping_zone_id=shipping_zone_id,
-            shipping_method_id=shipping_method_id,
+            order_subtotal=base_subtotal,
+            shipping_zone_pk=shipping_zone_pk,
+            shipping_method_pk=shipping_method_pk,
         )
         shipping_cost = cls._money(shipping_quote.shipping_cost)
-        final_total = cls._money(subtotal_after_coupon + shipping_cost)
+        final_total = cls._money(base_subtotal + shipping_cost)
         return PricingBreakdown(
             base_subtotal=base_subtotal,
-            bulk_discount_total=bulk_discount_total,
-            subtotal_after_bulk=subtotal_after_bulk,
-            coupon_discount=coupon_discount,
-            subtotal_after_coupon=subtotal_after_coupon,
             shipping_cost=shipping_cost,
             shipping_zone=shipping_quote.zone,
             shipping_method=shipping_quote.method,
             shipping_rate=shipping_quote.rate,
             final_total=final_total,
-            coupon=applied_coupon,
             lines=breakdown_lines,
         )
 
@@ -130,22 +84,26 @@ def pricing_snapshot_from_breakdown(breakdown: PricingBreakdown) -> dict:
     """JSON-serializable checkout breakdown for persisted orders and storefront APIs."""
     return {
         "base_subtotal": str(breakdown.base_subtotal),
-        "bulk_discount_total": str(breakdown.bulk_discount_total),
-        "subtotal_after_bulk": str(breakdown.subtotal_after_bulk),
-        "coupon_discount": str(breakdown.coupon_discount),
-        "subtotal_after_coupon": str(breakdown.subtotal_after_coupon),
         "shipping_cost": str(breakdown.shipping_cost),
         "final_total": str(breakdown.final_total),
-        "coupon_public_id": breakdown.coupon.public_id if breakdown.coupon else None,
         "lines": [
             {
-                "product_public_id": pl.product_id,
+                "product_public_id": pl.product_public_id,
                 "quantity": pl.quantity,
                 "unit_price": str(pl.unit_price),
                 "line_subtotal": str(pl.line_subtotal),
-                "bulk_rule_public_id": pl.bulk_rule_public_id,
-                "bulk_discount_amount": str(pl.bulk_discount_amount),
             }
             for pl in breakdown.lines
         ],
+    }
+
+
+def storefront_pricing_breakdown_response(breakdown: PricingBreakdown) -> dict:
+    """Unified storefront pricing JSON (string decimals) for cart breakdown and single-line preview."""
+    snap = pricing_snapshot_from_breakdown(breakdown)
+    return {
+        "base_subtotal": snap["base_subtotal"],
+        "shipping_cost": snap["shipping_cost"],
+        "final_total": snap["final_total"],
+        "lines": snap["lines"],
     }

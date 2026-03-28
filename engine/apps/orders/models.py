@@ -5,7 +5,6 @@ from django.conf import settings
 from django.db import models
 
 from engine.apps.customers.models import Customer
-from engine.apps.coupons.models import Coupon
 from engine.core.ids import generate_public_id
 from engine.core.tenant_queryset import TenantAwareManager
 from engine.apps.products.models import Product
@@ -68,15 +67,6 @@ class Order(models.Model):
     status = models.CharField(
         max_length=20, choices=Status.choices, default=Status.PENDING, db_index=True
     )
-    coupon = models.ForeignKey(
-        Coupon,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="orders",
-    )
-    coupon_code = models.CharField(max_length=50, blank=True, default="")
-    discount_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
     total = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
     subtotal = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
     shipping_cost = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
@@ -122,7 +112,7 @@ class Order(models.Model):
     pricing_snapshot = models.JSONField(
         blank=True,
         default=dict,
-        help_text="Snapshot of PricingEngine breakdown at checkout (bulk/coupon/shipping composition).",
+        help_text="Snapshot of PricingEngine breakdown at checkout (merchandise subtotal + shipping).",
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

@@ -1,9 +1,10 @@
 from rest_framework import serializers
+from engine.core.serializers import SafeModelSerializer
 
 from .models import Banner
 
 
-class AdminBannerSerializer(serializers.ModelSerializer):
+class AdminBannerSerializer(SafeModelSerializer):
     cta_link = serializers.URLField(required=False, allow_blank=True)
 
     class Meta:

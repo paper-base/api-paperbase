@@ -71,7 +71,6 @@ core/
       orders/              # Orders and order lifecycle
       payments/            # Payment methods and transactions (gateway-ready)
       shipping/            # Shipping zones, methods, rates
-      coupons/             # (Reserved for promotions)
       reviews/             # Product reviews and ratings
       notifications/       # Banners and system notifications
       support/             # Support tickets (public submit + admin CRUD)
@@ -80,39 +79,59 @@ core/
 
 ## API overview (all under `/api/v1/`)
 
+Storefront catalog, checkout, and public content endpoints require the **publishable API key** (`Authorization: Bearer ak_pk_…`) unless listed as exempt below.
+
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
 | **Auth** |
 | POST | `/api/v1/auth/token/` | no | JWT: `{"username","password"}` |
 | POST | `/api/v1/auth/token/refresh/` | no | `{"refresh": "..."}` |
 | **Products & catalog** |
-| GET | `/api/v1/products/` | no | List products. `?category=`, `?brand=`, `?featured=true`, `?hot_deals=true` |
-| GET | `/api/v1/products/<id_or_slug>/` | no | Product detail |
-| GET | `/api/v1/products/<id>/related/` | no | Related products |
-| GET | `/api/v1/categories/` | no | Category tree (tenant-scoped) |
-| GET | `/api/v1/banners/` | no | Active store banners (tenant-scoped) |
+| GET | `/api/v1/products/` | API key | List products. `?category=`, `?brand=`, `?featured=true`, `?hot_deals=true` |
+| GET | `/api/v1/products/<id_or_slug>/` | API key | Product detail |
+| GET | `/api/v1/products/<id>/related/` | API key | Related products |
+| GET | `/api/v1/categories/` | API key | Category tree (tenant-scoped) |
+| GET | `/api/v1/catalog/filters/` | API key | Filter metadata (categories with `public_id`, `name`, `slug`, attributes, brands, price range) |
+| GET | `/api/v1/banners/` | API key | Active store banners (tenant-scoped) |
+| GET | `/api/v1/store/public/` | API key | Store branding, `extra_field_schema`, modules, theme, SEO, policy URLs |
 | **Orders** |
-| POST | `/api/v1/orders/` | API key | Create order from payload: `products`, shipping fields, `phone` / `email` (no server cart) |
+| POST | `/api/v1/orders/` | API key | Create order: `products[]` with `product_public_id`, `quantity`, optional `variant_public_id`; top-level `shipping_zone_public_id`, optional `shipping_method_public_id`, shipping address fields, `phone` / `email` |
+| POST | `/api/v1/pricing/breakdown/` | API key | Full cart pricing (merchandise subtotal + shipping); body includes `items` (`product_public_id`, `quantity`, `variant_public_id`), optional `shipping_zone_public_id` / `shipping_method_public_id` |
+| POST | `/api/v1/pricing/preview/` | API key | Single-line pricing preview |
 | GET | `/api/v1/orders/<public_id>/` | staff/JWT | Order detail (store-scoped admin) |
 | **Payments** |
 | GET | `/api/v1/payments/methods/` | no | List payment methods |
 | POST | `/api/v1/payments/initiate/` | no | Placeholder – plug in Stripe/Razorpay etc. |
 | **Shipping** |
-| GET | `/api/v1/shipping/options/?country=US&order_total=99` | no | Shipping options and prices |
+| GET | `/api/v1/shipping/options/?zone_public_id=…&order_total=…` | API key | Shipping options for a zone |
+| GET | `/api/v1/shipping/zones/` | API key | Zones with cost rules and metadata |
+| POST | `/api/v1/shipping/preview/` | API key | Shipping quote for line items |
 | **Reviews** |
-| GET | `/api/v1/reviews/?product_public_id=<public_id>` | no | Approved reviews for product |
-| POST | `/api/v1/reviews/create/` | JWT | Create review |
-| GET | `/api/v1/reviews/summary/?product_public_id=<public_id>` | no | Rating summary |
+| GET | `/api/v1/reviews/?product_public_id=<public_id>` | API key | Approved reviews for product |
+| POST | `/api/v1/reviews/create/` | API key | Create review (order-verified) |
+| GET | `/api/v1/reviews/summary/?product_public_id=<public_id>` | API key | Rating summary |
 | **Customers** |
 | GET / PATCH | `/api/v1/customers/me/` | JWT | Profile |
 | GET / POST | `/api/v1/customers/addresses/` | JWT | Addresses |
 | GET / PUT / DELETE | `/api/v1/customers/addresses/<id>/` | JWT | Address detail |
 | **Other** |
-| GET | `/api/v1/notifications/active/` | no | Active banner notifications |
-| POST | `/api/v1/support/tickets/` | no | Submit support ticket (tenant host / store context) |
+| GET | `/api/v1/notifications/active/` | API key | Active storefront CTAs |
+| GET | `/api/v1/search/?q=…` | API key | Storefront search |
+| POST | `/api/v1/support/tickets/` | API key | Submit support ticket |
+| POST | `/api/v1/orders/initiate-checkout/` | API key | Checkout funnel signal (analytics) |
 
 **Admin API** (staff only): `/api/v1/admin/` – stats (`support_tickets`, `supportTickets` in analytics series), analytics, branding, CRUD including `support-tickets/`, products, orders, inventory, notifications, etc.
 
+### Storefront JSON contract (breaking conventions)
+
+- **Media:** use `image_url` for absolute URLs (product main image, gallery items, category image, banner image). Gallery rows: `public_id`, `image_url`, `alt`, `order`.
+- **Products:** `category_public_id`, `category_slug`, `category_name` (no single `category` slug field). Include `sku`, `stock_tracking`, `extra_data` (full JSON). Variants expose `options` entries with `attribute_public_id`, `attribute_slug`, `attribute_name`, `value_public_id`, `value`. Detail adds `variant_matrix`: keys are attribute **slugs**; each value is `{ "slug", "attribute_public_id", "attribute_name", "values": [{ "value_public_id", "value" }] }`.
+- **Categories:** `description`, `image_url`, `is_active`, plus `public_id`, `name`, `slug`, `parent_public_id`, `order`.
+- **Banners:** `cta_url` (not `cta_link`), `cta_text`, `image_url`, `start_at`, `end_at`, `created_at`, `updated_at` (ISO 8601 where applicable).
+- **Storefront CTAs** (`/notifications/active/`): `cta_url`, `cta_label` (from `link_text`), `cta_text`, `is_active`, `is_currently_active`, `start_at`, `end_at`, `notification_type`, `order`, `created_at`, `updated_at`.
+- **Orders (create response):** line items include `product_sku`, `variant_sku`, and `variant_options` with the same shape as product variant `options`. Order includes `courier_consignment_id`, `sent_to_courier`, `customer_confirmation_sent_at` where applicable.
+- **Shipping options:** each option includes `rate_public_id`, `method_public_id`, `method_name`, `method_type`, `method_order`, `zone_public_id`, `zone_name`, `price`, `rate_type`, `min_order_total`, `max_order_total`.
+- **Shipping zones list:** each zone includes `zone_public_id`, `name`, `estimated_days`, `is_active`, `created_at`, `updated_at`, `cost_rules`.
 ## Environment variables
 
 Use explicit settings modules:
@@ -130,7 +149,7 @@ See `.env.example` for the full list. Production requires at least:
 ## Auth
 
 - **JWT**: `POST /api/v1/auth/token/` with `username` and `password`. Use header: `Authorization: Bearer <access_token>`.
-- **Storefront**: Use the publishable key (`ak_pk_…`) for catalog and stateless checkout; dashboard flows use JWT + `X-Store-Public-ID` where applicable.
+- **Storefront**: Use the publishable key (`ak_pk_…`) with `Authorization: Bearer ak_pk_…` for catalog, search, banners, CTAs, reviews, shipping quotes, checkout, and support. Dashboard CRUD uses JWT + `X-Store-Public-ID` (or equivalent store resolution) and does not use the publishable key on `/api/v1/admin/…`.
 
 ## Using as a template
 

@@ -1,16 +1,17 @@
 from rest_framework import serializers
+from engine.core.serializers import SafeModelSerializer
 
 from .models import SupportTicket, SupportTicketAttachment
 
 
-class AdminSupportTicketAttachmentSerializer(serializers.ModelSerializer):
+class AdminSupportTicketAttachmentSerializer(SafeModelSerializer):
     class Meta:
         model = SupportTicketAttachment
         fields = ["public_id", "file", "created_at"]
         read_only_fields = ["public_id", "file", "created_at"]
 
 
-class AdminSupportTicketSerializer(serializers.ModelSerializer):
+class AdminSupportTicketSerializer(SafeModelSerializer):
     attachments = AdminSupportTicketAttachmentSerializer(many=True, read_only=True)
     store_public_id = serializers.CharField(source="store.public_id", read_only=True)
 

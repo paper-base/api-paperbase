@@ -12,7 +12,6 @@ class Migration(migrations.Migration):
     initial = True
 
     dependencies = [
-        ('coupons', '0001_initial'),
         ('customers', '0001_initial'),
         ('products', '0001_initial'),
         ('shipping', '0001_initial'),
@@ -36,8 +35,6 @@ class Migration(migrations.Migration):
                 ('order_number', models.CharField(db_index=True, editable=False, max_length=20, unique=True)),
                 ('email', models.EmailField(blank=True, default='', max_length=254)),
                 ('status', models.CharField(choices=[('pending', 'Pending'), ('confirmed', 'Confirmed'), ('processing', 'Processing'), ('shipped', 'Shipped'), ('delivered', 'Delivered'), ('failed', 'Failed'), ('cancelled', 'Cancelled'), ('returned', 'Returned')], db_index=True, default='pending', max_length=20)),
-                ('coupon_code', models.CharField(blank=True, default='', max_length=50)),
-                ('discount_amount', models.DecimalField(decimal_places=2, default=Decimal('0.00'), max_digits=12)),
                 ('total', models.DecimalField(decimal_places=2, default=Decimal('0.00'), max_digits=12)),
                 ('subtotal', models.DecimalField(decimal_places=2, default=Decimal('0.00'), max_digits=12)),
                 ('shipping_cost', models.DecimalField(decimal_places=2, default=Decimal('0.00'), max_digits=10)),
@@ -53,10 +50,9 @@ class Migration(migrations.Migration):
                 ('sent_to_courier', models.BooleanField(default=False)),
                 ('customer_confirmation_sent_at', models.DateTimeField(blank=True, help_text='Set when ORDER_CONFIRMED was sent to the customer (send-to-courier).', null=True)),
                 ('extra_data', models.JSONField(blank=True, default=dict, help_text='Dynamic extra fields per extra_field_schema.')),
-                ('pricing_snapshot', models.JSONField(blank=True, default=dict, help_text='Snapshot of PricingEngine breakdown at checkout (bulk/coupon/shipping composition).')),
+                ('pricing_snapshot', models.JSONField(blank=True, default=dict, help_text='Snapshot of PricingEngine breakdown at checkout (merchandise subtotal + shipping).')),
                 ('created_at', models.DateTimeField(auto_now_add=True)),
                 ('updated_at', models.DateTimeField(auto_now=True)),
-                ('coupon', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='orders', to='coupons.coupon')),
                 ('customer', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='orders', to='customers.customer')),
                 ('shipping_method', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='orders', to='shipping.shippingmethod')),
                 ('shipping_rate', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='orders', to='shipping.shippingrate')),

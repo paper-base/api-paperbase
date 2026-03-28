@@ -144,10 +144,12 @@ class AdminShippingRateViewSet(
         ser = super().get_serializer(*args, **kwargs)
         store = get_active_store(self.request).store
         if store and hasattr(ser, "fields"):
-            if "shipping_method" in ser.fields:
-                ser.fields["shipping_method"].queryset = ShippingMethod.objects.filter(store=store)
-            if "shipping_zone" in ser.fields:
-                ser.fields["shipping_zone"].queryset = ShippingZone.objects.filter(store=store)
+            if "shipping_method_public_id" in ser.fields:
+                ser.fields["shipping_method_public_id"].queryset = ShippingMethod.objects.filter(
+                    store=store
+                )
+            if "shipping_zone_public_id" in ser.fields:
+                ser.fields["shipping_zone_public_id"].queryset = ShippingZone.objects.filter(store=store)
         return ser
 
     def perform_create(self, serializer):

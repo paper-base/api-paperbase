@@ -24,8 +24,6 @@ from engine.apps.orders.models import Order, OrderItem
 from engine.apps.shipping.models import ShippingZone
 from engine.apps.orders.services import resolve_and_attach_customer
 from engine.apps.customers.models import Customer, CustomerAddress
-from engine.apps.coupons.models import BulkDiscount, Coupon, CouponUsage
-from engine.apps.coupons.services import consume_coupon_usage, validate_coupon_for_subtotal
 from engine.apps.reviews.models import Review
 from engine.apps.notifications.models import StorefrontCTA
 from engine.apps.orders.services import transition_order_status
@@ -108,11 +106,6 @@ def _make_customer(store, user):
         phone=f"u{user.pk}" if user else f"s{store.pk}",
         email=(user.email if user else None),
     )
-
-
-def _make_coupon(store, code=None):
-    code = code or f"SAVE-{_uuid.uuid4().hex[:6].upper()}"
-    return Coupon.objects.create(store=store, code=code, discount_type="percentage", discount_value=10)
 
 
 def _ensure_default_plan():
@@ -321,9 +314,6 @@ class PublicIdGenerationTests(TestCase):
             ("customer", "cus_"),
             ("address", "adr_"),
             ("orderitem", "oit_"),
-            ("coupon", "cpn_"),
-            ("couponusage", "cpu_"),
-            ("bulkdiscount", "bdk_"),
         ]
         for kind, prefix in expected:
             pid = generate_public_id(kind)
@@ -463,12 +453,12 @@ class PublicIdApiTests(TestCase):
         resp = self.client.post(
             "/api/v1/orders/",
             {
-                "shipping_zone": zone.public_id,
+                "shipping_zone_public_id": zone.public_id,
                 "shipping_name": "Buyer",
                 "phone": "01710000000",
                 "email": "buyer@example.com",
                 "shipping_address": "Addr",
-                "products": [{"public_id": product.public_id, "quantity": 1}],
+                "products": [{"product_public_id": product.public_id, "quantity": 1}],
             },
             format="json",
             HTTP_HOST="apitest.local",
@@ -974,9 +964,6 @@ class CrossTenantAdminIsolationTests(TestCase):
             store=self.store_b, name="B", email="b@example.com", message="help"
         )
 
-        self.coupon_a = _make_coupon(self.store_a)
-        self.coupon_b = _make_coupon(self.store_b)
-
         self.notif_a = StorefrontCTA.objects.create(
             store=self.store_a, cta_text="CTA Store A", is_active=True
         )
@@ -1068,7 +1055,7 @@ class CrossTenantAdminIsolationTests(TestCase):
         resp = self.client.post(
             "/api/v1/reviews/create/",
             {
-                "product": self.product_b.public_id,
+                "product_public_id": self.product_b.public_id,
                 "rating": 5,
                 "title": "Blocked",
                 "body": "Should fail",
@@ -1173,10 +1160,10 @@ class CrossTenantAdminIsolationTests(TestCase):
             "email": "cross@example.com",
             "shipping_address": "Address",
             "district": "Dhaka",
-            "shipping_zone": self.zone_a.public_id,
+            "shipping_zone_public_id": self.zone_a.public_id,
             "items": [
                 {
-                    "product": self.product_b.public_id,
+                    "product_public_id": self.product_b.public_id,
                     "quantity": 1,
                     "price": "10.00",
                 }
@@ -1196,7 +1183,7 @@ class CrossTenantAdminIsolationTests(TestCase):
             "district": "Dhaka",
             "items": [
                 {
-                    "product": self.product_a.public_id,
+                    "product_public_id": self.product_a.public_id,
                     "quantity": 1,
                     "price": "10.00",
                 }
@@ -1204,7 +1191,7 @@ class CrossTenantAdminIsolationTests(TestCase):
         }
         resp = self.client.post("/api/v1/admin/orders/", payload, format="json")
         self.assertEqual(resp.status_code, 400)
-        self.assertIn("shipping_zone", resp.data)
+        self.assertIn("shipping_zone_public_id", resp.data)
 
     def test_admin_order_create_with_shipping_zone_only_succeeds(self):
         """Admin order create accepts explicit shipping_zone without shipping_method."""
@@ -1215,10 +1202,10 @@ class CrossTenantAdminIsolationTests(TestCase):
             "email": "zone-only@example.com",
             "shipping_address": "Address",
             "district": "Dhaka",
-            "shipping_zone": self.zone_a.public_id,
+            "shipping_zone_public_id": self.zone_a.public_id,
             "items": [
                 {
-                    "product": self.product_a.public_id,
+                    "product_public_id": self.product_a.public_id,
                     "quantity": 1,
                     "price": "10.00",
                 }
@@ -1318,20 +1305,6 @@ class CrossTenantAdminIsolationTests(TestCase):
         self._auth_as(self.admin_a, self.store_a)
         resp = self.client.get(f"/api/v1/admin/support-tickets/{self.ticket_b.public_id}/")
         self.assertEqual(resp.status_code, 404)
-
-    # ------------------------------------------------------------------
-    # Coupon isolation
-    # ------------------------------------------------------------------
-
-    def test_admin_coupon_isolated_by_store(self):
-        """Store A admin must not see store B's coupons."""
-        self._auth_as(self.admin_a, self.store_a)
-        resp = self.client.get("/api/v1/admin/coupons/")
-        self.assertEqual(resp.status_code, 200)
-        results = resp.data.get("results", resp.data)
-        public_ids = [item.get("public_id") or item.get("id") for item in results]
-        self.assertIn(self.coupon_a.public_id, public_ids)
-        self.assertNotIn(self.coupon_b.public_id, public_ids)
 
     # ------------------------------------------------------------------
     # Notification (CTA) isolation

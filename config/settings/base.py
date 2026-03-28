@@ -60,7 +60,6 @@ INSTALLED_APPS = [
     "engine.apps.customers",
     "engine.apps.inventory",
     "engine.apps.shipping",
-    "engine.apps.coupons",
     "engine.apps.reviews",
     "engine.apps.banners",
     "engine.apps.analytics",

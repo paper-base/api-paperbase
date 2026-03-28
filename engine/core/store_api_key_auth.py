@@ -33,6 +33,7 @@ STORE_FRONTEND_ROUTE_POLICY = (
     ("/api/v1/store/", {"GET"}),
     ("/api/v1/categories/", {"GET"}),
     ("/api/v1/banners/", {"GET"}),
+    ("/api/v1/notifications/", {"GET"}),
     ("/api/v1/reviews/", {"GET", "POST"}),
     ("/api/v1/shipping/options/", {"GET"}),
     ("/api/v1/shipping/zones/", {"GET"}),
@@ -41,7 +42,6 @@ STORE_FRONTEND_ROUTE_POLICY = (
     ("/api/v1/orders/", {"POST"}),
     ("/api/v1/support/tickets/", {"POST"}),
     ("/api/v1/pricing/", {"POST"}),
-    ("/api/v1/promotions/", {"GET"}),
     ("/api/v1/search/", {"GET"}),
 )
 _API_KEY_VIEW_SCAN_DONE = False

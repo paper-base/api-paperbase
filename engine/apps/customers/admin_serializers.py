@@ -1,9 +1,10 @@
 from rest_framework import serializers
+from engine.core.serializers import SafeModelSerializer
 
 from .models import Customer, CustomerAddress
 
 
-class AdminCustomerAddressSerializer(serializers.ModelSerializer):
+class AdminCustomerAddressSerializer(SafeModelSerializer):
     class Meta:
         model = CustomerAddress
         fields = [
@@ -24,7 +25,7 @@ class AdminCustomerAddressSerializer(serializers.ModelSerializer):
         read_only_fields = ["public_id", "created_at"]
 
 
-class AdminCustomerSerializer(serializers.ModelSerializer):
+class AdminCustomerSerializer(SafeModelSerializer):
     user_public_id = serializers.CharField(source="user.public_id", read_only=True, allow_null=True)
     user_email = serializers.CharField(source="user.email", read_only=True, allow_null=True)
     user_username = serializers.SerializerMethodField()
@@ -68,7 +69,7 @@ class AdminCustomerSerializer(serializers.ModelSerializer):
         return getattr(user, "email", None)
 
 
-class AdminCustomerListSerializer(serializers.ModelSerializer):
+class AdminCustomerListSerializer(SafeModelSerializer):
     user_public_id = serializers.CharField(source="user.public_id", read_only=True, allow_null=True)
     user_email = serializers.CharField(source="user.email", read_only=True, allow_null=True)
     user_username = serializers.SerializerMethodField()

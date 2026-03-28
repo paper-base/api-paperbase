@@ -23,19 +23,19 @@ def quote_shipping(
     *,
     store: Store,
     order_subtotal: Decimal,
-    shipping_zone_id: int | None,
-    shipping_method_id: int | None = None,
+    shipping_zone_pk: int | None,
+    shipping_method_pk: int | None = None,
 ) -> ShippingQuote:
     """
     Return the best matching shipping quote for a zone-selected order.
     """
-    if shipping_zone_id is None:
+    if shipping_zone_pk is None:
         raise ValidationError("Shipping zone is required.")
 
     zone = ShippingZone.objects.filter(
         store=store,
         is_active=True,
-        id=shipping_zone_id,
+        id=shipping_zone_pk,
     ).first()
     if zone is None:
         raise ValidationError("Invalid shipping zone for this store.")
@@ -45,8 +45,8 @@ def quote_shipping(
         .prefetch_related("zones")
         .order_by("order", "id")
     )
-    if shipping_method_id is not None:
-        methods = methods.filter(id=shipping_method_id)
+    if shipping_method_pk is not None:
+        methods = methods.filter(id=shipping_method_pk)
 
     best: ShippingQuote | None = None
 
@@ -140,12 +140,17 @@ def get_shipping_options(store, zone_public_id: str, order_total_str: str | None
                         continue
                 options.append(
                     {
+                        "rate_public_id": rate.public_id,
                         "method_public_id": method.public_id,
                         "method_name": method.name,
+                        "method_type": method.method_type,
+                        "method_order": method.order,
                         "zone_public_id": rate.shipping_zone.public_id,
                         "zone_name": rate.shipping_zone.name,
                         "price": rate.price,
                         "rate_type": rate.rate_type,
+                        "min_order_total": rate.min_order_total,
+                        "max_order_total": rate.max_order_total,
                     }
                 )
         return ShippingOptionSerializer(options, many=True).data
@@ -175,9 +180,12 @@ def build_shipping_zones_catalog(store: Store) -> list[dict]:
     for zone in zones:
         out.append(
             {
-                "id": zone.public_id,
+                "zone_public_id": zone.public_id,
                 "name": zone.name,
                 "estimated_days": zone.estimated_delivery_text or "",
+                "is_active": zone.is_active,
+                "created_at": zone.created_at.isoformat() if zone.created_at else None,
+                "updated_at": zone.updated_at.isoformat() if zone.updated_at else None,
                 "cost_rules": _zone_cost_rules(store, zone),
             }
         )
@@ -218,9 +226,9 @@ def _zone_cost_rules(store: Store, zone: ShippingZone) -> list[dict]:
             kv[0][1] or Decimal("0.00"),
         ),
     ):
-        row = {"min_order": float(mn), "cost": float(price)}
+        row = {"min_order_total": float(mn), "shipping_cost": float(price)}
         if mx is not None:
-            row["max_order"] = float(mx)
+            row["max_order_total"] = float(mx)
         rows.append(row)
     return rows
 
@@ -234,8 +242,7 @@ def preview_shipping_for_lines(
     """
     Server-side shipping quote for explicit line items and zone.
 
-    Uses PricingEngine (subtotal_after_coupon with no coupon == after bulk)
-    as the order subtotal for rate matching, consistent with checkout.
+    Uses PricingEngine merchandise subtotal for rate matching, consistent with checkout.
     """
     from django.core.exceptions import ValidationError
 
@@ -247,7 +254,7 @@ def preview_shipping_for_lines(
         public_id=(zone_public_id or "").strip(),
     ).first()
     if zone is None:
-        raise ValidationError({"zone_id": "Unknown or inactive shipping zone."})
+        raise ValidationError({"zone_public_id": "Unknown or inactive shipping zone."})
 
     if not lines:
         raise ValidationError({"items": "At least one line item is required."})
@@ -255,8 +262,8 @@ def preview_shipping_for_lines(
     breakdown = PricingEngine.compute(
         store=store,
         lines=lines,
-        shipping_zone_id=zone.id,
-        shipping_method_id=None,
+        shipping_zone_pk=zone.id,
+        shipping_method_pk=None,
     )
     return {
         "shipping_cost": str(breakdown.shipping_cost),

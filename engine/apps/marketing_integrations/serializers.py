@@ -1,11 +1,12 @@
 from rest_framework import serializers
+from engine.core.serializers import SafeModelSerializer
 
 from engine.core.encryption import decrypt_value, encrypt_value, mask_value
 
 from .models import IntegrationEventSettings, MarketingIntegration
 
 
-class IntegrationEventSettingsSerializer(serializers.ModelSerializer):
+class IntegrationEventSettingsSerializer(SafeModelSerializer):
     class Meta:
         model = IntegrationEventSettings
         fields = [
@@ -16,7 +17,7 @@ class IntegrationEventSettingsSerializer(serializers.ModelSerializer):
         ]
 
 
-class MarketingIntegrationSerializer(serializers.ModelSerializer):
+class MarketingIntegrationSerializer(SafeModelSerializer):
     """Read serializer — returns masked credentials, never raw values."""
 
     access_token_masked = serializers.SerializerMethodField()
