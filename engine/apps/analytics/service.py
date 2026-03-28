@@ -21,12 +21,6 @@ class AnalyticsService:
     def track_search(self, request, query: str):
         dispatcher.track_search(request, query)
 
-    def track_add_to_cart(self, request, product, quantity: int) -> None:
-        dispatcher.track_add_to_cart(request, product, quantity)
-
-    def track_add_to_wishlist(self, request, product) -> None:
-        dispatcher.track_add_to_wishlist(request, product)
-
     def track_initiate_checkout(self, request) -> None:
         dispatcher.track_initiate_checkout(request)
 

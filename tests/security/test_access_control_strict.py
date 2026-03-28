@@ -728,7 +728,6 @@ def test_auto_route_policy_with_api_key():
             # Skip state-changing routes that need setup payload to avoid false negatives.
             if method == "GET" and prefix not in {
                 "/api/v1/orders/",
-                "/api/v1/wishlist/",
             }:
                 expected_allowed.add((method, prefix))
 
@@ -793,42 +792,6 @@ def test_staff_without_membership_cannot_switch_tenants_via_header():
 
     response = client.get("/api/v1/orders/")
     assert response.status_code == 403
-
-
-@pytest.mark.django_db
-def test_wishlist_is_isolated_per_authenticated_user():
-    store = _make_store("Wishlist Isolation")
-    product = _make_product(store, stock=10)
-    _key_row, api_key = create_store_api_key(store, name="frontend")
-
-    user_a = User.objects.create_user(email="wish-a@example.com", password="pass1234")
-    user_b = User.objects.create_user(email="wish-b@example.com", password="pass1234")
-    for u in (user_a, user_b):
-        u.is_verified = True
-        u.save(update_fields=["is_verified"])
-
-    def client_for(user):
-        c = APIClient()
-        c.force_login(user)
-        c.credentials(HTTP_AUTHORIZATION=f"Bearer {api_key}")
-        return c
-
-    client_a = client_for(user_a)
-    client_b = client_for(user_b)
-
-    add_response = client_a.post(
-        "/api/v1/wishlist/add/",
-        {"product_public_id": product.public_id},
-        format="json",
-    )
-    assert add_response.status_code == 201
-
-    list_a = client_a.get("/api/v1/wishlist/")
-    list_b = client_b.get("/api/v1/wishlist/")
-    assert list_a.status_code == 200
-    assert list_b.status_code == 200
-    assert len(list_a.data["results"]) == 1
-    assert list_b.data["results"] == []
 
 
 @pytest.mark.django_db

@@ -25,8 +25,6 @@ class StoreAnalytics(models.Model):
         decimal_places=2,
         default=Decimal("0.00"),
     )
-    cart_items_count = models.PositiveIntegerField(default=0)
-    wishlist_items_count = models.PositiveIntegerField(default=0)
     page_views = models.PositiveIntegerField(default=0, null=True, blank=True)
     conversion_rate = models.DecimalField(
         max_digits=5,

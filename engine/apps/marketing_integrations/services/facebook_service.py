@@ -122,17 +122,6 @@ def track_purchase(request, order, integration) -> None:
     _send_event(integration, "Purchase", event_data, user_data)
 
 
-def track_add_to_cart(request, product, quantity: int, integration) -> None:
-    user_data = _extract_user_data(request)
-    event_data = {
-        "currency": "BDT",
-        "value": float(product.price),
-        "content_type": "product",
-        "contents": [{"id": product.public_id, "quantity": quantity}],
-    }
-    _send_event(integration, "AddToCart", event_data, user_data)
-
-
 def track_initiate_checkout(request, integration) -> None:
     user_data = _extract_user_data(request)
     _send_event(integration, "InitiateCheckout", {}, user_data)
@@ -148,17 +137,6 @@ def track_view_content(request, product, integration) -> None:
         "content_name": product.name,
     }
     _send_event(integration, "ViewContent", event_data, user_data)
-
-
-def track_add_to_wishlist(request, product, integration) -> None:
-    user_data = _extract_user_data(request)
-    event_data = {
-        "currency": "BDT",
-        "value": float(product.price),
-        "content_type": "product",
-        "contents": [{"id": product.public_id, "quantity": 1}],
-    }
-    _send_event(integration, "AddToWishlist", event_data, user_data)
 
 
 def track_support_ticket_submission(request, integration) -> None:

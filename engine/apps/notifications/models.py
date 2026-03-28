@@ -22,7 +22,6 @@ class StaffNotification(models.Model):
         NEW_ORDER = 'new_order', 'New order'
         NEW_CUSTOMER = 'new_customer', 'New customer'
         LOW_STOCK = 'low_stock', 'Product out of stock'
-        WISHLIST_ADD = 'wishlist_add', 'Product added to wishlist'
         SUPPORT_TICKET = 'support_ticket', 'Support ticket submitted'
         OTHER = 'other', 'Other'
 

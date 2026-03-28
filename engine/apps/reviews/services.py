@@ -125,9 +125,13 @@ def _order_access_allowed(*, order: Order, user, phone_proof: str, email_proof: 
     email_o = normalize_coupon_email(order.email or "")
     phone_p = normalize_phone_digits(phone_proof or "")
     email_p = normalize_coupon_email(email_proof or "")
-    if phone_p and phone_o and phone_p == phone_o:
-        return True
-    if email_p and email_o and email_p == email_o:
+    # If the client supplies a phone, it must match; do not fall through to email-only.
+    if phone_p:
+        if not phone_o or phone_p != phone_o:
+            return False
+    if email_p:
+        return bool(email_o and email_p == email_o)
+    if phone_p:
         return True
     return False
 

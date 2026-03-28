@@ -159,7 +159,7 @@ def invalidate_shipping_cache(store_public_id: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Storefront: zone catalog + cart-based preview
+# Storefront: zone catalog + line-items preview
 # ---------------------------------------------------------------------------
 
 

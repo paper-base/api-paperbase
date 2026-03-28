@@ -82,20 +82,12 @@ def track_purchase(request, order) -> None:
     _dispatch(request, "track_purchase", "track_purchase", order)
 
 
-def track_add_to_cart(request, product, quantity: int) -> None:
-    _dispatch(request, "track_add_to_cart", "track_add_to_cart", product, quantity)
-
-
 def track_initiate_checkout(request) -> None:
     _dispatch(request, "track_initiate_checkout", "track_initiate_checkout")
 
 
 def track_view_content(request, product) -> None:
     _dispatch(request, "track_view_content", "track_view_content", product)
-
-
-def track_add_to_wishlist(request, product) -> None:
-    _dispatch(request, "track_view_content", "track_add_to_wishlist", product)
 
 
 def track_search(request, query: str) -> None:

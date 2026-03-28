@@ -67,8 +67,7 @@ core/
       products/            # Products, variants, attributes, images
       categories/          # (Reserved for category tree)
       inventory/           # Stock and stock movements
-      cart/                # Legacy app label (models removed; migrations only)
-      wishlist/            # Wishlist (authenticated)
+      wishlist/            # Migration history only (wishlist removed)
       orders/              # Orders and order lifecycle
       payments/            # Payment methods and transactions (gateway-ready)
       shipping/            # Shipping zones, methods, rates
@@ -92,10 +91,6 @@ core/
 | GET | `/api/v1/products/<id>/related/` | no | Related products |
 | GET | `/api/v1/categories/` | no | Category tree (tenant-scoped) |
 | GET | `/api/v1/banners/` | no | Active store banners (tenant-scoped) |
-| **Wishlist** |
-| GET | `/api/v1/wishlist/` | JWT + API key | List wishlist (session auth or JWT; not anonymous) |
-| POST | `/api/v1/wishlist/add/` | JWT + API key | `{"product_public_id": "prd_..."}` |
-| POST | `/api/v1/wishlist/remove/<product_public_id>/` | JWT + API key | Remove |
 | **Orders** |
 | POST | `/api/v1/orders/` | API key | Create order from payload: `products`, shipping fields, `phone` / `email` (no server cart) |
 | GET | `/api/v1/orders/<public_id>/` | staff/JWT | Order detail (store-scoped admin) |
@@ -116,7 +111,7 @@ core/
 | GET | `/api/v1/notifications/active/` | no | Active banner notifications |
 | POST | `/api/v1/support/tickets/` | no | Submit support ticket (tenant host / store context) |
 
-**Admin API** (staff only): `/api/v1/admin/` – stats (`support_tickets`, `supportTickets` in analytics series), analytics, branding, CRUD including `support-tickets/`, products, orders, wishlist, inventory, notifications, etc.
+**Admin API** (staff only): `/api/v1/admin/` – stats (`support_tickets`, `supportTickets` in analytics series), analytics, branding, CRUD including `support-tickets/`, products, orders, inventory, notifications, etc.
 
 ## Environment variables
 
@@ -135,7 +130,7 @@ See `.env.example` for the full list. Production requires at least:
 ## Auth
 
 - **JWT**: `POST /api/v1/auth/token/` with `username` and `password`. Use header: `Authorization: Bearer <access_token>`.
-- **Session**: Wishlist may use session-backed login with the storefront API key; there is no anonymous guest wishlist or `X-Store-Session-Token` flow.
+- **Storefront**: Use the publishable key (`ak_pk_…`) for catalog and stateless checkout; dashboard flows use JWT + `X-Store-Public-ID` where applicable.
 
 ## Using as a template
 

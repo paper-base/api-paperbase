@@ -73,7 +73,6 @@ class IntegrationEventSettings(models.Model):
         related_name="event_settings",
     )
     track_purchase = models.BooleanField(default=True)
-    track_add_to_cart = models.BooleanField(default=True)
     track_initiate_checkout = models.BooleanField(default=True)
     track_view_content = models.BooleanField(default=False)
     track_page_view = models.BooleanField(default=False)

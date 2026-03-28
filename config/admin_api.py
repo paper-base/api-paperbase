@@ -19,7 +19,6 @@ from engine.apps.billing.feature_gate import require_feature
 from engine.apps.products.models import Product, Category
 from engine.apps.support.models import SupportTicket
 from engine.apps.notifications.models import StorefrontCTA
-from engine.apps.wishlist.models import WishlistItem
 from engine.apps.analytics.models import StoreDashboardStatsSnapshot
 
 
@@ -37,14 +36,11 @@ class DashboardStatsView(APIView):
         category_qs = Category.objects.all()
         support_ticket_qs = SupportTicket.objects.all()
         notification_qs = StorefrontCTA.objects.filter(is_active=True)
-        wishlist_qs = WishlistItem.objects.all()
-
         order_qs = order_qs.filter(store=store)
         product_qs = product_qs.filter(store=store)
         category_qs = category_qs.filter(store=store)
         support_ticket_qs = support_ticket_qs.filter(store=store)
         notification_qs = notification_qs.filter(store=store)
-        wishlist_qs = wishlist_qs.filter(product__store=store)
 
         order_counts = order_qs.aggregate(
             total_count=Count('id'),
@@ -81,8 +77,6 @@ class DashboardStatsView(APIView):
             'subcategories': category_qs.filter(parent__isnull=False).count(),
             'support_tickets': support_ticket_qs.count(),
             'notifications': notification_qs.count(),
-            'carts': 0,
-            'wishlist': wishlist_qs.count(),
             'recent_orders': AdminOrderListSerializer(recent_orders, many=True).data,
         })
 
@@ -149,10 +143,6 @@ class DashboardStatsOverviewView(APIView):
             created_at__date__gte=start_date,
             created_at__date__lte=end_date,
         )
-        wishlist_qs = WishlistItem.objects.filter(
-            created_at__date__gte=start_date,
-            created_at__date__lte=end_date,
-        )
         support_ticket_qs = SupportTicket.objects.filter(
             created_at__date__gte=start_date,
             created_at__date__lte=end_date,
@@ -161,14 +151,11 @@ class DashboardStatsOverviewView(APIView):
         if store:
             order_qs = order_qs.filter(store=store)
             product_qs = product_qs.filter(store=store)
-            wishlist_qs = wishlist_qs.filter(product__store=store)
             support_ticket_qs = support_ticket_qs.filter(store=store)
 
         summary = {
             "totalOrders": order_qs.count(),
             "totalProducts": product_qs.count(),
-            "totalCartItems": 0,
-            "totalWishlistItems": wishlist_qs.count(),
             "totalSupportTickets": support_ticket_qs.count(),
         }
 
@@ -187,8 +174,6 @@ class DashboardStatsOverviewView(APIView):
                         "label": label_str,
                         "orders": 0,
                         "products": 0,
-                        "cartItems": 0,
-                        "wishlistItems": 0,
                         "supportTickets": 0,
                     },
                 )
@@ -196,7 +181,6 @@ class DashboardStatsOverviewView(APIView):
 
         _update_series(order_qs, "orders")
         _update_series(product_qs, "products")
-        _update_series(wishlist_qs, "wishlistItems")
         _update_series(support_ticket_qs, "supportTickets")
 
         series = sorted(series_map.values(), key=lambda x: x["label"])
@@ -216,8 +200,6 @@ class DashboardStatsOverviewView(APIView):
                         "label": label_str,
                         "orders": 0,
                         "products": 0,
-                        "cartItems": 0,
-                        "wishlistItems": 0,
                         "supportTickets": 0,
                     }
                 filled_series.append(entry)
@@ -341,10 +323,6 @@ class DashboardAnalyticsView(APIView):
             created_at__date__gte=start_date,
             created_at__date__lte=end_date,
         )
-        wishlist_qs = WishlistItem.objects.filter(
-            created_at__date__gte=start_date,
-            created_at__date__lte=end_date,
-        )
         support_ticket_qs = SupportTicket.objects.filter(
             created_at__date__gte=start_date,
             created_at__date__lte=end_date,
@@ -352,14 +330,11 @@ class DashboardAnalyticsView(APIView):
 
         order_qs = order_qs.filter(store=store)
         product_qs = product_qs.filter(store=store)
-        wishlist_qs = wishlist_qs.filter(product__store=store)
         support_ticket_qs = support_ticket_qs.filter(store=store)
 
         summary = {
             'totalOrders': order_qs.count(),
             'totalProducts': product_qs.count(),
-            'totalCartItems': 0,
-            'totalWishlistItems': wishlist_qs.count(),
             'totalSupportTickets': support_ticket_qs.count(),
         }
 
@@ -382,8 +357,6 @@ class DashboardAnalyticsView(APIView):
                         'label': label_str,
                         'orders': 0,
                         'products': 0,
-                        'cartItems': 0,
-                        'wishlistItems': 0,
                         'supportTickets': 0,
                     },
                 )
@@ -391,7 +364,6 @@ class DashboardAnalyticsView(APIView):
 
         _update_series(order_qs, 'orders')
         _update_series(product_qs, 'products')
-        _update_series(wishlist_qs, 'wishlistItems')
         _update_series(support_ticket_qs, 'supportTickets')
 
         # Sort existing buckets.
@@ -412,8 +384,6 @@ class DashboardAnalyticsView(APIView):
                         'label': label_str,
                         'orders': 0,
                         'products': 0,
-                        'cartItems': 0,
-                        'wishlistItems': 0,
                         'supportTickets': 0,
                     }
                 filled_series.append(entry)

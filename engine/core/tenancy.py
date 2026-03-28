@@ -23,7 +23,8 @@ def get_active_store(request: HttpRequest) -> ActiveStoreContext:
     2) Explicit X-Store-Public-ID header (dashboard/admin)
     3) JWT claim `active_store_public_id`
     """
-    store: Optional[Store] = getattr(request, "store", None)
+    store_from_api_key = getattr(request, "store", None)
+    store: Optional[Store] = store_from_api_key
     membership: Optional[StoreMembership] = None
     header_store_public_id = request.headers.get("X-Store-Public-ID") or request.headers.get("x-store-public-id")
     token_store_public_id = None
@@ -46,7 +47,13 @@ def get_active_store(request: HttpRequest) -> ActiveStoreContext:
             membership = None
         # Fail-closed for dashboard/authenticated contexts:
         # selecting a store by header/JWT claim requires explicit membership.
-        if membership is None and not getattr(request.user, "is_superuser", False):
+        # Storefront publishable key already bound `request.store`; do not strip it
+        # when the logged-in user has no StoreMembership (e.g. shopper + session).
+        if (
+            membership is None
+            and not getattr(request.user, "is_superuser", False)
+            and store_from_api_key is None
+        ):
             store = None
 
     return ActiveStoreContext(store=store, membership=membership)

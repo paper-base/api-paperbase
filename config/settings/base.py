@@ -54,8 +54,6 @@ INSTALLED_APPS = [
     "engine.apps.billing",
     "engine.apps.products",
     "engine.apps.orders",
-    "engine.apps.cart",
-    "engine.apps.wishlist",
     "engine.apps.notifications",
     "engine.apps.support",
     "engine.apps.accounts",

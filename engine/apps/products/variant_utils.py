@@ -1,4 +1,4 @@
-"""Storefront variant selection rules shared by cart, orders, and pricing."""
+"""Storefront variant selection rules shared by orders and pricing."""
 
 from __future__ import annotations
 

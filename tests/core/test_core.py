@@ -26,7 +26,6 @@ from engine.apps.orders.services import resolve_and_attach_customer
 from engine.apps.customers.models import Customer, CustomerAddress
 from engine.apps.coupons.models import BulkDiscount, Coupon, CouponUsage
 from engine.apps.coupons.services import consume_coupon_usage, validate_coupon_for_subtotal
-from engine.apps.wishlist.models import WishlistItem
 from engine.apps.reviews.models import Review
 from engine.apps.notifications.models import StorefrontCTA
 from engine.apps.orders.services import transition_order_status
@@ -321,7 +320,7 @@ class PublicIdGenerationTests(TestCase):
             ("image", "img_"),
             ("customer", "cus_"),
             ("address", "adr_"),
-            ("wishlist", "wsh_"),
+            ("orderitem", "oit_"),
             ("coupon", "cpn_"),
             ("couponusage", "cpu_"),
             ("bulkdiscount", "bdk_"),
@@ -440,7 +439,7 @@ class PublicIdApiTests(TestCase):
         )
         self.assertEqual(resp.status_code, 200)
 
-    def test_wishlist_item_exposes_public_id(self):
+    def test_checkout_order_item_exposes_public_id(self):
         cat = Category.objects.create(
             store=self.store,
             name="Test Cat",
@@ -459,22 +458,27 @@ class PublicIdApiTests(TestCase):
                 variant=None,
                 defaults={"quantity": 5},
             )
-        self.client.force_login(self.user)
+        zone = _default_shipping_zone(self.store)
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {self.api_key}")
         resp = self.client.post(
-            "/api/v1/wishlist/add/",
-            {"product_public_id": product.public_id},
+            "/api/v1/orders/",
+            {
+                "shipping_zone": zone.public_id,
+                "shipping_name": "Buyer",
+                "phone": "01710000000",
+                "email": "buyer@example.com",
+                "shipping_address": "Addr",
+                "products": [{"public_id": product.public_id, "quantity": 1}],
+            },
             format="json",
             HTTP_HOST="apitest.local",
         )
-        self.assertEqual(resp.status_code, 201)
-        list_resp = self.client.get("/api/v1/wishlist/", HTTP_HOST="apitest.local")
-        self.assertEqual(list_resp.status_code, 200)
-        results = list_resp.data.get("results", list_resp.data)
-        self.assertEqual(len(results), 1)
-        item_public_id = results[0].get("public_id")
-        self.assertIsNotNone(item_public_id)
-        self.assertTrue(str(item_public_id).startswith("wsh_"))
+        self.assertEqual(resp.status_code, 201, getattr(resp, "data", None))
+        items = resp.data.get("items") or []
+        self.assertEqual(len(items), 1)
+        oid = items[0].get("public_id")
+        self.assertIsNotNone(oid)
+        self.assertTrue(str(oid).startswith("oit_"))
 
     def test_switch_store_accepts_public_id(self):
         self._authenticate()
@@ -888,51 +892,6 @@ class IdrSecurityTests(TestCase):
         )
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {resp.data['access']}")
 
-    def test_wishlist_remove_does_not_remove_peer_wishlist(self):
-        """User B removing a product from their wishlist must not affect User A's entry."""
-        cat = Category.objects.create(store=self.store, name="Cat", slug="cat")
-        with tenant_scope_from_store(store=self.store, reason="test fixture"):
-            product = Product.objects.create(
-                store=self.store, name="Prod", price=10, category=cat, stock=5
-            )
-            Inventory.objects.get_or_create(
-                product=product,
-                variant=None,
-                defaults={"quantity": 5},
-            )
-        _key_row, api_key = create_store_api_key(self.store, name="idor-wishlist")
-        for user in (self.user_a, self.user_b):
-            c = APIClient()
-            c.force_login(user)
-            c.credentials(HTTP_AUTHORIZATION=f"Bearer {api_key}")
-            r = c.post(
-                "/api/v1/wishlist/add/",
-                {"product_public_id": product.public_id},
-                format="json",
-                HTTP_HOST="sec.local",
-            )
-            self.assertEqual(r.status_code, 201, getattr(r, "data", None))
-
-        ca = APIClient()
-        ca.force_login(self.user_a)
-        ca.credentials(HTTP_AUTHORIZATION=f"Bearer {api_key}")
-        list_a_before = ca.get("/api/v1/wishlist/", HTTP_HOST="sec.local")
-        self.assertEqual(list_a_before.status_code, 200)
-        self.assertEqual(len(list_a_before.data.get("results", [])), 1)
-
-        cb = APIClient()
-        cb.force_login(self.user_b)
-        cb.credentials(HTTP_AUTHORIZATION=f"Bearer {api_key}")
-        rem = cb.post(
-            f"/api/v1/wishlist/remove/{product.public_id}/",
-            format="json",
-            HTTP_HOST="sec.local",
-        )
-        self.assertEqual(rem.status_code, 200, getattr(rem, "data", None))
-
-        list_a_after = ca.get("/api/v1/wishlist/", HTTP_HOST="sec.local")
-        self.assertEqual(len(list_a_after.data.get("results", [])), 1)
-
     def test_customer_address_requires_ownership(self):
         """User B cannot access User A's customer address."""
         self._auth_as(self.user_a)
@@ -1025,10 +984,6 @@ class CrossTenantAdminIsolationTests(TestCase):
             store=self.store_b, cta_text="CTA Store B", is_active=True
         )
 
-        self.wishlist_item_b = WishlistItem.objects.create(
-            user=self.shared_user,
-            product=self.product_b,
-        )
         with tenant_scope_from_store(store=self.store_b, reason="test fixture"):
             self.review_b = Review.objects.create(
                 store=self.store_b,
@@ -1100,24 +1055,6 @@ class CrossTenantAdminIsolationTests(TestCase):
         )
         self.assertIn(resp.status_code, [401, 403, 404])
 
-    def test_cart_routes_return_404(self):
-        resp = self.client.post(
-            "/api/v1/cart/add/",
-            {"product_public_id": self.product_b.public_id, "quantity": 1},
-            format="json",
-            HTTP_HOST="admin-a.local",
-        )
-        self.assertEqual(resp.status_code, 404)
-
-    def test_wishlist_add_cross_store_product_is_blocked(self):
-        resp = self.client.post(
-            "/api/v1/wishlist/add/",
-            {"product_public_id": self.product_b.public_id},
-            format="json",
-            HTTP_HOST="admin-a.local",
-        )
-        self.assertIn(resp.status_code, [401, 403, 404])
-
     def test_review_summary_cross_store_product_is_blocked(self):
         resp = self.client.get(
             "/api/v1/reviews/summary/",
@@ -1163,40 +1100,6 @@ class CrossTenantAdminIsolationTests(TestCase):
             HTTP_HOST="admin-a.local",
         )
         self.assertIn(by_slug.status_code, [401, 403, 404])
-
-    def test_cross_store_cart_access(self):
-        """Legacy cart routes are removed."""
-        add_resp = self.client.post(
-            "/api/v1/cart/add/",
-            {"product_public_id": self.product_b.public_id, "quantity": 1},
-            format="json",
-            HTTP_HOST="admin-a.local",
-        )
-        self.assertEqual(add_resp.status_code, 404)
-
-        remove_resp = self.client.post(
-            f"/api/v1/cart/remove-by-product/{self.product_b.public_id}/",
-            format="json",
-            HTTP_HOST="admin-a.local",
-        )
-        self.assertEqual(remove_resp.status_code, 404)
-
-    def test_cross_store_wishlist_access(self):
-        """Wishlist add/remove with Store B product from Store A context must fail."""
-        add_resp = self.client.post(
-            "/api/v1/wishlist/add/",
-            {"product_public_id": self.product_b.public_id},
-            format="json",
-            HTTP_HOST="admin-a.local",
-        )
-        self.assertIn(add_resp.status_code, [401, 403, 404])
-
-        remove_resp = self.client.post(
-            f"/api/v1/wishlist/remove/{self.product_b.public_id}/",
-            format="json",
-            HTTP_HOST="admin-a.local",
-        )
-        self.assertIn(remove_resp.status_code, [401, 403, 404])
 
     def test_public_id_only_access(self):
         """

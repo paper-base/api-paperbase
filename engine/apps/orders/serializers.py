@@ -89,7 +89,7 @@ class OrderSerializer(serializers.ModelSerializer):
 
 
 class OrderCreateSerializer(serializers.Serializer):
-    """Stateless checkout: shipping fields + line items (frontend-owned cart)."""
+    """Stateless checkout: shipping fields + line items from the request body."""
     shipping_zone = serializers.SlugRelatedField(
         slug_field='public_id',
         queryset=ShippingZone.objects.none(),

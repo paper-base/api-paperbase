@@ -56,7 +56,7 @@ def create_store_api_key(
     scopes = (
         ["admin:all", "mutations:all"]
         if key_type == StoreApiKey.KeyType.SECRET
-        else ["products:read", "cart:write", "orders:create", "orders:read"]
+        else ["products:read", "orders:create", "orders:read"]
     )
     with transaction.atomic():
         row = StoreApiKey.objects.create(

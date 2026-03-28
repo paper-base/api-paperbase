@@ -10,7 +10,6 @@ class IntegrationEventSettingsSerializer(serializers.ModelSerializer):
         model = IntegrationEventSettings
         fields = [
             "track_purchase",
-            "track_add_to_cart",
             "track_initiate_checkout",
             "track_view_content",
             "track_page_view",
