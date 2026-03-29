@@ -5,7 +5,12 @@ import os
 from django.conf import settings
 
 from engine.core.safety.tenant_safety import log_tenant_violation
-from engine.core.tenant_context import TenantContextMissingError, _tenant_context_exists, get_current_store
+from engine.core.tenant_context import (
+    TenantContextMissingError,
+    _tenant_context_exists,
+    get_current_store,
+    get_is_platform_admin,
+)
 from engine.core.tenant_execution import in_system_scope
 
 
@@ -32,6 +37,8 @@ def validate_tenant_query_allowed(*, model_name: str, operation: str) -> None:
         return
     store = get_current_store()
     if store is not None:
+        return
+    if get_is_platform_admin():
         return
     if strict_guard_enabled():
         log_tenant_violation(model_name=model_name, operation=operation)

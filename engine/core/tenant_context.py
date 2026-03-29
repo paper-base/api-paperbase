@@ -10,18 +10,23 @@ class TenantContextMissingError(RuntimeError):
 
 @dataclass(frozen=True)
 class _TenantContextState:
-    store: object | None
+    store: object | None = None
+    is_platform_admin: bool = False
 
 
 _tenant_context_state: ContextVar[_TenantContextState] = ContextVar(
     "tenant_context_state",
-    default=_TenantContextState(store=None),
+    default=_TenantContextState(),
 )
-_tenant_context_default_state = _TenantContextState(store=None)
+_tenant_context_default_state = _TenantContextState()
 
 
-def _set_tenant_context(*, store: object | None) -> Token:
-    return _tenant_context_state.set(_TenantContextState(store=store))
+def _set_tenant_context(
+    *, store: object | None = None, is_platform_admin: bool = False
+) -> Token:
+    return _tenant_context_state.set(
+        _TenantContextState(store=store, is_platform_admin=is_platform_admin)
+    )
 
 
 def _reset_tenant_context(token: Token) -> None:
@@ -39,6 +44,10 @@ def _tenant_context_exists() -> bool:
 
 def get_current_store():
     return _tenant_context_state.get().store
+
+
+def get_is_platform_admin() -> bool:
+    return _tenant_context_state.get().is_platform_admin
 
 
 def get_current_store_id() -> int:

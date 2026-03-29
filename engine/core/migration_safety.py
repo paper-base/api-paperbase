@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from engine.core.tenant_context import _tenant_context_exists, get_current_store
+from engine.core.tenant_context import (
+    _tenant_context_exists,
+    get_current_store,
+    get_is_platform_admin,
+)
 from engine.core.tenant_execution import in_tenant_scope
 
 
@@ -16,7 +20,12 @@ class TenantSafeMigration:
         if scope not in {cls.SYSTEM_SCOPE, cls.SINGLE_TENANT_SCOPE}:
             raise RuntimeError(f"Unknown migration scope: {scope}")
         if scope == cls.SYSTEM_SCOPE:
-            if in_tenant_scope() or get_current_store() is not None or _tenant_context_exists():
+            if (
+                in_tenant_scope()
+                or get_current_store() is not None
+                or _tenant_context_exists()
+                or get_is_platform_admin()
+            ):
                 raise RuntimeError("SYSTEM_SCOPE migrations must run with tenant context disabled.")
             return
         if get_current_store() is None:

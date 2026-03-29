@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from django.db import models
 
-from engine.core.tenant_context import TenantContextMissingError, get_current_store
+from engine.core.tenant_context import (
+    TenantContextMissingError,
+    get_current_store,
+    get_is_platform_admin,
+)
 from engine.core.tenant_execution import in_system_scope
 from engine.core.tenant_guard import strict_guard_enabled, validate_tenant_query_allowed
 
@@ -65,6 +69,8 @@ class TenantAwareManager(models.Manager):
         qs = TenantAwareQuerySet(self.model, using=self._db)
         store = get_current_store()
         if in_system_scope():
+            return qs
+        if get_is_platform_admin():
             return qs
         if store is None:
             if strict_guard_enabled():

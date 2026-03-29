@@ -2,19 +2,27 @@ from __future__ import annotations
 
 from django.utils.deprecation import MiddlewareMixin
 
+from engine.core.request_context import RequestContext, user_enters_platform_scope
 from engine.core.tenancy import get_active_store
 from engine.core.tenant_context import _clear_tenant_context, _set_tenant_context
 
 
 class TenantContextMiddleware(MiddlewareMixin):
     """
-    Persist request-scoped tenant context as the single source of truth.
+    Resolve execution context once per request and mirror it to ContextVar for ORM code.
     """
 
     def process_request(self, request):
-        ctx = get_active_store(request)
-        token = _set_tenant_context(store=ctx.store)
-        request._tenant_context_token = token
+        if user_enters_platform_scope(request.user):
+            request.context = RequestContext(tenant=None, is_platform_admin=True)
+            _set_tenant_context(store=None, is_platform_admin=True)
+        else:
+            ctx = get_active_store(request)
+            request.context = RequestContext(
+                tenant=ctx.store,
+                is_platform_admin=False,
+            )
+            _set_tenant_context(store=ctx.store, is_platform_admin=False)
         return None
 
     def process_response(self, request, response):

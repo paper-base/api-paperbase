@@ -3,6 +3,8 @@ from django.contrib.auth import get_user_model
 from django.test import RequestFactory
 
 from engine.apps.products.models import Category, Product
+from engine.core.middleware.tenant_context_middleware import TenantContextMiddleware
+from engine.core.tenant_context import _clear_tenant_context
 from engine.apps.stores.models import Store
 from engine.apps.marketing_integrations.services import dispatcher
 from engine.core.authz import can_enable_internal_override
@@ -21,6 +23,25 @@ def _create_store() -> Store:
         owner_email="owner+zerotrust@example.com",
         is_active=True,
     )
+
+
+@pytest.mark.django_db
+def test_superuser_middleware_allows_unscoped_query(settings):
+    settings.TENANT_GUARD_STRICT_DEV = True
+    user = User.objects.create_superuser(
+        email="platform-admin@example.com",
+        password="secret123",
+    )
+    request = RequestFactory().get("/secure-signin/products/category/")
+    request.user = user
+    mw = TenantContextMiddleware(lambda req: None)
+    try:
+        mw.process_request(request)
+        assert request.context.is_platform_admin is True
+        assert request.context.tenant is None
+        assert Category.objects.exists() is False
+    finally:
+        _clear_tenant_context()
 
 
 @pytest.mark.django_db
