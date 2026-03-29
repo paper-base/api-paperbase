@@ -24,7 +24,11 @@ class OrderItemSerializer(SafeModelSerializer):
             'product_sku',
             'status',
             'quantity',
-            'price',
+            'unit_price',
+            'original_price',
+            'discount_amount',
+            'line_subtotal',
+            'line_total',
             'variant_public_id',
             'variant_sku',
             'variant_options',
@@ -80,7 +84,9 @@ class OrderSerializer(SafeModelSerializer):
     class Meta:
         model = Order
         fields = [
-            'public_id', 'order_number', 'status', 'subtotal', 'shipping_cost', 'total',
+            'public_id', 'order_number', 'status',
+            'subtotal_before_discount', 'discount_total', 'subtotal_after_discount',
+            'shipping_cost', 'total',
             'pricing_snapshot',
             'shipping_zone_public_id', 'shipping_method_public_id', 'shipping_rate_public_id',
             'shipping_name', 'shipping_address',

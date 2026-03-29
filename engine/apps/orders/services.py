@@ -6,8 +6,14 @@ from django.db.models import F
 from rest_framework.exceptions import ValidationError
 
 from engine.apps.customers.models import Customer
-from engine.apps.orders.models import Order, StockRestoreLog
-from engine.apps.orders.pricing import PricingEngine
+from engine.apps.orders.models import Order, OrderItem, StockRestoreLog
+from engine.apps.orders.order_financials import (
+    compute_line_financials,
+    money,
+    aggregate_order_item_snapshots,
+    build_pricing_snapshot_dict,
+    quote_shipping_for_order,
+)
 from engine.apps.orders.stock import adjust_stock
 from engine.apps.products.models import Product, ProductVariant
 from engine.apps.stores.models import Store
@@ -109,44 +115,92 @@ def resolve_active_variant_for_product(
         raise ValueError(f"Variant {variant_public_id} is unavailable.") from exc
 
 
+def write_order_item_financials(
+    order_item: OrderItem,
+    *,
+    product,
+    variant,
+    quantity: int,
+    unit_price: Decimal,
+) -> None:
+    """Populate immutable snapshot fields from catalog + chosen unit price."""
+    fin = compute_line_financials(
+        product=product,
+        variant=variant,
+        quantity=quantity,
+        unit_price=unit_price,
+    )
+    order_item.original_price = fin["original_price"]
+    order_item.unit_price = fin["unit_price"]
+    order_item.discount_amount = fin["discount_amount"]
+    order_item.line_subtotal = fin["line_subtotal"]
+    order_item.line_total = fin["line_total"]
+
+
 def recalculate_order_totals(order: Order) -> Order:
     """
-    Recompute totals from persisted order items to avoid partial updates.
+    Single source: roll up persisted line snapshots only (no Product reads).
     """
-    items = order.items.all()
-    pricing_lines: list[dict] = []
-    for item in items:
-        if not item.product:
-            continue
-        pricing_lines.append(
-            {
-                "product": item.product,
-                "quantity": int(item.quantity),
-                "unit_price": Decimal(str(item.price)),
-            }
-        )
-    breakdown = PricingEngine.compute(
+    # Always read lines from the DB. `order.items.all()` reuses prefetched caches
+    # from the same request (e.g. admin PATCH after updating items), so rollups
+    # would use stale snapshots until a later request — matching "save twice" bugs.
+    items = list(
+        OrderItem.objects.filter(order_id=order.pk).select_related("product", "variant")
+    )
+    sb, dt, sa = aggregate_order_item_snapshots(items)
+    quote = quote_shipping_for_order(
         store=order.store,
-        lines=pricing_lines,
+        subtotal_after_discount=sa,
         shipping_zone_pk=order.shipping_zone_id,
         shipping_method_pk=order.shipping_method_id,
     )
-    order.subtotal = breakdown.base_subtotal
-    order.shipping_cost = breakdown.shipping_cost
-    order.shipping_zone = breakdown.shipping_zone
-    order.shipping_method = breakdown.shipping_method
-    order.shipping_rate = breakdown.shipping_rate
-    order.total = breakdown.final_total
+    ship = money(quote.shipping_cost)
+    tot = money(sa + ship)
+    line_rows = []
+    for oi in items:
+        line_rows.append(
+            {
+                "product_public_id": oi.product.public_id if oi.product else "",
+                "quantity": oi.quantity,
+                "unit_price": str(oi.unit_price),
+                "original_price": str(oi.original_price),
+                "discount_amount": str(oi.discount_amount),
+                "line_subtotal": str(oi.line_subtotal),
+                "line_total": str(oi.line_total),
+            }
+        )
+    order.subtotal_before_discount = sb
+    order.discount_total = dt
+    order.subtotal_after_discount = sa
+    order.shipping_cost = ship
+    order.shipping_zone = quote.zone
+    order.shipping_method = quote.method
+    order.shipping_rate = quote.rate
+    order.total = tot
+    order.pricing_snapshot = build_pricing_snapshot_dict(
+        subtotal_before_discount=sb,
+        discount_total=dt,
+        subtotal_after_discount=sa,
+        shipping_cost=ship,
+        total=tot,
+        lines=line_rows,
+    )
     order.save(
         update_fields=[
-            "subtotal",
+            "subtotal_before_discount",
+            "discount_total",
+            "subtotal_after_discount",
             "shipping_cost",
             "shipping_zone",
             "shipping_method",
             "shipping_rate",
             "total",
+            "pricing_snapshot",
         ]
     )
+    prefetched = getattr(order, "_prefetched_objects_cache", None)
+    if isinstance(prefetched, dict):
+        prefetched.pop("items", None)
     return order
 
 

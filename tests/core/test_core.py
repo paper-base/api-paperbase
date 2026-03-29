@@ -96,6 +96,36 @@ def _make_order(store, email="cust@example.com", **kwargs):
     return Order.objects.create(**defaults)
 
 
+def _make_order_item(order, product, *, quantity=1, variant=None, unit_price=None):
+    """Persist line with financial snapshots (matches production order writes)."""
+    from decimal import Decimal
+
+    from engine.apps.orders.services import write_order_item_financials
+    from engine.apps.products.variant_utils import unit_price_for_line
+
+    up = unit_price_for_line(product, variant) if unit_price is None else Decimal(str(unit_price))
+    oi = OrderItem(
+        order=order,
+        product=product,
+        variant=variant,
+        quantity=quantity,
+        unit_price=Decimal("0.00"),
+        original_price=Decimal("0.00"),
+        discount_amount=Decimal("0.00"),
+        line_subtotal=Decimal("0.00"),
+        line_total=Decimal("0.00"),
+    )
+    write_order_item_financials(
+        oi,
+        product=product,
+        variant=variant,
+        quantity=quantity,
+        unit_price=up,
+    )
+    oi.save()
+    return oi
+
+
 def _make_customer(store, user):
     return Customer.objects.create(
         store=store,
@@ -950,7 +980,10 @@ class CrossTenantAdminIsolationTests(TestCase):
         self.order_b = _make_order(self.store_b, "cust-b@example.com")
         self.shared_order_a = _make_order(self.store_a, "shared@example.com", user=self.shared_user)
         self.shared_order_b = _make_order(self.store_b, "shared@example.com", user=self.shared_user)
-        OrderItem.objects.create(order=self.shared_order_b, product=self.product_b, quantity=1, price=self.product_b.price)
+        _make_order_item(self.shared_order_b, self.product_b, quantity=1)
+        from engine.apps.orders.services import recalculate_order_totals
+
+        recalculate_order_totals(self.shared_order_b)
 
         self.customer_a = _make_customer(self.store_a, self.admin_a)
         self.customer_b = _make_customer(self.store_b, self.admin_b)
@@ -1128,7 +1161,7 @@ class CrossTenantAdminIsolationTests(TestCase):
                 {
                     "product_public_id": self.product_b.public_id,
                     "quantity": 1,
-                    "price": "10.00",
+                    "unit_price": "10.00",
                 }
             ],
         }
@@ -1148,7 +1181,7 @@ class CrossTenantAdminIsolationTests(TestCase):
                 {
                     "product_public_id": self.product_a.public_id,
                     "quantity": 1,
-                    "price": "10.00",
+                    "unit_price": "10.00",
                 }
             ],
         }
@@ -1170,7 +1203,7 @@ class CrossTenantAdminIsolationTests(TestCase):
                 {
                     "product_public_id": self.product_a.public_id,
                     "quantity": 1,
-                    "price": "10.00",
+                    "unit_price": "10.00",
                 }
             ],
         }
@@ -1180,12 +1213,7 @@ class CrossTenantAdminIsolationTests(TestCase):
     def test_admin_order_detail_handles_deleted_product_item(self):
         """Deleted product references in order items must serialize as unavailable."""
         order = _make_order(self.store_a, "deleted-product@example.com")
-        OrderItem.objects.create(
-            order=order,
-            product=self.product_a,
-            quantity=1,
-            price="10.00",
-        )
+        _make_order_item(order, self.product_a, quantity=1, unit_price="10.00")
         self.product_a.delete()
 
         self._auth_as(self.admin_a, self.store_a)

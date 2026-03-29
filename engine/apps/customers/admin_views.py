@@ -134,7 +134,7 @@ class AdminCustomerViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
                         "product_public_id": item.product.public_id if item.product else None,
                         "product_name": item.product.name if item.product else "Unavailable",
                         "quantity": item.quantity,
-                        "price": item.price,
+                        "unit_price": item.unit_price,
                     }
                 )
 

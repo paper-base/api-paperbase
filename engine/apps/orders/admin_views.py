@@ -23,7 +23,7 @@ from engine.apps.shipping.models import ShippingMethod, ShippingZone
 
 from .courier_dispatch import persist_dispatch, resolve_courier, run_courier_api
 from .models import Order
-from .pricing import PricingEngine, storefront_pricing_breakdown_response
+from .order_financials import money, preview_lines_to_accounting
 from .services import apply_order_status_change
 from .admin_serializers import (
     AdminOrderListSerializer,
@@ -52,7 +52,7 @@ class AdminOrderViewSet(
 ):
     queryset = Order.objects.select_related(
         "customer", "user", "shipping_zone", "shipping_method", "shipping_rate"
-    ).prefetch_related('items__product').all()
+    ).prefetch_related("items__product", "items__variant").all()
     lookup_field = 'public_id'
 
     def get_serializer_class(self):
@@ -82,7 +82,7 @@ class AdminOrderViewSet(
                 status=Product.Status.ACTIVE,
             ).select_related("category", "category__parent")
         }
-        pricing_lines = []
+        resolved_lines = []
         for item in items:
             public_id = str(item.get("product_public_id", "")).strip()
             quantity = int(item.get("quantity") or 0)
@@ -96,12 +96,18 @@ class AdminOrderViewSet(
                 )
             except serializers.ValidationError as exc:
                 return Response(exc.detail, status=status.HTTP_400_BAD_REQUEST)
-            unit_price = unit_price_for_line(product, variant)
-            pricing_lines.append(
+            catalog_unit = unit_price_for_line(product, variant)
+            raw_unit = item.get("unit_price")
+            if raw_unit is not None and raw_unit != "":
+                chosen = money(raw_unit)
+            else:
+                chosen = catalog_unit
+            resolved_lines.append(
                 {
                     "product": product,
+                    "variant": variant,
                     "quantity": quantity,
-                    "unit_price": unit_price,
+                    "unit_price": chosen,
                 }
             )
         shipping_zone_public_id = (request.data.get("shipping_zone_public_id") or "").strip()
@@ -119,16 +125,14 @@ class AdminOrderViewSet(
                 is_active=True,
             ).first()
 
-        breakdown = PricingEngine.compute(
+        out = preview_lines_to_accounting(
             store=ctx.store,
-            lines=pricing_lines,
+            resolved_lines=resolved_lines,
             shipping_zone_pk=zone.id if zone else None,
             shipping_method_pk=method.id if method else None,
         )
-        return Response(
-            storefront_pricing_breakdown_response(breakdown),
-            status=status.HTTP_200_OK,
-        )
+        body = {k: v for k, v in out.items() if not k.startswith("_")}
+        return Response(body, status=status.HTTP_200_OK)
 
     def update(self, request, *args, **kwargs):
         """

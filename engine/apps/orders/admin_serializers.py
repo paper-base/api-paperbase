@@ -10,12 +10,15 @@ from django.db import transaction
 from engine.apps.products.models import Product, ProductVariant
 from engine.apps.orders.stock import adjust_stock
 from engine.apps.shipping.models import ShippingMethod, ShippingZone
+from engine.apps.products.variant_utils import unit_price_for_line
+from engine.apps.orders.order_financials import money, reference_unit_price
 from engine.apps.orders.services import (
     recalculate_order_totals,
     resolve_active_store_product,
     resolve_active_variant_for_product,
     resolve_and_attach_customer,
     restore_order_item_stock,
+    write_order_item_financials,
 )
 
 from .models import Order, OrderItem
@@ -48,11 +51,12 @@ class AdminOrderItemSerializer(SafeModelSerializer):
     product_brand = serializers.SerializerMethodField()
     status = serializers.SerializerMethodField()
     product_image = serializers.SerializerMethodField()
-    original_price = serializers.SerializerMethodField()
     variant_public_id = serializers.CharField(source="variant.public_id", read_only=True, allow_null=True)
     variant_sku = serializers.CharField(source="variant.sku", read_only=True, allow_null=True)
     variant_inventory_quantity = serializers.SerializerMethodField()
     variant_option_labels = serializers.SerializerMethodField()
+    catalog_unit_price = serializers.SerializerMethodField()
+    catalog_list_price = serializers.SerializerMethodField()
 
     class Meta:
         model = OrderItem
@@ -60,7 +64,8 @@ class AdminOrderItemSerializer(SafeModelSerializer):
             'public_id', 'product', 'product_public_id', 'product_name', 'product_brand', 'product_image',
             'status',
             'variant_public_id', 'variant_sku', 'variant_inventory_quantity', 'variant_option_labels',
-            'quantity', 'price', 'original_price',
+            'quantity', 'unit_price', 'original_price', 'discount_amount', 'line_subtotal', 'line_total',
+            'catalog_unit_price', 'catalog_list_price',
         ]
         read_only_fields = ['public_id']
 
@@ -89,11 +94,6 @@ class AdminOrderItemSerializer(SafeModelSerializer):
             return obj.product.image.url
         return None
 
-    def get_original_price(self, obj):
-        if not obj.product:
-            return None
-        return obj.product.original_price
-
     def get_variant_option_labels(self, obj):
         v = getattr(obj, "variant", None)
         if not v:
@@ -117,6 +117,16 @@ class AdminOrderItemSerializer(SafeModelSerializer):
             return 0
         return int(inv.quantity or 0)
 
+    def get_catalog_unit_price(self, obj):
+        if not obj.product:
+            return None
+        return str(money(unit_price_for_line(obj.product, getattr(obj, "variant", None))))
+
+    def get_catalog_list_price(self, obj):
+        if not obj.product:
+            return None
+        return str(money(reference_unit_price(obj.product, getattr(obj, "variant", None))))
+
 
 class AdminOrderListSerializer(SafeModelSerializer):
     items_count = serializers.SerializerMethodField()
@@ -125,7 +135,9 @@ class AdminOrderListSerializer(SafeModelSerializer):
     class Meta:
         model = Order
         fields = [
-            'public_id', 'order_number', 'email', 'status', 'subtotal', 'shipping_cost', 'total',
+            'public_id', 'order_number', 'email', 'status',
+            'subtotal_before_discount', 'discount_total', 'subtotal_after_discount',
+            'shipping_cost', 'total',
             'shipping_name', 'phone', 'district',
             'items_count', 'customer',
             'courier_provider', 'courier_consignment_id',
@@ -157,7 +169,8 @@ class AdminOrderSerializer(SafeModelSerializer):
         model = Order
         fields = [
             'public_id', 'order_number', 'user_public_id', 'email', 'status',
-            'subtotal', 'shipping_cost', 'total',
+            'subtotal_before_discount', 'discount_total', 'subtotal_after_discount',
+            'shipping_cost', 'total',
             'shipping_zone_public_id', 'shipping_method_public_id', 'shipping_rate_public_id',
             'shipping_name', 'shipping_address', 'phone',
             'district',
@@ -167,7 +180,9 @@ class AdminOrderSerializer(SafeModelSerializer):
             'pricing_snapshot', 'items', 'created_at', 'updated_at',
         ]
         read_only_fields = [
-            'public_id', 'order_number', 'status', 'subtotal', 'shipping_cost', 'total',
+            'public_id', 'order_number', 'status',
+            'subtotal_before_discount', 'discount_total', 'subtotal_after_discount',
+            'shipping_cost', 'total',
             'courier_provider', 'courier_consignment_id',
             'sent_to_courier', 'customer_confirmation_sent_at',
             'pricing_snapshot', 'created_at', 'updated_at',
@@ -191,7 +206,7 @@ class AdminOrderItemUpdateSerializer(serializers.Serializer):
     remove = serializers.BooleanField(required=False, default=False)
     variant_public_id = serializers.CharField(required=False, allow_null=True, allow_blank=True)
     quantity = serializers.IntegerField(min_value=1, required=False)
-    price = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)
+    unit_price = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)
 
     def validate(self, attrs):
         if attrs.get("variant_public_id") == "":
@@ -281,6 +296,7 @@ class AdminOrderUpdateSerializer(SafeModelSerializer):
                 instance.save()
 
                 if items is None:
+                    recalculate_order_totals(instance)
                     return instance
 
                 store = instance.store
@@ -362,12 +378,29 @@ class AdminOrderUpdateSerializer(SafeModelSerializer):
 
                         oi.variant = variant_obj
                         oi.quantity = qty
-                        oi.price = (
-                            variant_obj.price_override
-                            if (variant_obj and variant_obj.price_override is not None)
-                            else oi.product.price
+                        catalog_unit = unit_price_for_line(oi.product, variant_obj)
+                        if item.get("unit_price") is not None:
+                            chosen = money(item["unit_price"])
+                        else:
+                            chosen = catalog_unit
+                        write_order_item_financials(
+                            oi,
+                            product=oi.product,
+                            variant=variant_obj,
+                            quantity=qty,
+                            unit_price=chosen,
                         )
-                        oi.save(update_fields=["variant", "quantity", "price"])
+                        oi.save(
+                            update_fields=[
+                                "variant",
+                                "quantity",
+                                "unit_price",
+                                "original_price",
+                                "discount_amount",
+                                "line_subtotal",
+                                "line_total",
+                            ]
+                        )
                         continue
 
                     if not product_public_id:
@@ -398,19 +431,33 @@ class AdminOrderUpdateSerializer(SafeModelSerializer):
                         raise serializers.ValidationError(
                             e.message_dict if hasattr(e, "message_dict") else {"detail": str(e)}
                         )
-                    OrderItem.objects.create(
+                    catalog_unit = unit_price_for_line(product_obj, variant_obj)
+                    if item.get("unit_price") is not None:
+                        chosen = money(item["unit_price"])
+                    else:
+                        chosen = catalog_unit
+                    oi_new = OrderItem(
                         order=instance,
                         product=product_obj,
                         variant=variant_obj,
                         quantity=qty,
-                        price=(
-                            variant_obj.price_override
-                            if (variant_obj and variant_obj.price_override is not None)
-                            else product_obj.price
-                        ),
+                        unit_price=Decimal("0.00"),
+                        original_price=Decimal("0.00"),
+                        discount_amount=Decimal("0.00"),
+                        line_subtotal=Decimal("0.00"),
+                        line_total=Decimal("0.00"),
                     )
+                    write_order_item_financials(
+                        oi_new,
+                        product=product_obj,
+                        variant=variant_obj,
+                        quantity=qty,
+                        unit_price=chosen,
+                    )
+                    oi_new.save()
 
                 recalculate_order_totals(instance)
+                instance.refresh_from_db()
                 return instance
         except serializers.ValidationError:
             raise
@@ -428,7 +475,7 @@ class AdminOrderItemWriteSerializer(serializers.Serializer):
     )
     variant_public_id = serializers.CharField(required=False, allow_null=True, allow_blank=True)
     quantity = serializers.IntegerField(min_value=1)
-    price = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)
+    unit_price = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)
 
     def validate(self, attrs):
         if attrs.get("variant_public_id") == "":
@@ -513,7 +560,6 @@ class AdminOrderCreateSerializer(SafeModelSerializer):
 
             order = Order.objects.create(store=store, **validated_data)
 
-            subtotal = Decimal("0.00")
             for item in items:
                 product_obj = item["product"]  # Product instance resolved via SlugRelatedField
                 if product_obj.store_id != store.id:
@@ -543,17 +589,30 @@ class AdminOrderCreateSerializer(SafeModelSerializer):
                             {"items": [f"Variant {variant_public_id} is unavailable."]}
                         )
 
-                order_item = OrderItem.objects.create(
+                catalog_unit = unit_price_for_line(product_obj, variant_obj)
+                if item.get("unit_price") is not None:
+                    chosen = money(item["unit_price"])
+                else:
+                    chosen = catalog_unit
+                order_item = OrderItem(
                     order=order,
                     product=product_obj,
                     variant=variant_obj,
                     quantity=quantity,
-                    price=(
-                        variant_obj.price_override
-                        if (variant_obj and variant_obj.price_override is not None)
-                        else product_obj.price
-                    ),
+                    unit_price=Decimal("0.00"),
+                    original_price=Decimal("0.00"),
+                    discount_amount=Decimal("0.00"),
+                    line_subtotal=Decimal("0.00"),
+                    line_total=Decimal("0.00"),
                 )
+                write_order_item_financials(
+                    order_item,
+                    product=product_obj,
+                    variant=variant_obj,
+                    quantity=quantity,
+                    unit_price=chosen,
+                )
+                order_item.save()
                 # Reduce stock for created order items (dashboard-created orders).
                 try:
                     adjust_stock(
@@ -564,10 +623,7 @@ class AdminOrderCreateSerializer(SafeModelSerializer):
                     )
                 except DjangoValidationError as e:
                     raise serializers.ValidationError(e.message_dict if hasattr(e, "message_dict") else {"detail": str(e)})
-                subtotal += Decimal(str(order_item.price)) * Decimal(order_item.quantity)
 
-            order.subtotal = subtotal
-            order.save(update_fields=["subtotal", "updated_at"])
             recalculate_order_totals(order)
             resolve_and_attach_customer(
                 order,

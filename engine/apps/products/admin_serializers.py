@@ -418,6 +418,7 @@ class AdminProductVariantSerializer(SafeModelSerializer):
     option_labels = serializers.SerializerMethodField(read_only=True)
     available_quantity = serializers.SerializerMethodField(read_only=True)
     stock_source = serializers.SerializerMethodField(read_only=True)
+    effective_price = serializers.SerializerMethodField(read_only=True)
     product_public_id = serializers.SlugRelatedField(
         slug_field="public_id",
         queryset=Product.objects.all(),
@@ -431,6 +432,7 @@ class AdminProductVariantSerializer(SafeModelSerializer):
             "product_public_id",
             "sku",
             "price_override",
+            "effective_price",
             "is_active",
             "attribute_value_public_ids",
             "option_labels",
@@ -444,6 +446,7 @@ class AdminProductVariantSerializer(SafeModelSerializer):
             "option_labels",
             "available_quantity",
             "stock_source",
+            "effective_price",
             "created_at",
             "updated_at",
         ]
@@ -479,6 +482,9 @@ class AdminProductVariantSerializer(SafeModelSerializer):
 
     def get_stock_source(self, obj):
         return "variant_inventory"
+
+    def get_effective_price(self, obj):
+        return str(obj.effective_price)
 
     def to_representation(self, instance):
         data = super().to_representation(instance)

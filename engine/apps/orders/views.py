@@ -1,5 +1,3 @@
-from decimal import Decimal
-
 from django.db import transaction
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import status
@@ -15,9 +13,9 @@ from engine.apps.analytics.service import meta_conversions
 from engine.core.tenancy import get_active_store, require_api_key_store
 
 from .models import Order, OrderItem
-from .pricing import PricingEngine, pricing_snapshot_from_breakdown
+from .order_financials import compute_line_financials
 from .serializers import OrderCreateSerializer, OrderSerializer
-from .services import resolve_and_attach_customer
+from .services import recalculate_order_totals, resolve_and_attach_customer
 from .utils import get_next_order_number
 from .stock import adjust_stock
 from .throttles import DirectOrderRateThrottle
@@ -226,13 +224,19 @@ class OrderCreateView(CreateAPIView):
             product = locked_products[product_id_str]
             vpid = (product_data.get("variant_public_id") or "").strip()
             variant = locked_variants.get(vpid) if vpid else None
-            price = unit_price_for_line(product, variant)
+            unit = unit_price_for_line(product, variant)
+            fin = compute_line_financials(
+                product=product,
+                variant=variant,
+                quantity=quantity,
+                unit_price=unit,
+            )
             OrderItem.objects.create(
                 order=order,
                 product=product,
                 variant=variant,
                 quantity=quantity,
-                price=price,
+                **fin,
             )
             try:
                 adjust_stock(
@@ -247,39 +251,7 @@ class OrderCreateView(CreateAPIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-        pricing_lines = [
-            {
-                "product": oi.product,
-                "quantity": int(oi.quantity),
-                "unit_price": Decimal(str(oi.price)),
-            }
-            for oi in order.items.select_related("product").all()
-            if oi.product is not None
-        ]
-        breakdown = PricingEngine.compute(
-            store=order.store,
-            lines=pricing_lines,
-            shipping_zone_pk=order.shipping_zone_id,
-            shipping_method_pk=order.shipping_method_id,
-        )
-        order.subtotal = breakdown.base_subtotal
-        order.shipping_cost = breakdown.shipping_cost
-        order.shipping_zone = breakdown.shipping_zone
-        order.shipping_method = breakdown.shipping_method
-        order.shipping_rate = breakdown.shipping_rate
-        order.total = breakdown.final_total
-        order.pricing_snapshot = pricing_snapshot_from_breakdown(breakdown)
-        order.save(
-            update_fields=[
-                "subtotal",
-                "shipping_cost",
-                "shipping_zone",
-                "shipping_method",
-                "shipping_rate",
-                "total",
-                "pricing_snapshot",
-            ]
-        )
+        recalculate_order_totals(order)
         resolve_and_attach_customer(
             order,
             store=order_store,

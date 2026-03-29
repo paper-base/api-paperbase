@@ -80,7 +80,9 @@ You are a senior full-stack engineer working inside a production-grade, multi-te
   - Storefront product payloads expose **`available_quantity`**, **`total_stock`**, and **`stock_source`** only (not raw `Product.stock`, which remains an internal cache synchronized from inventory).
 
 - Pricing:
-  - **PricingEngine** is the single source of truth for cart totals (merchandise line subtotals, then shipping). Use **`POST /api/v1/pricing/breakdown/`** (and admin **`POST /api/v1/admin/orders/pricing-preview/`**) with cart `items` for server-side totals.
+  - **Live cart / quotes:** **PricingEngine** plus **`POST /api/v1/pricing/breakdown/`** (and related storefront preview endpoints) compute merchandise + shipping from current catalog prices.
+  - **Persisted orders:** Totals are **immutable snapshots** on **`Order`** / **`OrderItem`** (`subtotal_before_discount`, `discount_total`, `subtotal_after_discount`, `shipping_cost`, `total`, and per-line `unit_price`, `original_price`, `discount_amount`, `line_subtotal`, `line_total`). **`recalculate_order_totals(order)`** is the only writer for order-level rollups; it aggregates saved line snapshots and **`quote_shipping`** (no live `Product` reads for merchandise totals).
+  - **Admin preview before save:** **`POST /api/v1/admin/orders/pricing-preview/`** returns the same accounting shape as persisted orders (including optional per-line `unit_price` overrides).
 
 - NEVER expose internal IDs anywhere outside backend
 

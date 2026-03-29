@@ -63,7 +63,24 @@ class Order(models.Model):
         max_length=20, choices=Status.choices, default=Status.PENDING, db_index=True
     )
     total = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
-    subtotal = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    subtotal_before_discount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="Sum of line list extended amounts (original_price × qty).",
+    )
+    discount_total = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="Sum of per-line discount × qty.",
+    )
+    subtotal_after_discount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="Merchandise total after discounts; equals sum of line_total.",
+    )
     shipping_cost = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
     shipping_zone = models.ForeignKey(
         ShippingZone,
@@ -99,7 +116,7 @@ class Order(models.Model):
     pricing_snapshot = models.JSONField(
         blank=True,
         default=dict,
-        help_text="Snapshot of PricingEngine breakdown at checkout (merchandise subtotal + shipping).",
+        help_text="JSON audit snapshot of order pricing breakdown (lines + rollups + shipping).",
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -151,7 +168,7 @@ class OrderAddress(models.Model):
 
 
 class OrderItem(models.Model):
-    """Line item in an order with price snapshot."""
+    """Line item with immutable financial snapshot (no live Product reads for totals)."""
     public_id = models.CharField(
         max_length=32,
         unique=True,
@@ -174,7 +191,32 @@ class OrderItem(models.Model):
         related_name='order_items',
     )
     quantity = models.PositiveIntegerField()
-    price = models.DecimalField(max_digits=10, decimal_places=2)
+    unit_price = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        help_text="Final charged unit price at order time.",
+    )
+    original_price = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        help_text="List/reference unit price frozen at order time.",
+    )
+    discount_amount = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="Per unit: original_price − unit_price (may be negative for surcharges).",
+    )
+    line_subtotal = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        help_text="original_price × quantity",
+    )
+    line_total = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        help_text="unit_price × quantity",
+    )
 
     def save(self, *args, **kwargs):
         if not self.public_id:

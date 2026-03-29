@@ -5,7 +5,13 @@ from rest_framework.test import APIClient
 from rest_framework.views import APIView
 
 from engine.apps.orders.models import Order, OrderItem, StockRestoreLog
-from engine.apps.orders.services import apply_order_status_change
+from decimal import Decimal
+
+from engine.apps.orders.services import (
+    apply_order_status_change,
+    recalculate_order_totals,
+    write_order_item_financials,
+)
 from engine.apps.inventory.models import Inventory
 from engine.apps.products.models import Category, Product, ProductVariant
 from engine.apps.products.stock_sync import sync_product_stock_from_variants
@@ -127,7 +133,7 @@ def test_api_key_can_create_order_valid_payload():
     with tenant_scope_from_store(store=store, reason="test assertions"):
         order = Order.objects.get(public_id=response.data["public_id"])
     assert order.store_id == store.id
-    assert str(order.subtotal) == "300.00"
+    assert str(order.subtotal_after_discount) == "300.00"
 
 
 @pytest.mark.django_db
@@ -493,7 +499,25 @@ def test_cancelled_status_restores_stock_once_per_item():
         shipping_zone=zone,
         status=Order.Status.PENDING,
     )
-    item = OrderItem.objects.create(order=order, product=product, quantity=2, price=product.price)
+    item = OrderItem(
+        order=order,
+        product=product,
+        quantity=2,
+        unit_price=Decimal("0.00"),
+        original_price=Decimal("0.00"),
+        discount_amount=Decimal("0.00"),
+        line_subtotal=Decimal("0.00"),
+        line_total=Decimal("0.00"),
+    )
+    write_order_item_financials(
+        item,
+        product=product,
+        variant=None,
+        quantity=2,
+        unit_price=product.price,
+    )
+    item.save()
+    recalculate_order_totals(order)
     with tenant_scope_from_store(store=store, reason="test fixture"):
         apply_order_status_change(order=order, to_status=Order.Status.CANCELLED)
         apply_order_status_change(order=order, to_status=Order.Status.CANCELLED)
