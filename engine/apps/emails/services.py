@@ -74,7 +74,7 @@ def send_email(
         metadata=ctx,
     )
     try:
-        mailer.send(to_email, subject, html, text, from_email=from_email)
+        mailer.send(email_type, to_email, subject, html, text, from_email=from_email)
     except Exception as exc:  # noqa: BLE001 — record any failure on the log
         err = str(exc)[:_ERROR_MAX_LEN]
         log.status = EmailLog.Status.FAILED

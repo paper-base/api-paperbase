@@ -1,6 +1,7 @@
 class BaseEmailProvider:
     def send(
         self,
+        email_type: str,
         to_email: str,
         subject: str,
         html: str,

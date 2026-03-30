@@ -269,5 +269,4 @@ def queue_generic_notification(
         GENERIC_NOTIFICATION,
         to_email,
         ctx,
-        getattr(settings, "SUPPORT_FROM_EMAIL", "support@akkho.com"),
     )

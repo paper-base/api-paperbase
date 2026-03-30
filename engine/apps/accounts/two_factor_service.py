@@ -48,7 +48,7 @@ def resolve_two_factor_issuer(request) -> str:
         s = str(configured).strip()
         if s:
             return s
-    return "Akkho"
+    return "Paperbase"
 
 
 def build_provisioning(user, secret: str, issuer_name: str):

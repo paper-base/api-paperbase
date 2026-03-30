@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from django.conf import settings
 from django.core.mail import EmailMultiAlternatives
+
+from engine.apps.emails.router import resolve_email_sender
 
 from .base import BaseEmailProvider
 
@@ -18,6 +19,7 @@ class DjangoCoreMailProvider(BaseEmailProvider):
 
     def send(
         self,
+        email_type: str,
         to_email: str,
         subject: str,
         html: str,
@@ -25,11 +27,7 @@ class DjangoCoreMailProvider(BaseEmailProvider):
         *,
         from_email: str | None = None,
     ) -> None:
-        resolved_from = (
-            from_email
-            or getattr(settings, "RESEND_FROM_EMAIL", "") or ""
-            or getattr(settings, "DEFAULT_FROM_EMAIL", "") or ""
-        ).strip() or "no-reply@example.com"
+        resolved_from = (from_email or "").strip() or resolve_email_sender(email_type)
 
         plain = (text or "").strip()
         if not plain:

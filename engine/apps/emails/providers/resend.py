@@ -5,6 +5,8 @@ import json
 import requests
 from django.conf import settings
 
+from engine.apps.emails.router import resolve_email_sender
+
 from .base import BaseEmailProvider
 
 RESEND_API_URL = "https://api.resend.com/emails"
@@ -17,13 +19,11 @@ class ResendEmailProvider(BaseEmailProvider):
 
     def __init__(self, api_key: str | None = None, from_email: str | None = None):
         self.api_key = api_key if api_key is not None else getattr(settings, "RESEND_API_KEY", "") or ""
-        configured = getattr(settings, "RESEND_FROM_EMAIL", "") or ""
-        self.from_email = (from_email if from_email is not None else configured).strip() or (
-            "onboarding@resend.dev"
-        )
+        self.from_email = (from_email or "").strip()
 
     def send(
         self,
+        email_type: str,
         to_email: str,
         subject: str,
         html: str,
@@ -33,7 +33,7 @@ class ResendEmailProvider(BaseEmailProvider):
     ):
         if not self.api_key:
             raise RuntimeError("RESEND_API_KEY is not configured.")
-        sender = (from_email or "").strip() or self.from_email
+        sender = (from_email or "").strip() or resolve_email_sender(email_type)
 
         payload: dict = {
             "from": sender,
