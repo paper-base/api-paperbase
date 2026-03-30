@@ -1,9 +1,10 @@
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from django.db.models import F, Q
+from django.db.models import F, Prefetch, Q
 
 from config.permissions import IsDashboardUser
+from engine.apps.products.models import ProductVariantAttribute
 from engine.core.admin_views import StoreRolePermissionMixin
 from engine.core.tenancy import get_active_store
 from .models import Inventory, StockMovement
@@ -56,7 +57,14 @@ class AdminInventoryViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
                 | Q(variant__public_id__icontains=search)
             )
 
-        return qs
+        return qs.prefetch_related(
+            Prefetch(
+                "variant__attribute_values",
+                queryset=ProductVariantAttribute.objects.select_related(
+                    "attribute_value__attribute"
+                ).order_by("attribute_value__attribute__order", "attribute_value__order"),
+            ),
+        )
 
     @action(detail=True, methods=['post'])
     def adjust(self, request, public_id=None):

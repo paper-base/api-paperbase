@@ -26,13 +26,25 @@ class InventoryListSerializer(SafeModelSerializer):
     product_name = serializers.CharField(source='product.name', read_only=True)
     variant_public_id = serializers.CharField(source='variant.public_id', read_only=True, allow_null=True)
     variant_sku = serializers.CharField(source='variant.sku', read_only=True, allow_null=True)
+    option_labels = serializers.SerializerMethodField(read_only=True)
     is_low = serializers.SerializerMethodField()
 
     class Meta:
         model = Inventory
         fields = [
             'public_id', 'product_public_id', 'product_name', 'variant_public_id', 'variant_sku',
+            'option_labels',
             'quantity', 'low_stock_threshold', 'is_tracked', 'updated_at', 'is_low',
+        ]
+
+    def get_option_labels(self, obj):
+        v = obj.variant
+        if v is None:
+            return []
+        # Ordering comes from AdminInventoryViewSet Prefetch; use .all() to hit cache.
+        return [
+            f"{link.attribute_value.attribute.name}: {link.attribute_value.value}"
+            for link in v.attribute_values.all()
         ]
 
     def get_is_low(self, obj):
