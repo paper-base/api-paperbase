@@ -17,6 +17,7 @@ from engine.apps.shipping.models import ShippingZone
 from engine.apps.inventory.models import Inventory
 from engine.apps.products.models import Category, Product
 from engine.apps.stores.models import Store, StoreDeletionJob, StoreMembership, StoreSettings
+from engine.apps.stores.services import allocate_unique_store_code, normalize_store_code_base_from_name
 from engine.core.tenant_execution import tenant_scope_from_store
 
 
@@ -77,8 +78,14 @@ def _set_default_plan(max_stores: int):
 
 
 def _make_store(name: str, domain: str, owner_email: str):
+    base = normalize_store_code_base_from_name(name) or normalize_store_code_base_from_name(
+        domain.split(".")[0]
+    )
+    if not base:
+        base = "T"
     store = Store.objects.create(
         name=name,
+        code=allocate_unique_store_code(base),
         owner_name=f"{name} Owner",
         owner_email=owner_email,
     )

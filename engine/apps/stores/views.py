@@ -17,10 +17,12 @@ from .serializers import (
     StoreSettingsSerializer,
 )
 from .services import (
+    allocate_unique_store_code,
     create_store_api_key,
     get_active_store_api_key,
     get_cached_store_settings,
     invalidate_store_settings_cache,
+    normalize_store_code_base_from_name,
     revoke_store_api_key,
     set_cached_store_settings,
 )
@@ -108,8 +110,22 @@ class StoreViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        code_base = normalize_store_code_base_from_name(name)
+        if not code_base:
+            return Response(
+                {
+                    "detail": (
+                        "Could not derive a store code from name; use a name with "
+                        "letters or numbers."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        store_code = allocate_unique_store_code(code_base)
+
         store = Store.objects.create(
             name=name,
+            code=store_code,
             owner_name=owner_name[:255],
             owner_email=owner_email[:254],
             store_type=store_type_raw,

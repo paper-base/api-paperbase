@@ -168,7 +168,11 @@ class OrderAddress(models.Model):
 
 
 class OrderItem(models.Model):
-    """Line item with immutable financial snapshot (no live Product reads for totals)."""
+    """Line item with immutable financial snapshot (no live Product reads for totals).
+
+    The variant foreign key is the canonical identity for variant lines; services resolve
+    variants by id/public_id, never by SKU (SKU is display-only on serializers).
+    """
     public_id = models.CharField(
         max_length=32,
         unique=True,

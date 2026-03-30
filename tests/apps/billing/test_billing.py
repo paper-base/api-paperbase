@@ -13,6 +13,7 @@ from engine.apps.billing.feature_gate import (
 from engine.apps.billing.models import Plan, Subscription
 from engine.apps.billing.services import activate_subscription, extend_subscription, get_active_subscription
 from engine.apps.stores.models import Store, StoreMembership, StoreSettings
+from engine.apps.stores.services import allocate_unique_store_code
 
 User = get_user_model()
 
@@ -95,6 +96,7 @@ class BillingServicesTests(TestCase):
     def test_downgrade_clears_order_email_notification_settings(self):
         store = Store.objects.create(
             name="Downgrade Store",
+            code=allocate_unique_store_code("DOWNGRADE"),
             owner_name="O",
             owner_email=self.user.email,
         )
@@ -302,6 +304,7 @@ class AnalyticsFeatureGateTests(TestCase):
 
         self.store = Store.objects.create(
             name="Test Store",
+            code=allocate_unique_store_code("TESTSTORE"),
             owner_name="Owner",
             owner_email="owner@example.com",
         )

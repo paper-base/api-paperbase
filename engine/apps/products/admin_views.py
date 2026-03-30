@@ -33,6 +33,7 @@ from .admin_serializers import (
     AdminProductVariantSerializer,
 )
 from .category_tree import descendant_public_ids_including_self
+from .product_search import filter_products_by_prioritized_search
 from .services import (
     build_admin_category_tree,
     invalidate_category_cache,
@@ -112,11 +113,7 @@ class AdminProductViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
 
         search = (self.request.query_params.get("search") or "").strip()
         if search:
-            qs = qs.filter(
-                Q(name__icontains=search)
-                | Q(sku__icontains=search)
-                | Q(brand__icontains=search)
-            )
+            qs = filter_products_by_prioritized_search(qs, search).distinct()
 
         ordering = (self.request.query_params.get("ordering") or "newest").strip().lower()
         if ordering == "price_asc":
@@ -361,7 +358,7 @@ class AdminCategoryViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
 class AdminProductVariantViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
     serializer_class = AdminProductVariantSerializer
     queryset = (
-        ProductVariant.objects.select_related("product", "inventory")
+        ProductVariant.objects.select_related("product", "product__store", "store", "inventory")
         .prefetch_related("attribute_values__attribute_value__attribute")
         .all()
     )

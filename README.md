@@ -120,11 +120,11 @@ Storefront catalog, checkout, and public content endpoints require the **publish
 ### Storefront JSON contract (breaking conventions)
 
 - **Media:** use `image_url` for absolute URLs (product main image, gallery items, category image, banner image). Gallery rows: `public_id`, `image_url`, `alt`, `order`.
-- **Products:** `category_public_id`, `category_slug`, `category_name` (no single `category` slug field). Include `sku`, `stock_tracking`, `extra_data` (full JSON). Variants expose `options` entries with `attribute_public_id`, `attribute_slug`, `attribute_name`, `value_public_id`, `value`. Detail adds `variant_matrix`: keys are attribute **slugs**; each value is `{ "slug", "attribute_public_id", "attribute_name", "values": [{ "value_public_id", "value" }] }`.
+- **Products:** `category_public_id`, `category_slug`, `category_name` (no single `category` slug field). Include `stock_tracking`, `extra_data` (full JSON). Variant SKUs live on each variant only (`variants[].sku`). Variants expose `options` entries with `attribute_public_id`, `attribute_slug`, `attribute_name`, `value_public_id`, `value`. Detail adds `variant_matrix`: keys are attribute **slugs**; each value is `{ "slug", "attribute_public_id", "attribute_name", "values": [{ "value_public_id", "value" }] }`.
 - **Categories:** `description`, `image_url`, `is_active`, plus `public_id`, `name`, `slug`, `parent_public_id`, `order`.
 - **Banners:** `cta_url` (not `cta_link`), `cta_text`, `image_url`, `start_at`, `end_at`, `created_at`, `updated_at` (ISO 8601 where applicable).
 - **Storefront CTAs** (`/notifications/active/`): `cta_url`, `cta_label` (from `link_text`), `cta_text`, `is_active`, `is_currently_active`, `start_at`, `end_at`, `notification_type`, `order`, `created_at`, `updated_at`.
-- **Orders (create response):** line items include `product_sku`, `variant_sku`, and `variant_options` with the same shape as product variant `options`. Order includes `courier_consignment_id`, `sent_to_courier`, `customer_confirmation_sent_at` where applicable.
+- **Orders (create response):** line items include `variant_sku` and `variant_options` with the same shape as product variant `options`. Order includes `courier_consignment_id`, `sent_to_courier`, `customer_confirmation_sent_at` where applicable.
 - **Shipping options:** each option includes `rate_public_id`, `method_public_id`, `method_name`, `method_type`, `method_order`, `zone_public_id`, `zone_name`, `price`, `rate_type`, `min_order_total`, `max_order_total`.
 - **Shipping zones list:** each zone includes `zone_public_id`, `name`, `estimated_days`, `is_active`, `created_at`, `updated_at`, `cost_rules`.
 ## Environment variables

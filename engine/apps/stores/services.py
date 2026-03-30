@@ -1,6 +1,7 @@
 """Store-scoped helpers used by billing, emails, and serializers."""
 
 import hashlib
+import re
 import hmac
 import secrets
 
@@ -8,6 +9,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.utils import timezone
+from django.utils.text import slugify
 
 from engine.apps.billing.feature_gate import has_feature
 from engine.core import cache_service
@@ -17,6 +19,34 @@ from .models import Store, StoreApiKey, StoreMembership, StoreSettings
 User = get_user_model()
 
 ORDER_EMAIL_NOTIFICATIONS_FEATURE = "order_email_notifications"
+
+
+def normalize_store_code_base_from_name(name: str) -> str:
+    """Uppercase alphanumeric segment from store name (max 10) for provisioning Store.code."""
+    base = slugify((name or "").strip())[:100]
+    return re.sub(r"[^A-Z0-9]", "", base.upper())[:10]
+
+
+def allocate_unique_store_code(base: str, *, exclude_pk: int | None = None) -> str:
+    """
+    Allocate a unique Store.code (max 10 chars) from a non-empty normalized base.
+    """
+    explicit = re.sub(r"[^A-Z0-9]", "", (base or "").strip().upper())[:10]
+    if not explicit:
+        raise ValueError("Store code base must be non-empty after normalization.")
+    candidate = explicit[:10]
+    qs = Store.objects.all()
+    if exclude_pk is not None:
+        qs = qs.exclude(pk=exclude_pk)
+    n = 2
+    while qs.filter(code=candidate).exists():
+        suffix = str(n)
+        head = max(1, 10 - len(suffix))
+        root = explicit[:head].rstrip() or explicit[:1]
+        candidate = (root + suffix)[:10]
+        n += 1
+    return candidate
+
 
 def _api_key_secret() -> bytes:
     # Prefer a dedicated secret for API key hashing; fall back to SECRET_KEY.

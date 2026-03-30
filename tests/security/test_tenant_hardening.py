@@ -8,14 +8,17 @@ from rest_framework.test import APIClient
 from engine.apps.notifications.models import StaffNotification
 from engine.apps.products.models import ProductAttribute
 from engine.apps.stores.models import Store, StoreMembership
+from engine.apps.stores.services import allocate_unique_store_code, normalize_store_code_base_from_name
 from engine.core.middleware.internal_override_middleware import InternalOverrideMiddleware
 
 User = get_user_model()
 
 
 def _make_store(name: str) -> Store:
+    base = normalize_store_code_base_from_name(name) or "T"
     return Store.objects.create(
         name=name,
+        code=allocate_unique_store_code(base),
         owner_name=f"{name} Owner",
         owner_email=f"{name.lower().replace(' ', '')}@example.com",
     )

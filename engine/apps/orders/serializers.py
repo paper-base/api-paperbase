@@ -27,7 +27,6 @@ def storefront_order_line_variant_details(line: OrderItem) -> str | None:
 class OrderItemSerializer(SafeModelSerializer):
     product_public_id = serializers.SerializerMethodField()
     product_name = serializers.SerializerMethodField()
-    product_sku = serializers.SerializerMethodField()
     status = serializers.SerializerMethodField()
     variant_public_id = serializers.SerializerMethodField()
     variant_sku = serializers.SerializerMethodField()
@@ -39,7 +38,6 @@ class OrderItemSerializer(SafeModelSerializer):
             'public_id',
             'product_public_id',
             'product_name',
-            'product_sku',
             'status',
             'quantity',
             'unit_price',
@@ -58,9 +56,6 @@ class OrderItemSerializer(SafeModelSerializer):
 
     def get_product_name(self, obj):
         return obj.product.name if obj.product else "Unavailable"
-
-    def get_product_sku(self, obj):
-        return (obj.product.sku or "") if obj.product else None
 
     def get_status(self, obj):
         return "active" if obj.product else "deleted"

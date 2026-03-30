@@ -12,7 +12,11 @@ from rest_framework.test import APIClient
 from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken
 
 from engine.apps.stores.models import Store, StoreMembership
-from engine.apps.stores.services import create_store_api_key
+from engine.apps.stores.services import (
+    allocate_unique_store_code,
+    create_store_api_key,
+    normalize_store_code_base_from_name,
+)
 from engine.core.tenant_execution import tenant_scope_from_store
 from engine.core.tenancy import get_active_store
 from engine.core.ids import generate_public_id
@@ -44,10 +48,20 @@ PASSWORD_RESET_OK_MESSAGE = (
 # Shared test helpers
 # ---------------------------------------------------------------------------
 
+def _store_code_for_test(name: str, domain: str) -> str:
+    base = normalize_store_code_base_from_name(name) or normalize_store_code_base_from_name(
+        domain.split(".")[0]
+    )
+    if not base:
+        base = "T"
+    return allocate_unique_store_code(base)
+
+
 def _make_store(name, domain, owner_email=None):
     email = owner_email or f"owner@{domain}"
     store = Store.objects.create(
         name=name,
+        code=_store_code_for_test(name, domain),
         owner_name=f"{name} Owner",
         owner_email=email,
     )
@@ -365,6 +379,7 @@ class PublicIdGenerationTests(TestCase):
     def test_store_model_generates_public_id_on_save(self):
         store = Store.objects.create(
             name="Auto ID Store",
+            code=allocate_unique_store_code("AUTOIDSTOR"),
             owner_name="Test Owner",
             owner_email="owner@test.com",
         )
@@ -374,6 +389,7 @@ class PublicIdGenerationTests(TestCase):
     def test_public_id_is_immutable(self):
         store = Store.objects.create(
             name="Immutable Store",
+            code=allocate_unique_store_code("IMMUTABLES"),
             owner_name="Test Owner",
             owner_email="owner@test2.com",
         )
@@ -549,7 +565,8 @@ class PublicIdApiTests(TestCase):
                 store=self.store, attribute=color_attr, value="Red"
             )
             variant = ProductVariant.objects.create(
-                product=product, sku="tee-xl-red", is_active=True
+                product=product,
+                is_active=True,
             )
             ProductVariantAttribute.objects.create(
                 variant=variant, attribute_value=size_xl

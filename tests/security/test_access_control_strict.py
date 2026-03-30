@@ -17,7 +17,12 @@ from engine.apps.products.models import Category, Product, ProductVariant
 from engine.apps.products.stock_sync import sync_product_stock_from_variants
 from engine.apps.shipping.models import ShippingZone
 from engine.apps.stores.models import Store, StoreMembership
-from engine.apps.stores.services import create_store_api_key, revoke_store_api_key
+from engine.apps.stores.services import (
+    allocate_unique_store_code,
+    create_store_api_key,
+    normalize_store_code_base_from_name,
+    revoke_store_api_key,
+)
 from engine.core.tenant_execution import tenant_scope_from_store
 from engine.core import store_api_key_auth
 from engine.core.apps import enforce_production_override_safety
@@ -37,8 +42,10 @@ def _enable_tenant_api_key_enforcement(settings):
 
 
 def _make_store(name: str) -> Store:
+    base = normalize_store_code_base_from_name(name) or "T"
     return Store.objects.create(
         name=name,
+        code=allocate_unique_store_code(base),
         owner_name=f"{name} Owner",
         owner_email=f"{name.lower().replace(' ', '')}@example.com",
     )
@@ -459,12 +466,10 @@ def test_variant_stock_sync_updates_product_total_consistently():
         )
         v1 = ProductVariant.objects.create(
             product=product,
-            sku="sku-v1",
             is_active=True,
         )
         v2 = ProductVariant.objects.create(
             product=product,
-            sku="sku-v2",
             is_active=True,
         )
         Inventory.objects.create(product=product, variant=v1, quantity=3)

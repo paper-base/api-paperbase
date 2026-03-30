@@ -13,15 +13,22 @@ from engine.apps.inventory.models import Inventory
 from engine.apps.notifications.models import PlatformNotification
 from engine.apps.products.models import Category, Product
 from engine.apps.stores.models import Store, StoreMembership
-from engine.apps.stores.services import create_store_api_key, revoke_store_api_key
+from engine.apps.stores.services import (
+    allocate_unique_store_code,
+    create_store_api_key,
+    normalize_store_code_base_from_name,
+    revoke_store_api_key,
+)
 from django.contrib.auth import get_user_model
 
 User = get_user_model()
 
 
 def make_store(name: str) -> Store:
+    base = normalize_store_code_base_from_name(name) or "T"
     return Store.objects.create(
         name=name,
+        code=allocate_unique_store_code(base),
         owner_name=f"{name} Owner",
         owner_email=f"{name.lower().replace(' ', '')}@example.com",
     )

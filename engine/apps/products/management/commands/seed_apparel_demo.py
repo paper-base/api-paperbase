@@ -307,7 +307,6 @@ class Command(BaseCommand):
                 store=store,
                 name=SHIRT_NAME,
                 brand="Gadzilla Essentials",
-                sku="GADZ-TS-PARENT",
                 price=Decimal("24.99"),
                 original_price=Decimal("32.00"),
                 category=category,
@@ -330,14 +329,12 @@ class Command(BaseCommand):
         colors = self._value_map(color_attr)
         sizes = self._value_map(size_attr)
 
-        for color_label, color_code in SHIRT_COLORS:
+        for color_label, _color_code in SHIRT_COLORS:
             for sz in SHIRT_SIZES:
-                sku = f"GADZ-TS-{color_code}-{sz}"
                 cv = colors[color_label]
                 sv = sizes[sz]
                 v = ProductVariant.objects.create(
                     product=p,
-                    sku=sku,
                     price_override=None,
                     is_active=True,
                 )
@@ -371,7 +368,6 @@ class Command(BaseCommand):
                 store=store,
                 name=PANT_NAME,
                 brand="Gadzilla Essentials",
-                sku="GADZ-CH-PARENT",
                 price=Decimal("59.99"),
                 original_price=Decimal("78.00"),
                 category=category,
@@ -397,12 +393,10 @@ class Command(BaseCommand):
 
         for w in PANT_WAISTS:
             for fit_label, fit_code in PANT_FITS:
-                sku = f"GADZ-CH-{w}-{fit_code}"
                 wv = waists[w]
                 fv = fits[fit_label]
                 v = ProductVariant.objects.create(
                     product=p,
-                    sku=sku,
                     price_override=Decimal("64.99") if fit_code == "SLM" else None,
                     is_active=True,
                 )

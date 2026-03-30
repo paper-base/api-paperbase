@@ -21,9 +21,11 @@ from engine.core.tenant_execution import tenant_scope_from_store
 def _store():
     d = f"t{_uuid.uuid4().hex[:12]}.local"
     from engine.apps.stores.models import Store
+    from engine.apps.stores.services import allocate_unique_store_code
 
     return Store.objects.create(
         name="S",
+        code=allocate_unique_store_code("S"),
         owner_name="O",
         owner_email=f"owner@{d}",
         currency="BDT",

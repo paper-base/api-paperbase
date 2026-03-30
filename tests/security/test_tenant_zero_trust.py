@@ -6,6 +6,7 @@ from engine.apps.products.models import Category, Product
 from engine.core.middleware.tenant_context_middleware import TenantContextMiddleware
 from engine.core.tenant_context import _clear_tenant_context
 from engine.apps.stores.models import Store
+from engine.apps.stores.services import allocate_unique_store_code
 from engine.apps.marketing_integrations.services import dispatcher
 from engine.core.authz import can_enable_internal_override
 from engine.core.migration_safety import TenantSafeMigration
@@ -19,6 +20,7 @@ User = get_user_model()
 def _create_store() -> Store:
     return Store.objects.create(
         name="Zero Trust Store",
+        code=allocate_unique_store_code("ZEROTRUST"),
         owner_name="Owner",
         owner_email="owner+zerotrust@example.com",
         is_active=True,

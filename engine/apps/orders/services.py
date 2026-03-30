@@ -100,6 +100,7 @@ def resolve_active_variant_for_product(
     product: Product,
     variant_public_id: str | None,
 ) -> ProductVariant | None:
+    """Resolve variant by public_id and catalog scope; SKU is never used as a lookup key."""
     if variant_public_id is None:
         return None
     try:

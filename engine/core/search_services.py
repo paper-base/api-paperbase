@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from django.db.models import Q
+from django.db.models import Prefetch, Q
 
 from engine.apps.customers.models import Customer
 from engine.apps.orders.models import Order
-from engine.apps.products.models import Product
+from engine.apps.products.models import Product, ProductVariant
+from engine.apps.products.product_search import filter_products_by_prioritized_search
 from engine.apps.stores.models import Store
 from engine.apps.support.models import SupportTicket
 
@@ -32,33 +33,40 @@ def _product_supports_is_deleted() -> bool:
 
 
 def _search_products(query: str, store: Store, limit: int) -> list[SearchResultItem]:
-    filters = (
-        Q(name__icontains=query)
-        | Q(sku__icontains=query)
-        | Q(description__icontains=query)
-    )
-
-    qs = Product.objects.select_related("category").filter(
-        store=store,
-        is_active=True,
-        status=Product.Status.ACTIVE,
+    qs = (
+        Product.objects.select_related("category")
+        .filter(
+            store=store,
+            is_active=True,
+            status=Product.Status.ACTIVE,
+        )
+        .distinct()
     )
     if _product_supports_is_deleted():
         qs = qs.filter(is_deleted=False)
 
+    matched = filter_products_by_prioritized_search(qs, query)
     products = (
-        qs.filter(filters)
-        .only("public_id", "name", "sku", "category__name")
-        .order_by("-created_at")[:limit]
-    )
-    return [
-        SearchResultItem(
-            public_id=product.public_id,
-            title=product.name,
-            subtitle=product.sku or "",
+        matched.prefetch_related(
+            Prefetch(
+                "variants",
+                queryset=ProductVariant.objects.order_by("id").only("sku", "product_id"),
+            )
         )
-        for product in products
-    ]
+        .only("public_id", "name", "category__name")[:limit]
+    )
+    out: list[SearchResultItem] = []
+    for product in products:
+        variants = list(product.variants.all())
+        subtitle = variants[0].sku if variants else ""
+        out.append(
+            SearchResultItem(
+                public_id=product.public_id,
+                title=product.name,
+                subtitle=subtitle,
+            )
+        )
+    return out
 
 
 def _search_orders(query: str, store: Store, limit: int) -> list[SearchResultItem]:

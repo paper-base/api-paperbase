@@ -1,4 +1,7 @@
+import random
+import time
 import uuid
+
 from django.db import models  # type: ignore[import-not-found]
 
 from engine.apps.stores.models import Store
@@ -137,7 +140,6 @@ class Product(models.Model):
     name = models.CharField(max_length=255)
     brand = models.CharField(max_length=100, blank=True, null=True)
     slug = models.SlugField(max_length=255)
-    sku = models.CharField(max_length=100, blank=True, db_index=True, help_text="Stock keeping unit")
     price = models.DecimalField(max_digits=10, decimal_places=2)
     original_price = models.DecimalField(
         max_digits=10, decimal_places=2, null=True, blank=True
@@ -298,7 +300,12 @@ class ProductAttribute(models.Model):
         db_index=True,
     )
     name = models.CharField(max_length=100)
-    slug = models.SlugField(max_length=100)
+    slug = models.SlugField(
+        max_length=100,
+        blank=True,
+        default="",
+        help_text="URL slug per store; set only when empty, from name (unique per store).",
+    )
     order = models.PositiveIntegerField(default=0)
 
     class Meta:
@@ -311,10 +318,32 @@ class ProductAttribute(models.Model):
         ]
 
     objects = TenantAwareManager()
+    # Stock QuerySet (no tenant guard). Use ONLY with an explicit store/store_id filter.
+    unguarded = models.Manager()
 
     def save(self, *args, **kwargs):
         if not self.public_id:
             self.public_id = generate_public_id("attribute")
+        slug_val = (self.slug or "").strip()
+        if not slug_val:
+            from django.utils.text import slugify
+
+            base_source = (self.name or "").strip()
+            base_slug = slugify(base_source)[:100]
+            if not base_slug:
+                base_slug = f"attribute-{self.pk}" if self.pk else "attribute"
+            self.slug = base_slug[:100]
+            if self.store_id:
+                queryset = ProductAttribute.unguarded.filter(store_id=self.store_id)
+                if self.pk:
+                    queryset = queryset.exclude(pk=self.pk)
+                n = 1
+                while queryset.filter(slug=self.slug).exists():
+                    suffix = f"-{n}"
+                    head_len = max(1, 100 - len(suffix))
+                    stem = (base_slug[:head_len].rstrip("-") or "a")
+                    self.slug = stem + suffix
+                    n += 1
         super().save(*args, **kwargs)
 
     def __str__(self):
@@ -376,7 +405,14 @@ class ProductVariant(models.Model):
         on_delete=models.CASCADE,
         related_name='variants'
     )
-    sku = models.CharField(max_length=100, blank=True, db_index=True)
+    store = models.ForeignKey(
+        Store,
+        on_delete=models.CASCADE,
+        related_name="product_variants",
+        db_index=True,
+        help_text="Denormalized from product.store for per-store SKU uniqueness.",
+    )
+    sku = models.CharField(max_length=100, db_index=True)
     price_override = models.DecimalField(
         max_digits=10,
         decimal_places=2,
@@ -392,15 +428,83 @@ class ProductVariant(models.Model):
         ordering = ['product', 'id']
         constraints = [
             models.UniqueConstraint(
-                fields=["product", "sku"],
-                name="uniq_variant_product_sku",
+                fields=["store", "sku"],
+                name="uniq_variant_store_sku",
             ),
         ]
 
     def save(self, *args, **kwargs):
+        from django.db import IntegrityError, models as django_models, transaction
+
         if not self.public_id:
             self.public_id = generate_public_id("variant")
-        super().save(*args, **kwargs)
+        if self.product_id:
+            sid = Product.objects.filter(pk=self.product_id).values_list("store_id", flat=True).first()
+            if sid:
+                self.store_id = sid
+        if self.pk:
+            prev = ProductVariant.objects.filter(pk=self.pk).only("sku").first()
+            if prev is not None:
+                self.sku = prev.sku
+            django_models.Model.save(self, *args, **kwargs)
+            return
+
+        from .sku_generation import (
+            SkuGenerationError,
+            build_sku_candidate,
+            log_variant_sku_generation,
+        )
+
+        store = Store.objects.get(pk=self.store_id)
+        store_code_raw = getattr(store, "code", "") or ""
+        max_attempts = 8
+        last_exc: BaseException | None = None
+        for attempt in range(1, max_attempts + 1):
+            self.sku = build_sku_candidate(store)
+            try:
+                with transaction.atomic():
+                    django_models.Model.save(self, *args, **kwargs)
+            except IntegrityError as exc:
+                last_exc = exc
+                err = str(exc).lower()
+                if "uniq_variant_store_sku" not in err and not (
+                    "unique" in err and "sku" in err
+                ):
+                    raise
+                log_variant_sku_generation(
+                    store_id=store.pk,
+                    store_code=store_code_raw,
+                    generated_sku=self.sku,
+                    attempt_number=attempt,
+                    outcome="retry",
+                    exception=repr(exc),
+                    level="info",
+                )
+                if attempt < max_attempts:
+                    delay = 0.01 * (attempt**2) + random.uniform(0, 0.01)
+                    time.sleep(delay)
+                continue
+            log_variant_sku_generation(
+                store_id=store.pk,
+                store_code=store_code_raw,
+                generated_sku=self.sku,
+                attempt_number=attempt,
+                outcome="success",
+                exception=None,
+                level="debug",
+            )
+            return
+        log_variant_sku_generation(
+            store_id=store.pk,
+            store_code=store_code_raw,
+            generated_sku=self.sku,
+            attempt_number=max_attempts,
+            outcome="failure",
+            exception=repr(last_exc) if last_exc else "",
+            level="error",
+            exc_info=last_exc,
+        )
+        raise SkuGenerationError("SKU generation failed after max retries") from last_exc
 
     def __str__(self):
         return f"{self.product.name} ({self.sku or self.pk})"

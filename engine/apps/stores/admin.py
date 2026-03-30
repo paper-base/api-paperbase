@@ -5,12 +5,19 @@ from .models import Store, StoreMembership, StoreSettings
 
 @admin.register(Store)
 class StoreAdmin(admin.ModelAdmin):
-    list_display = ("id", "name", "owner_name", "owner_email", "currency_symbol", "is_active", "created_at")
+    list_display = ("id", "name", "code", "owner_name", "owner_email", "currency_symbol", "is_active", "created_at")
     list_filter = ("is_active", "created_at")
     search_fields = ("name", "owner_name", "owner_email")
     ordering = ("-created_at",)
+
+    def get_readonly_fields(self, request, obj=None):
+        ro = list(super().get_readonly_fields(request, obj) or [])
+        if obj:
+            ro.append("code")
+        return tuple(ro)
+
     fieldsets = (
-        (None, {"fields": ("name", "store_type", "is_active")}),
+        (None, {"fields": ("name", "slug", "code", "store_type", "is_active")}),
         ("Owner", {"fields": ("owner_name", "owner_email")}),
         ("Branding", {"fields": ("logo", "currency", "currency_symbol")}),
         ("Store info", {"fields": ("contact_email", "phone", "address")}),

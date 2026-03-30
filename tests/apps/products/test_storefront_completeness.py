@@ -81,9 +81,8 @@ def test_shipping_zones_and_product_detail_enrichment():
     p = make_product(store, name="Ship Product")
     with tenant_scope_from_store(store=store, reason="test fixture"):
         p.brand = "ShipBrand"
-        p.sku = "SHIP-SKU-1"
         p.original_price = Decimal("199.00")
-        p.save(update_fields=["brand", "sku", "original_price"])
+        p.save(update_fields=["brand", "original_price"])
         zone = ShippingZone.objects.create(
             store=store,
             name="Dhaka",
@@ -116,10 +115,10 @@ def test_shipping_zones_and_product_detail_enrichment():
     list_body = lr.json()
     rows = list_body.get("results", list_body)
     row = next(r for r in rows if r["public_id"] == p.public_id)
-    for key in ("original_price", "brand", "sku", "available_quantity"):
+    for key in ("original_price", "brand", "available_quantity"):
         assert key in row
     assert row["brand"] == "ShipBrand"
-    assert row["sku"] == "SHIP-SKU-1"
+    assert "sku" not in row
     assert row["original_price"] is not None
     assert int(row["available_quantity"]) >= 0
 
@@ -130,7 +129,8 @@ def test_shipping_zones_and_product_detail_enrichment():
     assert detail["breadcrumbs"][-1] == "Ship Product"
     assert "related_products" in detail
     assert "variant_matrix" in detail
-    assert "sku" in detail and "stock_tracking" in detail
+    assert "stock_tracking" in detail
+    assert "sku" not in detail
     assert "category_public_id" in detail
     assert "category_slug" in detail
     assert "category_name" in detail

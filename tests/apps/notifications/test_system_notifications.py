@@ -7,6 +7,7 @@ from rest_framework.test import APIClient
 
 from engine.apps.notifications.models import NotificationDismissal, PlatformNotification
 from engine.apps.stores.models import Store, StoreMembership
+from engine.apps.stores.services import allocate_unique_store_code
 
 User = get_user_model()
 
@@ -26,6 +27,7 @@ class ActiveSystemNotificationAPITests(TestCase):
         )
         self.store = Store.objects.create(
             name="SysNotify Store",
+            code=allocate_unique_store_code("SYSNOTIFY"),
             owner_name="Owner",
             owner_email="owner@sysnotify.example.com",
         )
@@ -150,6 +152,7 @@ class SystemNotificationDismissAPITests(TestCase):
         )
         self.store = Store.objects.create(
             name="Dismiss Store",
+            code=allocate_unique_store_code("DISMISS"),
             owner_name="Owner",
             owner_email="owner@dismiss.example.com",
         )

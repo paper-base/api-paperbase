@@ -1,3 +1,5 @@
+import re
+
 from django.conf import settings
 from django.db import models
 
@@ -12,6 +14,18 @@ class Store(models.Model):
         help_text="Non-sequential public identifier used in APIs and URLs (e.g. str_xxx).",
     )
     name = models.CharField(max_length=255)
+    slug = models.SlugField(
+        max_length=100,
+        unique=True,
+        db_index=True,
+        help_text="URL-safe unique slug (globally unique); may change for branding. Not used in SKUs.",
+    )
+    code = models.CharField(
+        max_length=10,
+        unique=True,
+        db_index=True,
+        help_text="Stable uppercase alphanumeric tenant code for variant SKUs; set once and never changes.",
+    )
     store_type = models.CharField(
         max_length=60,
         blank=True,
@@ -45,7 +59,59 @@ class Store(models.Model):
     def save(self, *args, **kwargs):
         if not self.public_id:
             self.public_id = generate_public_id("store")
+        locked_code = None
+        if self.pk:
+            locked_code = Store.objects.filter(pk=self.pk).values_list("code", flat=True).first()
+
+        from django.utils.text import slugify
+
+        raw = (self.slug or "").strip()
+        if raw:
+            self.slug = (slugify(raw)[:100] or raw)[:100]
+        else:
+            base_source = (self.name or "").strip()
+            base = slugify(base_source)[:100]
+            if not base:
+                base = f"store-{self.pk}" if self.pk else "store"
+            self.slug = base[:100]
+        original = self.slug
+        qs = Store.objects.all()
+        if self.pk:
+            qs = qs.exclude(pk=self.pk)
+        counter = 2
+        while qs.filter(slug=self.slug).exists():
+            suffix = f"-{counter}"
+            head_len = max(1, 100 - len(suffix))
+            self.slug = (original[:head_len].rstrip("-") or "s") + suffix
+            counter += 1
+
+        if locked_code is not None:
+            self.code = locked_code
+        else:
+            self._assign_store_code_for_create()
+
         super().save(*args, **kwargs)
+
+    def _assign_store_code_for_create(self) -> None:
+        """Normalize and uniquify Store.code; caller must set a non-empty code (no slug/public_id fallbacks)."""
+        explicit = re.sub(r"[^A-Z0-9]", "", (self.code or "").strip().upper())[:10]
+        if not explicit:
+            raise ValueError(
+                "Store.code is required. Set a non-empty alphanumeric code before saving a new store."
+            )
+        base = explicit
+        candidate = base[:10]
+        other = Store.objects.all()
+        if self.pk:
+            other = other.exclude(pk=self.pk)
+        n = 2
+        while other.filter(code=candidate).exists():
+            suffix = str(n)
+            head = max(1, 10 - len(suffix))
+            root = base[:head].rstrip() or base[:1]
+            candidate = (root + suffix)[:10]
+            n += 1
+        self.code = candidate
 
     def __str__(self) -> str:
         return self.name

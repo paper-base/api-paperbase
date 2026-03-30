@@ -11,6 +11,7 @@ from django.utils import timezone
 from engine.apps.billing.models import Plan, Subscription
 from engine.apps.billing.services import activate_subscription
 from engine.apps.stores.models import Store, StoreMembership, StoreSettings
+from engine.apps.stores.services import allocate_unique_store_code
 from engine.apps.emails.constants import (
     ORDER_RECEIVED,
     PLATFORM_NEW_SUBSCRIPTION,
@@ -36,6 +37,7 @@ def _store():
     d = f"t{_uuid.uuid4().hex[:12]}.local"
     store = Store.objects.create(
         name="S",
+        code=allocate_unique_store_code("S"),
         owner_name="O",
         owner_email=f"owner@{d}",
     )

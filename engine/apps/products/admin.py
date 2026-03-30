@@ -31,7 +31,6 @@ class ProductAdmin(admin.ModelAdmin):
     form = ProductAdminForm
     list_display = [
         'name',
-        'sku',
         'brand',
         'get_category',
         'price',
@@ -41,7 +40,7 @@ class ProductAdmin(admin.ModelAdmin):
     ]
     list_editable = ['is_active']
     list_filter = ['category', 'status', 'is_active']
-    search_fields = ['name', 'brand', 'sku']
+    search_fields = ['name', 'brand', 'variants__sku']
     prepopulated_fields = {'slug': ('name',)}
     inlines = [ProductImageInline]
     autocomplete_fields = ['category', 'store']
@@ -100,7 +99,6 @@ class ProductAdmin(admin.ModelAdmin):
                         "name",
                         "brand",
                         "slug",
-                        "sku",
                         "status",
                         "category",
                     ),
@@ -168,6 +166,13 @@ class ProductAdmin(admin.ModelAdmin):
     get_category.short_description = 'Category'
     get_category.admin_order_field = 'category__name'
 
+    def get_search_results(self, request, queryset, search_term):
+        queryset, use_distinct = super().get_search_results(request, queryset, search_term)
+        if search_term.strip():
+            queryset = queryset.distinct()
+            use_distinct = False
+        return queryset, use_distinct
+
 
 @admin.register(Category)
 class CategoryAdmin(admin.ModelAdmin):
@@ -213,7 +218,7 @@ class ProductAttributeValueInline(admin.TabularInline):
 class ProductAttributeAdmin(admin.ModelAdmin):
     list_display = ['name', 'slug', 'order']
     list_editable = ['order']
-    prepopulated_fields = {'slug': ('name',)}
+    readonly_fields = ['public_id', 'slug']
     inlines = [ProductAttributeValueInline]
 
 
@@ -238,5 +243,6 @@ class ProductVariantAdmin(admin.ModelAdmin):
     list_filter = ['is_active']
     list_editable = ['is_active']
     search_fields = ['sku', 'product__name']
+    readonly_fields = ['sku']
     inlines = [ProductVariantAttributeInline]
     autocomplete_fields = ['product']
