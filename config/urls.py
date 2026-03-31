@@ -65,7 +65,7 @@ def api_home(_request):
     return HttpResponse(html)
 
 
-def not_found(_request, _exception):
+def not_found(_request, exception):
     html = """
 <!doctype html>
 <html lang="en">
