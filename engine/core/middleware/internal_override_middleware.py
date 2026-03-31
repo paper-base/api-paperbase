@@ -26,6 +26,12 @@ class InternalOverrideMiddleware(MiddlewareMixin):
     """
 
     def process_request(self, request):
+        if request.path in {"/health", "/health/"}:
+            request.auth_context = AuthContext(
+                internal_override_enabled=False,
+                client_ip=_client_ip(request),
+            )
+            return None
         user = getattr(request, "user", None)
         client_ip = _client_ip(request)
         enabled = can_enable_internal_override(user=user, client_ip=client_ip)

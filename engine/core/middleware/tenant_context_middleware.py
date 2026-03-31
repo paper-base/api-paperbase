@@ -13,6 +13,10 @@ class TenantContextMiddleware(MiddlewareMixin):
     """
 
     def process_request(self, request):
+        if request.path in {"/health", "/health/"}:
+            request.context = RequestContext(tenant=None, is_platform_admin=False)
+            _set_tenant_context(store=None, is_platform_admin=False)
+            return None
         if user_enters_platform_scope(request.user):
             request.context = RequestContext(tenant=None, is_platform_admin=True)
             _set_tenant_context(store=None, is_platform_admin=True)
