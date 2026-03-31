@@ -64,6 +64,34 @@ def api_home(_request):
 """
     return HttpResponse(html)
 
+
+def not_found(_request, _exception):
+    html = """
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Not Found</title>
+    <style>
+      html, body {
+        margin: 0;
+        min-height: 100%;
+        background: #000;
+        color: #fff;
+        font-family: sans-serif;
+      }
+      body {
+        padding: 6px;
+      }
+    </style>
+  </head>
+  <body>Not Found</body>
+</html>
+"""
+    return HttpResponse(html, status=404)
+
+
 from engine.apps.products.urls import category_urlpatterns
 # API v1: all public and admin endpoints under /api/v1/
 api_v1_patterns = [
@@ -95,3 +123,5 @@ urlpatterns = [
 
 if settings.DEBUG:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+
+handler404 = "config.urls.not_found"
