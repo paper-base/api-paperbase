@@ -12,7 +12,7 @@ from engine.apps.billing.feature_gate import (
 )
 from engine.apps.billing.models import Plan, Subscription
 from engine.apps.billing.services import activate_subscription, extend_subscription, get_active_subscription
-from engine.apps.stores.models import Store, StoreMembership, StoreSettings
+from engine.apps.stores.models import Store, StoreApiKey, StoreMembership, StoreSettings
 from engine.apps.stores.services import allocate_unique_store_code
 
 User = get_user_model()
@@ -252,12 +252,18 @@ class StoreCreationEnforcementTests(TestCase):
         resp = self._create_store_via_api()
         self.assertEqual(resp.status_code, 201)
         self.assertEqual(Store.objects.filter(memberships__user=self.user, memberships__role="owner").count(), 1)
+        self.assertNotIn("api_key", resp.data)
+        store_pid = resp.data["public_id"]
+        self.assertEqual(StoreApiKey.objects.filter(store__public_id=store_pid).count(), 0)
 
     def test_store_creation_allowed_with_subscription(self):
         activate_subscription(self.user, self.plan_basic, source="manual", amount=0, provider="manual")
         resp = self._create_store_via_api()
         self.assertEqual(resp.status_code, 201)
         self.assertEqual(Store.objects.filter(memberships__user=self.user, memberships__role="owner").count(), 1)
+        self.assertNotIn("api_key", resp.data)
+        store_pid = resp.data["public_id"]
+        self.assertEqual(StoreApiKey.objects.filter(store__public_id=store_pid).count(), 0)
 
     def test_store_creation_blocked_when_limit_reached(self):
         activate_subscription(self.user, self.plan_basic, source="manual", amount=0, provider="manual")

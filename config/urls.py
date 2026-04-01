@@ -19,77 +19,11 @@ def health(_request):
 
 
 def api_home(_request):
-    html = """
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <style>
-      :root { color-scheme: dark; }
-      * { box-sizing: border-box; }
-      body {
-        margin: 0;
-        min-height: 100vh;
-        padding: 2rem;
-        background: #070b11;
-        color: #f7f3d0;
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-      }
-      pre {
-        margin: 0;
-        font-size: clamp(10px, 1.1vw, 16px);
-        line-height: 1.25;
-        white-space: pre;
-      }
-      .hint {
-        margin-top: 1.25rem;
-        color: #94a3b8;
-        font-size: 0.9rem;
-      }
-      .hint a {
-        color: #cbd5e1;
-      }
-    </style>
-  </head>
-  <body>
-    <pre>
-              /\\_/\\
-         ____/ o o \\
-       /~____  =o= /
-      (______)__m_m)          ✨ Home of the Paperbase API ✨
-    </pre>
-  </body>
-</html>
-"""
-    return HttpResponse(html)
+    return HttpResponse("home of paperbase API", content_type="text/plain")
 
 
 def not_found(_request, exception):
-    html = """
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Not Found</title>
-    <style>
-      html, body {
-        margin: 0;
-        min-height: 100%;
-        background: #000;
-        color: #fff;
-        font-family: sans-serif;
-      }
-      body {
-        padding: 6px;
-      }
-    </style>
-  </head>
-  <body>Not Found</body>
-</html>
-"""
-    return HttpResponse(html, status=404)
+    return HttpResponse("Not Found", content_type="text/plain")
 
 
 from engine.apps.products.urls import category_urlpatterns

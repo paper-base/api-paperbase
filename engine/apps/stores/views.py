@@ -145,9 +145,6 @@ class StoreViewSet(viewsets.ModelViewSet):
             role=StoreMembership.Role.OWNER,
             is_active=True,
         )
-        _, bootstrap_api_key = create_store_api_key(
-            store, name="Bootstrap Public", key_type=StoreApiKey.KeyType.PUBLIC
-        )
 
         # Update User's first_name and last_name for auth/profile
         request.user.first_name = owner_first_name[:150]
@@ -155,7 +152,6 @@ class StoreViewSet(viewsets.ModelViewSet):
         request.user.save(update_fields=["first_name", "last_name"])
 
         payload = StoreSerializer(store).data
-        payload["api_key"] = bootstrap_api_key
         return Response(payload, status=status.HTTP_201_CREATED)
 
 

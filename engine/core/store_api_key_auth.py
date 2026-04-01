@@ -26,6 +26,10 @@ API_KEY_EXACT_EXEMPT_PATHS = (
     "/api/v1/health/",
 )
 
+TENANT_API_KEY_REQUIRED_DETAIL = (
+    "No API key found. Create one in Settings → Networking."
+)
+
 # Kept for tests/documentation only; authorization is enforced via permission classes.
 STORE_FRONTEND_ROUTE_POLICY = (
     ("/api/v1/products/", {"GET"}),
@@ -200,7 +204,7 @@ class TenantApiKeyMiddleware(MiddlewareMixin):
                 response = JsonResponse({"detail": "Too many invalid API key attempts."}, status=429)
                 response["Retry-After"] = "60"
                 return response
-            return JsonResponse({"detail": "Invalid API key."}, status=401)
+            return JsonResponse({"detail": TENANT_API_KEY_REQUIRED_DETAIL}, status=401)
         if key_row.key_type != key_row.KeyType.PUBLIC:
             return JsonResponse({"detail": "Secret API keys cannot access storefront endpoints."}, status=403)
 

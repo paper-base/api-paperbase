@@ -7,7 +7,10 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from config.asgi import application
-from engine.core.store_api_key_auth import requires_tenant_api_key
+from engine.core.store_api_key_auth import (
+    TENANT_API_KEY_REQUIRED_DETAIL,
+    requires_tenant_api_key,
+)
 from engine.core.tenant_execution import tenant_scope_from_store
 from engine.apps.inventory.models import Inventory
 from engine.apps.notifications.models import PlatformNotification
@@ -72,6 +75,7 @@ class APIKeyTenantEnforcementTests(TestCase):
     def test_missing_key_returns_401(self):
         response = self.client.get("/api/v1/products/")
         self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.data.get("detail"), TENANT_API_KEY_REQUIRED_DETAIL)
 
     def test_invalid_key_returns_401(self):
         response = self.client.get(
@@ -79,6 +83,7 @@ class APIKeyTenantEnforcementTests(TestCase):
             HTTP_AUTHORIZATION="Bearer ak_live_invalid",
         )
         self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.data.get("detail"), TENANT_API_KEY_REQUIRED_DETAIL)
 
     def test_revoked_key_returns_401(self):
         revoke_store_api_key(self.key_row_a)
@@ -87,6 +92,7 @@ class APIKeyTenantEnforcementTests(TestCase):
             HTTP_AUTHORIZATION=f"Bearer {self.key_a}",
         )
         self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.data.get("detail"), TENANT_API_KEY_REQUIRED_DETAIL)
 
     def test_valid_key_returns_only_store_data(self):
         response = self.client.get(
@@ -217,7 +223,7 @@ class JWTExemptRoutesTests(TestCase):
             {"refresh": self.refresh},
             format="json",
         )
-        self.assertNotEqual(response.data.get("detail"), "Invalid API key.")
+        self.assertNotEqual(response.data.get("detail"), TENANT_API_KEY_REQUIRED_DETAIL)
         self.assertIn(response.status_code, {200, 401})
 
     def test_auth_me_works_with_jwt_without_api_key(self):
