@@ -101,11 +101,11 @@ DEFAULT_EMAIL_TEMPLATES: dict[str, dict[str, str]] = {
         ),
     },
     ORDER_CONFIRMED: {
-        "subject": "Your order {{ order_number }} has been dispatched",
+        "subject": "Your order #{{ order_number }} has been dispatched",
         "html_body": (
             "<p>Hello {{ customer_name|default:'there' }},</p>"
             "<p>Good news: <strong>{{ store_name }}</strong> has handed your order "
-            "<strong>{{ order_number }}</strong> to the courier. It is on its way to the address we have on file.</p>"
+            "<strong>#{{ order_number }}</strong> to the courier. It is on its way to the address we have on file.</p>"
             "<p><strong>Order total</strong> {{ total }} {{ currency }}</p>"
             "{% if courier_provider_label or courier_consignment_id %}"
             "<p><strong>Shipping details</strong><br />"
