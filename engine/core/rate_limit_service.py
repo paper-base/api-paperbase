@@ -19,6 +19,7 @@ from django.core.cache import cache
 
 RATE_LIMITS: dict[str, dict] = {
     "password_reset": {"cooldown": 120},
+    # Keep in sync with dash-paperbase/src/lib/email-verification-resend-policy.ts
     "email_verification_resend": {"cooldown": 120},
     "2fa_recovery_request": {"cooldown": 120},
 }
