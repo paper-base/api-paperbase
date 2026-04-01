@@ -1,5 +1,7 @@
 """API key tenancy enforcement tests."""
 
+import json
+
 from asgiref.sync import async_to_sync
 from channels.testing import WebsocketCommunicator
 from django.test import TestCase, TransactionTestCase, override_settings
@@ -25,6 +27,13 @@ from engine.apps.stores.services import (
 from django.contrib.auth import get_user_model
 
 User = get_user_model()
+
+
+def _response_payload(response):
+    """DRF responses expose .data; tenant API key middleware returns JsonResponse."""
+    if hasattr(response, "data"):
+        return response.data
+    return json.loads(response.content)
 
 
 def make_store(name: str) -> Store:
@@ -75,7 +84,10 @@ class APIKeyTenantEnforcementTests(TestCase):
     def test_missing_key_returns_401(self):
         response = self.client.get("/api/v1/products/")
         self.assertEqual(response.status_code, 401)
-        self.assertEqual(response.data.get("detail"), TENANT_API_KEY_REQUIRED_DETAIL)
+        self.assertEqual(
+            _response_payload(response).get("detail"),
+            TENANT_API_KEY_REQUIRED_DETAIL,
+        )
 
     def test_invalid_key_returns_401(self):
         response = self.client.get(
@@ -83,7 +95,10 @@ class APIKeyTenantEnforcementTests(TestCase):
             HTTP_AUTHORIZATION="Bearer ak_live_invalid",
         )
         self.assertEqual(response.status_code, 401)
-        self.assertEqual(response.data.get("detail"), TENANT_API_KEY_REQUIRED_DETAIL)
+        self.assertEqual(
+            _response_payload(response).get("detail"),
+            TENANT_API_KEY_REQUIRED_DETAIL,
+        )
 
     def test_revoked_key_returns_401(self):
         revoke_store_api_key(self.key_row_a)
@@ -92,7 +107,10 @@ class APIKeyTenantEnforcementTests(TestCase):
             HTTP_AUTHORIZATION=f"Bearer {self.key_a}",
         )
         self.assertEqual(response.status_code, 401)
-        self.assertEqual(response.data.get("detail"), TENANT_API_KEY_REQUIRED_DETAIL)
+        self.assertEqual(
+            _response_payload(response).get("detail"),
+            TENANT_API_KEY_REQUIRED_DETAIL,
+        )
 
     def test_valid_key_returns_only_store_data(self):
         response = self.client.get(
