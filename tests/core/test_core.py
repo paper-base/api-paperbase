@@ -2204,6 +2204,32 @@ class CustomerAggregationFromOrderTests(TestCase):
 
 
 class R2DeletionTaskTests(TestCase):
+    def test_delete_r2_objects_applies_storage_location_prefix(self):
+        from engine.core.tasks import delete_r2_objects
+
+        client = Mock()
+        client.delete_objects.return_value = {"Deleted": [{"Key": "media/tenants/str_x/branding/logo.jpg"}]}
+
+        with patch("engine.core.tasks._get_r2_delete_client", return_value=client):
+            with self.settings(
+                AWS_STORAGE_BUCKET_NAME="ok-bucket",
+                STORAGES={
+                    "default": {
+                        "BACKEND": "storages.backends.s3.S3Storage",
+                        "OPTIONS": {"location": "media"},
+                    }
+                },
+            ):
+                deleted = delete_r2_objects.run(["tenants/str_x/branding/logo.jpg"])
+
+        self.assertEqual(deleted, 1)
+        kwargs = client.delete_objects.call_args.kwargs
+        self.assertEqual(kwargs["Bucket"], "ok-bucket")
+        self.assertEqual(
+            kwargs["Delete"]["Objects"],
+            [{"Key": "media/tenants/str_x/branding/logo.jpg"}],
+        )
+
     def test_delete_r2_objects_stops_retry_storm_on_missing_bucket(self):
         from botocore.exceptions import ClientError
 

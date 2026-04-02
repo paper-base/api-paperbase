@@ -30,6 +30,26 @@ def _get_r2_delete_client():
     )
 
 
+def _media_storage_location_prefix() -> str:
+    storages = getattr(settings, "STORAGES", {}) or {}
+    default_cfg = storages.get("default", {}) or {}
+    options = default_cfg.get("OPTIONS", {}) or {}
+    location = str(options.get("location", "") or "").strip().strip("/")
+    return location
+
+
+def _key_for_bucket(raw_key: str) -> str:
+    key = (raw_key or "").strip().lstrip("/")
+    if not key:
+        return ""
+    location = _media_storage_location_prefix()
+    if not location:
+        return key
+    if key == location or key.startswith(f"{location}/"):
+        return key
+    return f"{location}/{key}"
+
+
 @app.task(name="engine.core.purge_expired_trash")
 def purge_expired_trash_task() -> int:
     """Celery beat: permanently remove expired trash rows and orphan media."""
@@ -53,6 +73,9 @@ def delete_r2_objects(self, keys: list[str]) -> int:
     - Missing objects are ignored by S3 DeleteObjects.
     """
     normalized = list(dict.fromkeys([(k or "").strip() for k in (keys or []) if (k or "").strip()]))
+    if not normalized:
+        return 0
+    normalized = list(dict.fromkeys([_key_for_bucket(k) for k in normalized if _key_for_bucket(k)]))
     if not normalized:
         return 0
     bucket = (getattr(settings, "AWS_STORAGE_BUCKET_NAME", "") or "").strip()
