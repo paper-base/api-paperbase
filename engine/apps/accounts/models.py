@@ -49,7 +49,12 @@ class User(AbstractBaseUser, PermissionsMixin):
     first_name = models.CharField(max_length=150, blank=True)
     last_name = models.CharField(max_length=150, blank=True)
     phone = models.CharField(max_length=20, blank=True)
-    avatar = models.ImageField(upload_to="avatars/", null=True, blank=True)
+    avatar_seed = models.CharField(
+        max_length=128,
+        blank=True,
+        default="",
+        help_text="Optional seed for DiceBear avatar URL; empty uses public_id.",
+    )
 
     is_verified = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)

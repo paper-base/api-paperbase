@@ -2,12 +2,12 @@ from django.db import models
 
 from engine.apps.stores.models import Store
 from engine.core.ids import generate_public_id
+from engine.core.media_upload_paths import tenant_support_attachment_upload_to
 
 
-def support_attachment_upload_to(instance: "SupportTicketAttachment", filename: str) -> str:
-    store_pub = getattr(instance.ticket.store, "public_id", "unknown")
-    ticket_pub = getattr(instance.ticket, "public_id", "unknown")
-    return f"store_{store_pub}/support/tickets/{ticket_pub}/{filename}"
+def support_attachment_upload_to(instance, filename: str) -> str:
+    """Kept for migration 0001_initial deserialization; delegates to tenant path."""
+    return tenant_support_attachment_upload_to(instance, filename)
 
 
 class SupportTicket(models.Model):
@@ -81,7 +81,7 @@ class SupportTicketAttachment(models.Model):
         on_delete=models.CASCADE,
         related_name="attachments",
     )
-    file = models.FileField(upload_to=support_attachment_upload_to)
+    file = models.FileField(upload_to=tenant_support_attachment_upload_to)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

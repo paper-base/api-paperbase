@@ -13,6 +13,7 @@ from engine.apps.products.admin_views import (
 from engine.apps.notifications.admin_views import AdminNotificationViewSet, AdminStaffNotificationViewSet
 from engine.apps.support.admin_views import AdminSupportTicketViewSet
 from engine.core.admin_views import AdminActivityLogViewSet
+from engine.core.admin_trash_views import AdminTrashViewSet
 from engine.apps.inventory.admin_views import AdminInventoryViewSet, AdminStockMovementViewSet
 from engine.apps.banners.admin_views import AdminBannerViewSet
 from engine.apps.customers.admin_views import AdminCustomerViewSet, AdminCustomerAddressViewSet
@@ -49,6 +50,7 @@ router.register(r'notifications', AdminNotificationViewSet, basename='admin-noti
 router.register(r'system-notifications', AdminStaffNotificationViewSet, basename='admin-system-notifications')
 router.register(r'support-tickets', AdminSupportTicketViewSet, basename='admin-support-tickets')
 router.register(r'activities', AdminActivityLogViewSet, basename='admin-activities')
+router.register(r'trash', AdminTrashViewSet, basename='admin-trash')
 router.register(r'inventory', AdminInventoryViewSet, basename='admin-inventory')
 router.register(r'stock-movements', AdminStockMovementViewSet, basename='admin-stock-movements')
 router.register(r'banners', AdminBannerViewSet, basename='admin-banners')

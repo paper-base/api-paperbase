@@ -6,6 +6,11 @@ from django.db import models  # type: ignore[import-not-found]
 
 from engine.apps.stores.models import Store
 from engine.core.ids import generate_public_id
+from engine.core.media_upload_paths import (
+    tenant_category_image_upload_to,
+    tenant_product_gallery_upload_to,
+    tenant_product_main_upload_to,
+)
 from engine.core.tenant_queryset import TenantAwareManager
 
 try:
@@ -45,7 +50,7 @@ class Category(models.Model):
         blank=True,
         help_text="Category description for the frontend",
     )
-    image = models.ImageField(upload_to="categories/", blank=True, null=True)
+    image = models.ImageField(upload_to=tenant_category_image_upload_to, blank=True, null=True)
     parent = models.ForeignKey(
         "self",
         on_delete=models.CASCADE,
@@ -144,7 +149,7 @@ class Product(models.Model):
     original_price = models.DecimalField(
         max_digits=10, decimal_places=2, null=True, blank=True
     )
-    image = models.ImageField(upload_to='products/', blank=True, null=True)
+    image = models.ImageField(upload_to=tenant_product_main_upload_to, blank=True, null=True)
     status = models.CharField(
         max_length=20,
         choices=Status.choices,
@@ -235,6 +240,20 @@ class Product(models.Model):
             counter += 1
 
         self.full_clean()
+        from django.core.files.storage import default_storage
+
+        # Stable path main.{ext} + default storage file_overwrite=False: remove prior object so
+        # the new upload can reuse the canonical key without leaving orphans.
+        if self.pk and self.image and not getattr(self.image, "_committed", True):
+            old_image = (
+                Product.objects.filter(pk=self.pk).values_list("image", flat=True).first()
+            )
+            if old_image:
+                try:
+                    default_storage.delete(old_image)
+                except Exception:
+                    pass
+
         return super().save(*args, **kwargs)
 
     @property
@@ -251,7 +270,7 @@ class ProductImage(models.Model):
     product = models.ForeignKey(
         Product, on_delete=models.CASCADE, related_name='images'
     )
-    image = models.ImageField(upload_to='products/gallery/')
+    image = models.ImageField(upload_to=tenant_product_gallery_upload_to)
     alt = models.CharField(max_length=255, blank=True, help_text="Alt text for accessibility")
     order = models.PositiveIntegerField(default=0)
 

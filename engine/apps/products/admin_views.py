@@ -5,11 +5,11 @@ from django.db.models import Q
 from django.utils.text import slugify
 from rest_framework import viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.response import Response
 
-from config.permissions import IsPlatformSuperuser
+from config.permissions import DenyAPIKeyAccess, IsPlatformSuperuserOrStoreAdmin
 from engine.core.activity import log_activity
 from engine.core.admin_views import StoreRolePermissionMixin
 from engine.core.models import ActivityLog
@@ -132,7 +132,7 @@ class AdminProductViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action == "destroy":
-            return [IsPlatformSuperuser()]
+            return [DenyAPIKeyAccess(), IsPlatformSuperuserOrStoreAdmin()]
         return super().get_permissions()
 
     def get_serializer_context(self):
@@ -184,12 +184,29 @@ class AdminProductViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
         )
 
     def perform_destroy(self, instance):
+        ctx = get_active_store(self.request)
+        user = self.request.user
+        if not getattr(user, "is_superuser", False):
+            if not ctx.store or instance.store_id != ctx.store.id:
+                raise PermissionDenied(
+                    detail="You do not have permission to delete this product."
+                )
         name = getattr(instance, "name", "")
         public_id = instance.public_id
-        ctx = get_active_store(self.request)
-        super().perform_destroy(instance)
-        if ctx.store:
-            invalidate_product_cache(ctx.store.public_id)
+        store_public_id = instance.store.public_id
+        if getattr(user, "is_superuser", False):
+            from engine.core.trash_service import hard_delete_product_for_admin
+
+            hard_delete_product_for_admin(product=instance)
+        else:
+            from engine.core.trash_service import soft_delete_product
+
+            if not ctx.store:
+                raise PermissionDenied(
+                    detail="You do not have permission to delete this product."
+                )
+            soft_delete_product(product=instance, store=ctx.store, deleted_by=user)
+        invalidate_product_cache(store_public_id)
         log_activity(
             request=self.request,
             action=ActivityLog.Action.DELETE,

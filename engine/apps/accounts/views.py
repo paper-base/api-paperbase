@@ -238,7 +238,7 @@ class RegisterView(views.APIView):
 class MeView(views.APIView):
     """
     GET  /auth/me/  — return authenticated user profile + store memberships
-    PATCH /auth/me/ — update first_name, last_name, phone, avatar
+    PATCH /auth/me/ — update first_name, last_name, phone, avatar_seed
     """
 
     permission_classes = [permissions.IsAuthenticated, IsVerifiedUser]

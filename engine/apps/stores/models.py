@@ -4,6 +4,7 @@ from django.conf import settings
 from django.db import models
 
 from engine.core.ids import generate_public_id
+from engine.core.media_upload_paths import tenant_store_logo_upload_to
 
 
 class Store(models.Model):
@@ -41,7 +42,7 @@ class Store(models.Model):
         help_text="Email address of the store owner.",
     )
     # Branding (dashboard sidebar, storefront, invoices)
-    logo = models.ImageField(upload_to="stores/logos/", blank=True, null=True)
+    logo = models.ImageField(upload_to=tenant_store_logo_upload_to, blank=True, null=True)
     currency = models.CharField(max_length=8, default="BDT")
     currency_symbol = models.CharField(max_length=10, default="৳", blank=True)
     # Store info (for storefront, invoices, emails)
@@ -89,6 +90,18 @@ class Store(models.Model):
             self.code = locked_code
         else:
             self._assign_store_code_for_create()
+
+        from django.core.files.storage import default_storage
+
+        if self.pk and self.logo and not getattr(self.logo, "_committed", True):
+            old_logo = (
+                Store.objects.filter(pk=self.pk).values_list("logo", flat=True).first()
+            )
+            if old_logo:
+                try:
+                    default_storage.delete(old_logo)
+                except Exception:
+                    pass
 
         super().save(*args, **kwargs)
 

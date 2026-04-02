@@ -5,9 +5,10 @@ from django.db.models import Count, Q
 from django.utils import timezone
 from rest_framework import serializers, viewsets, mixins, status
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 
+from config.permissions import DenyAPIKeyAccess, IsPlatformSuperuserOrStoreAdmin
 from engine.core.activity import log_activity
 from engine.core.admin_views import StoreRolePermissionMixin
 from engine.core.models import ActivityLog
@@ -64,6 +65,11 @@ class AdminOrderViewSet(
         if self.action in ("update", "partial_update"):
             return AdminOrderUpdateSerializer
         return AdminOrderSerializer
+
+    def get_permissions(self):
+        if self.action == "destroy":
+            return [DenyAPIKeyAccess(), IsPlatformSuperuserOrStoreAdmin()]
+        return super().get_permissions()
 
     @action(detail=False, methods=["post"], url_path="pricing-preview")
     def pricing_preview(self, request):
@@ -402,10 +408,23 @@ class AdminOrderViewSet(
         )
 
     def perform_destroy(self, instance):
+        ctx = get_active_store(self.request)
+        user = self.request.user
         public_id = instance.public_id
         order_number = getattr(instance, "order_number", "")
         store_public_id = instance.store.public_id
-        super().perform_destroy(instance)
+        if getattr(user, "is_superuser", False):
+            from engine.core.trash_service import hard_delete_order_for_admin
+
+            hard_delete_order_for_admin(order=instance)
+        else:
+            if not ctx.store or instance.store_id != ctx.store.id:
+                raise PermissionDenied(
+                    detail="You do not have permission to delete this order."
+                )
+            from engine.core.trash_service import soft_delete_order
+
+            soft_delete_order(order=instance, store=ctx.store, deleted_by=user)
         invalidate_notifications_and_dashboard_caches(store_public_id)
         log_activity(
             request=self.request,

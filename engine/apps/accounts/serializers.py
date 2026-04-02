@@ -9,6 +9,7 @@ from engine.core.serializers import SafeModelSerializer
 
 from engine.apps.emails.tasks import send_email_task  # Backwards-compatible test patch target.
 from engine.apps.stores.models import StoreMembership
+from .avatar_url import dicebear_avatar_url
 from .services import (
     change_user_password,
     request_password_reset,
@@ -103,6 +104,7 @@ class StoreSummarySerializer(SafeModelSerializer):
 
 class MeSerializer(SafeModelSerializer):
     full_name = serializers.CharField(read_only=True)
+    avatar_url = serializers.SerializerMethodField()
     stores = serializers.SerializerMethodField()
     active_store_public_id = serializers.SerializerMethodField()
     subscription = serializers.SerializerMethodField()
@@ -116,7 +118,8 @@ class MeSerializer(SafeModelSerializer):
             "last_name",
             "full_name",
             "phone",
-            "avatar",
+            "avatar_seed",
+            "avatar_url",
             "is_verified",
             "is_staff",
             "is_superuser",
@@ -133,6 +136,10 @@ class MeSerializer(SafeModelSerializer):
             "is_superuser",
             "date_joined",
         ]
+
+    def get_avatar_url(self, obj):
+        seed = (obj.avatar_seed or "").strip() or obj.public_id
+        return dicebear_avatar_url(seed)
 
     def get_active_store_public_id(self, obj):
         request = self.context.get("request")

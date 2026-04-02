@@ -90,3 +90,51 @@ class ActivityLog(models.Model):
         if not self.public_id:
             self.public_id = generate_public_id("activitylog")
         super().save(*args, **kwargs)
+
+
+class TrashItem(models.Model):
+    """Internal soft-delete record for products and orders (per-store, not API-public)."""
+
+    class EntityType(models.TextChoices):
+        PRODUCT = "product", "Product"
+        ORDER = "order", "Order"
+
+    store = models.ForeignKey(
+        "stores.Store",
+        on_delete=models.CASCADE,
+        related_name="trash_items",
+        db_index=True,
+    )
+    entity_type = models.CharField(max_length=20, choices=EntityType.choices, db_index=True)
+    entity_id = models.CharField(
+        max_length=36,
+        db_index=True,
+        help_text="Internal UUID of the deleted Product or Order.",
+    )
+    entity_public_id = models.CharField(
+        max_length=32,
+        blank=True,
+        default="",
+        help_text="Optional copy of entity public_id for debugging.",
+    )
+    snapshot_json = models.JSONField(help_text="Versioned snapshot for restore.")
+    deleted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="trash_items_deleted",
+    )
+    deleted_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    expires_at = models.DateTimeField(db_index=True)
+    is_restored = models.BooleanField(default=False, db_index=True)
+
+    class Meta:
+        ordering = ["-deleted_at", "-id"]
+        indexes = [
+            models.Index(fields=["store", "expires_at", "is_restored"]),
+            models.Index(fields=["store", "entity_type", "-deleted_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"TrashItem({self.entity_type}, {self.entity_id})"

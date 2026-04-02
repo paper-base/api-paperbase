@@ -16,7 +16,7 @@ from engine.apps.billing.models import Plan, Subscription
 
 _common_fieldsets = (
     (None, {"fields": ("email", "password")}),
-    (_("Personal info"), {"fields": ("first_name", "last_name", "phone", "avatar")}),
+    (_("Personal info"), {"fields": ("first_name", "last_name", "phone", "avatar_seed")}),
     (
         _("Permissions"),
         {

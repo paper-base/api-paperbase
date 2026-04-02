@@ -270,6 +270,28 @@ class AuthStoreEndpointsTests(TestCase):
         self.assertIn("public_id", response.data)
         self.assertTrue(response.data["public_id"].startswith("usr_"))
 
+    def test_me_returns_dicebear_avatar_url(self):
+        self.authenticate()
+        response = self.client.get("/api/v1/auth/me/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("avatar_url", response.data)
+        self.assertNotIn("avatar", response.data)
+        self.assertIn("api.dicebear.com/9.x/thumbs/svg", response.data["avatar_url"])
+        self.assertIn("seed=", response.data["avatar_url"])
+
+    def test_me_patch_avatar_seed_reflected_in_avatar_url(self):
+        from urllib.parse import unquote
+
+        self.authenticate()
+        response = self.client.patch(
+            "/api/v1/auth/me/",
+            {"avatar_seed": "my_custom_seed"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data.get("avatar_seed"), "my_custom_seed")
+        self.assertIn("my_custom_seed", unquote(response.data["avatar_url"]))
+
     def test_switch_store_issues_tokens_without_password(self):
         self.authenticate()
         response = self.client.post(
@@ -1661,6 +1683,7 @@ class RolePermissionIsolationTests(TestCase):
     """
     Verify that permissions are enforced per-role within a store.
     STAFF must not be able to perform write/delete operations.
+    OWNER and store ADMIN may delete products (same as other admin writes).
     """
 
     def setUp(self):
@@ -1707,11 +1730,17 @@ class RolePermissionIsolationTests(TestCase):
         resp2 = self.client.get(f"/api/v1/admin/products/{self.product.public_id}/")
         self.assertEqual(resp2.status_code, 200)
 
-    def test_admin_cannot_delete_products(self):
-        """Store ADMIN role must not be able to delete products."""
+    def test_owner_can_delete_products(self):
+        """Store OWNER can delete a product in their active store."""
+        self._auth_as(self.owner)
+        resp = self.client.delete(f"/api/v1/admin/products/{self.product.public_id}/")
+        self.assertEqual(resp.status_code, 204)
+
+    def test_store_admin_can_delete_products(self):
+        """Store ADMIN role can delete products in their store."""
         self._auth_as(self.admin_user)
         resp = self.client.delete(f"/api/v1/admin/products/{self.product.public_id}/")
-        self.assertEqual(resp.status_code, 403, "Store ADMIN must not be able to delete products")
+        self.assertEqual(resp.status_code, 204)
 
     def test_platform_superuser_can_delete_products(self):
         """Platform superuser can delete products from backend."""
@@ -1724,6 +1753,21 @@ class RolePermissionIsolationTests(TestCase):
         self._auth_as(superuser)
         resp = self.client.delete(f"/api/v1/admin/products/{self.product.public_id}/")
         self.assertEqual(resp.status_code, 204, "Platform superuser must be able to delete products")
+
+    def test_platform_superuser_can_delete_without_store_membership(self):
+        """Platform superuser may delete using X-Store-Public-ID without StoreMembership."""
+        other_store = _make_store("Other SU Store", "other-su.local")
+        cat = _make_category(other_store, "Cat")
+        product = _make_product(other_store, cat, name="SU Product")
+        su = make_user(
+            "su-no-mem@example.com",
+            is_staff=True,
+            is_superuser=True,
+        )
+        self.client.force_authenticate(user=su)
+        self.client.credentials(HTTP_X_STORE_PUBLIC_ID=other_store.public_id)
+        resp = self.client.delete(f"/api/v1/admin/products/{product.public_id}/")
+        self.assertEqual(resp.status_code, 204)
 
     def test_staff_cannot_update_store_branding(self):
         """STAFF role must receive 403 when attempting to update store branding."""
@@ -1793,6 +1837,16 @@ class IDEnumerationTests(TestCase):
             "Store A admin must not access store B's product by public_id",
         )
 
+    def test_cannot_delete_cross_store_product_by_public_id(self):
+        """Store A admin cannot delete store B's product (scoped queryset → 404)."""
+        self._auth_as(self.admin_a, self.store_a)
+        resp = self.client.delete(f"/api/v1/admin/products/{self.product_b.public_id}/")
+        self.assertEqual(
+            resp.status_code,
+            404,
+            "Store A admin must not delete store B's product by public_id",
+        )
+
     def test_cannot_access_cross_store_order_by_uuid(self):
         """
         Store A admin cannot retrieve store B's order by UUID via admin endpoint.
@@ -1833,70 +1887,95 @@ class IDEnumerationTests(TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Media file extension helper
+# ---------------------------------------------------------------------------
+
+
+class MediaFileExtensionTests(TestCase):
+    def test_common_extensions_lowercase(self):
+        from engine.core.media_upload_paths import media_file_extension
+
+        self.assertEqual(media_file_extension("photo.PNG"), "png")
+        self.assertEqual(media_file_extension("file.JPEG"), "jpeg")
+        self.assertEqual(media_file_extension("x.webp"), "webp")
+
+    def test_missing_extension_defaults_to_jpg(self):
+        from engine.core.media_upload_paths import media_file_extension
+
+        self.assertEqual(media_file_extension("noext"), "jpg")
+        self.assertEqual(media_file_extension(""), "jpg")
+        self.assertEqual(media_file_extension("   "), "jpg")
+
+    def test_upload_path_rejects_empty_public_id(self):
+        import types
+
+        from engine.core.media_upload_paths import tenant_product_main_upload_to
+
+        fake = types.SimpleNamespace(
+            store_id=1,
+            store=types.SimpleNamespace(public_id="str_x"),
+            public_id="",
+        )
+        with self.assertRaises(ValueError):
+            tenant_product_main_upload_to(fake, "a.png")
+
+
+# ---------------------------------------------------------------------------
 # File storage isolation tests
 # ---------------------------------------------------------------------------
 
 class FileStorageIsolationTests(TestCase):
-    """
-    Document and assert expected file path isolation for uploaded media.
-
-    NOTE: Currently product/category images use flat paths (products/, categories/)
-    shared across all tenants, making paths guessable across stores. Only support
-    ticket attachments use per-store isolation (store_{id}/support/...).
-
-    These tests document the isolation posture and will fail if the flat paths
-    are inadvertently changed to cross-store paths.
-    """
+    """Assert tenant-prefixed storage paths (tenants/{store_public_id}/...) for media."""
 
     def setUp(self):
         self.store_a = _make_store("File Store A", "file-a.local")
         self.store_b = _make_store("File Store B", "file-b.local")
 
     def test_support_ticket_attachment_path_is_store_scoped(self):
-        """
-        Support ticket attachment upload path must include the store ID,
-        providing isolation between tenants.
-        """
-        from engine.apps.support.models import SupportTicketAttachment, SupportTicket
+        import types
+
+        from engine.apps.support.models import SupportTicket, SupportTicketAttachment
+
         ticket = SupportTicket.objects.create(
             store=self.store_a, name="Test", email="t@t.com", message="m"
         )
         path_fn = SupportTicketAttachment.file.field.upload_to
-        # upload_to is a callable or string; resolve the expected path pattern.
-        if callable(path_fn):
-            # Simulate with a mock instance.
-            import types
-            fake_instance = types.SimpleNamespace(
-                ticket=ticket,
-                ticket_id=ticket.pk,
-            )
-            computed_path = path_fn(fake_instance, "attachment.pdf")
-            self.assertIn(
-                self.store_a.public_id,
-                computed_path,
-                "Support ticket attachment path must include store public_id for isolation",
-            )
-        else:
-            # String upload_to — just check it contains 'support'
-            self.assertIn("support", str(path_fn))
-
-    def test_product_image_path_is_not_store_scoped(self):
-        """
-        Documents the Low-severity finding: product images use a flat 'products/'
-        path with no per-store prefix. A URL is guessable across tenants.
-        This test documents the current (insecure) posture and must be updated
-        when per-store product image paths are implemented.
-        """
-        from engine.apps.products.models import ProductImage
-        image_upload_to = ProductImage.image.field.upload_to
-        path_str = image_upload_to if isinstance(image_upload_to, str) else "products/"
-        # Currently this path is flat — does NOT include store context.
-        self.assertNotIn(
-            "store_",
-            path_str,
-            "KNOWN LOW SEVERITY: product image paths are not store-scoped. "
-            "Update this test when per-store paths are implemented.",
+        self.assertTrue(callable(path_fn))
+        fake_attachment = types.SimpleNamespace(
+            ticket_id=ticket.pk,
+            ticket=ticket,
+            public_id="ath_fixtureid",
         )
+        computed_path = path_fn(fake_attachment, "attachment.pdf")
+        self.assertTrue(
+            computed_path.startswith(f"tenants/{self.store_a.public_id}/"),
+            computed_path,
+        )
+        self.assertIn("/support/", computed_path)
+        self.assertIn(ticket.public_id, computed_path)
+        self.assertTrue(computed_path.endswith(".pdf"), computed_path)
+
+    def test_product_gallery_path_is_tenant_scoped(self):
+        import types
+
+        from engine.apps.products.models import ProductImage
+
+        cat = _make_category(self.store_a)
+        product = _make_product(self.store_a, cat)
+        path_fn = ProductImage.image.field.upload_to
+        self.assertTrue(callable(path_fn))
+        fake_image = types.SimpleNamespace(
+            product_id=product.pk,
+            product=product,
+            public_id="img_fixtureid",
+        )
+        computed_path = path_fn(fake_image, "photo.JPEG")
+        self.assertTrue(
+            computed_path.startswith(f"tenants/{self.store_a.public_id}/"),
+            computed_path,
+        )
+        self.assertIn(f"/products/{product.public_id}/gallery/", computed_path)
+        self.assertTrue(computed_path.endswith("img_fixtureid.jpeg"), computed_path)
 
 
 class CustomerAggregationFromOrderTests(TestCase):

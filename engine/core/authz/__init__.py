@@ -42,6 +42,16 @@ class IsPlatformSuperuser(BasePermission):
         )
 
 
+class IsPlatformSuperuserOrStoreAdmin(BasePermission):
+    """Platform superuser or store OWNER/ADMIN (same gate as IsStoreAdmin, with superuser bypass)."""
+
+    def has_permission(self, request, view):
+        user = getattr(request, "user", None)
+        if user and getattr(user, "is_authenticated", False) and getattr(user, "is_superuser", False):
+            return True
+        return IsStoreAdmin().has_permission(request, view)
+
+
 class IsVerifiedUser(BasePermission):
     """Allow only authenticated users with verified email."""
 
@@ -148,6 +158,7 @@ __all__ = [
     "IsPlatformRequest",
     "IsStaffUser",
     "IsPlatformSuperuser",
+    "IsPlatformSuperuserOrStoreAdmin",
     "IsVerifiedUser",
     "IsDashboardUser",
     "IsAdminUser",

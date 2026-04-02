@@ -249,5 +249,9 @@ CELERY_BEAT_SCHEDULE = {
         "task": "engine.apps.inventory.sync_product_stock_cache_all_stores",
         "schedule": crontab(minute=0, hour="*"),
     },
+    "trash-purge-expired-daily": {
+        "task": "engine.core.purge_expired_trash",
+        "schedule": crontab(minute=15, hour=3),
+    },
 }
 

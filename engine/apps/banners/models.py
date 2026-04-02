@@ -2,6 +2,7 @@ from django.db import models
 
 from engine.apps.stores.models import Store
 from engine.core.ids import generate_public_id
+from engine.core.media_upload_paths import tenant_banner_image_upload_to
 
 
 class Banner(models.Model):
@@ -21,7 +22,7 @@ class Banner(models.Model):
         related_name="banners",
     )
     title = models.CharField(max_length=255, blank=True)
-    image = models.ImageField(upload_to="banners/")
+    image = models.ImageField(upload_to=tenant_banner_image_upload_to)
     cta_text = models.CharField(max_length=255, blank=True)
     cta_link = models.URLField(max_length=500, blank=True)
     is_active = models.BooleanField(default=True)
