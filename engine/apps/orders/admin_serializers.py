@@ -22,7 +22,13 @@ from engine.apps.orders.services import (
     write_order_item_financials,
 )
 
-from .models import Order, OrderItem
+from .models import Order, OrderItem, PurchaseLedgerAdjustment
+from .purchase_ledger_service import (
+    append_ledger_line_for_order_item,
+    append_ledger_lines_for_order,
+    order_item_line_snapshot,
+    record_purchase_adjustment,
+)
 
 
 class StoreScopedProductSlugRelatedField(serializers.SlugRelatedField):
@@ -319,6 +325,12 @@ class AdminOrderUpdateSerializer(SafeModelSerializer):
             store=active_store
         )
 
+    def _adjustment_user(self):
+        request = self.context.get("request")
+        if request and getattr(request.user, "is_authenticated", False):
+            return request.user
+        return None
+
     def update(self, instance: Order, validated_data):
         try:
             with transaction.atomic():
@@ -345,6 +357,16 @@ class AdminOrderUpdateSerializer(SafeModelSerializer):
                         oi = existing.get(item_public_id)
                         if not oi:
                             raise serializers.ValidationError({"items": [f"Order item {item_public_id} not found."]})
+                        record_purchase_adjustment(
+                            store_id=store.id,
+                            customer=instance.customer,
+                            order=instance,
+                            order_item_public_id=oi.public_id,
+                            field_key=PurchaseLedgerAdjustment.FieldKey.LINE_REMOVED,
+                            old_value=order_item_line_snapshot(oi),
+                            new_value={"removed": True},
+                            created_by=self._adjustment_user(),
+                        )
                         if oi.product_id:
                             try:
                                 restore_order_item_stock(
@@ -373,6 +395,10 @@ class AdminOrderUpdateSerializer(SafeModelSerializer):
                         prev_product_id = str(oi.product_id)
                         prev_variant_id = oi.variant_id
                         prev_qty = int(oi.quantity)
+                        old_variant_public_id = (
+                            oi.variant.public_id if oi.variant_id else None
+                        )
+                        old_unit_price = oi.unit_price
                         variant_obj = resolve_active_variant_for_product(
                             store=store,
                             product=oi.product,
@@ -433,6 +459,43 @@ class AdminOrderUpdateSerializer(SafeModelSerializer):
                                 "line_total",
                             ]
                         )
+                        adj_user = self._adjustment_user()
+                        new_variant_public_id = (
+                            oi.variant.public_id if oi.variant_id else None
+                        )
+                        if old_variant_public_id != new_variant_public_id:
+                            record_purchase_adjustment(
+                                store_id=store.id,
+                                customer=instance.customer,
+                                order=instance,
+                                order_item_public_id=oi.public_id,
+                                field_key=PurchaseLedgerAdjustment.FieldKey.VARIANT,
+                                old_value={"variant_public_id": old_variant_public_id},
+                                new_value={"variant_public_id": new_variant_public_id},
+                                created_by=adj_user,
+                            )
+                        if prev_qty != qty:
+                            record_purchase_adjustment(
+                                store_id=store.id,
+                                customer=instance.customer,
+                                order=instance,
+                                order_item_public_id=oi.public_id,
+                                field_key=PurchaseLedgerAdjustment.FieldKey.QUANTITY,
+                                old_value=prev_qty,
+                                new_value=qty,
+                                created_by=adj_user,
+                            )
+                        if old_unit_price != oi.unit_price:
+                            record_purchase_adjustment(
+                                store_id=store.id,
+                                customer=instance.customer,
+                                order=instance,
+                                order_item_public_id=oi.public_id,
+                                field_key=PurchaseLedgerAdjustment.FieldKey.UNIT_PRICE,
+                                old_value=str(old_unit_price),
+                                new_value=str(oi.unit_price),
+                                created_by=adj_user,
+                            )
                         continue
 
                     if not product_public_id:
@@ -490,6 +553,12 @@ class AdminOrderUpdateSerializer(SafeModelSerializer):
                         unit_price=chosen,
                     )
                     oi_new.save()
+                    instance.refresh_from_db(fields=["customer_id"])
+                    append_ledger_line_for_order_item(
+                        order=instance,
+                        order_item=oi_new,
+                        customer=instance.customer,
+                    )
 
                 recalculate_order_totals(instance)
                 instance.refresh_from_db()
@@ -671,4 +740,5 @@ class AdminOrderCreateSerializer(SafeModelSerializer):
                 email=order.email,
                 address=order.shipping_address,
             )
+            append_ledger_lines_for_order(order=order)
             return order

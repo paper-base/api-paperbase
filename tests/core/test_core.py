@@ -1,4 +1,5 @@
 import uuid as _uuid
+from decimal import Decimal
 from unittest.mock import Mock, patch
 
 from django.contrib.auth import get_user_model
@@ -31,7 +32,7 @@ from engine.apps.products.models import (
     ProductVariant,
     ProductVariantAttribute,
 )
-from engine.apps.orders.models import Order, OrderItem
+from engine.apps.orders.models import Order, OrderItem, PurchaseLedgerEntry
 from engine.apps.shipping.models import ShippingZone
 from engine.apps.orders.services import resolve_and_attach_customer
 from engine.apps.customers.models import Customer, CustomerAddress
@@ -1431,6 +1432,35 @@ class CrossTenantAdminIsolationTests(TestCase):
         order_2.district = "Khulna"
         order_2.save(update_fields=["customer", "total", "district"])
 
+        PurchaseLedgerEntry.objects.create(
+            store=self.store_a,
+            customer=self.customer_a,
+            order=order_1,
+            order_public_id=order_1.public_id,
+            order_number=order_1.order_number,
+            order_uuid=order_1.pk,
+            order_item_public_id=generate_public_id("orderitem"),
+            product_name="Line A",
+            quantity=1,
+            unit_price="100.00",
+            line_total="100.00",
+            order_status_snapshot=Order.Status.PENDING,
+        )
+        PurchaseLedgerEntry.objects.create(
+            store=self.store_a,
+            customer=self.customer_a,
+            order=order_2,
+            order_public_id=order_2.public_id,
+            order_number=order_2.order_number,
+            order_uuid=order_2.pk,
+            order_item_public_id=generate_public_id("orderitem"),
+            product_name="Line B",
+            quantity=1,
+            unit_price="300.00",
+            line_total="300.00",
+            order_status_snapshot=Order.Status.PENDING,
+        )
+
         self._auth_as(self.admin_a, self.store_a)
         resp = self.client.get(f"/api/v1/admin/customers/{self.customer_a.public_id}/details/")
         self.assertEqual(resp.status_code, 200)
@@ -1438,10 +1468,10 @@ class CrossTenantAdminIsolationTests(TestCase):
         self.assertIn("email", resp.data["customer"])
         self.assertIn("district", resp.data["customer"])
         self.assertEqual(resp.data["analytics"]["total_orders"], 2)
-        self.assertEqual(str(resp.data["analytics"]["total_spent"]), "400")
-        self.assertEqual(str(resp.data["analytics"]["average_order_value"]), "200")
+        self.assertEqual(Decimal(str(resp.data["analytics"]["total_spent"])), Decimal("400"))
+        self.assertEqual(Decimal(str(resp.data["analytics"]["average_order_value"])), Decimal("200"))
         self.assertEqual(resp.data["customer"]["district"], "Khulna")
-        self.assertGreaterEqual(len(resp.data.get("ordered_products", [])), 0)
+        self.assertEqual(len(resp.data.get("ordered_products", [])), 2)
 
     def test_admin_customer_details_cross_store_denied(self):
         """Store A admin must not access store B customer details endpoint."""

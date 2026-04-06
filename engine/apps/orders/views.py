@@ -21,6 +21,7 @@ from .serializers import (
     OrderSerializer,
     StorefrontOrderReceiptSerializer,
 )
+from .purchase_ledger_service import append_ledger_lines_for_order
 from .services import (
     build_variant_snapshot_text,
     recalculate_order_totals,
@@ -273,6 +274,7 @@ class OrderCreateView(CreateAPIView):
             email=order.email,
             address=order.shipping_address,
         )
+        append_ledger_lines_for_order(order=order)
 
         meta_conversions.track_add_payment_info(request, {
             'email': order.email,

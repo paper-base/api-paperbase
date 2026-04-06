@@ -1,6 +1,8 @@
 from django.db import IntegrityError, transaction
 from rest_framework import serializers
 
+from engine.core.media_deletion_service import schedule_media_deletion_from_keys
+
 from engine.apps.inventory.cache_sync import sync_product_stock_cache
 from engine.apps.inventory.models import Inventory
 from engine.apps.inventory.utils import clamp_stock
@@ -95,37 +97,32 @@ class AdminProductListSerializer(SafeModelSerializer):
         n = getattr(obj, '_admin_variant_count', None)
         if n is not None:
             return int(n)
-        return obj.variants.count()
+        return obj.variants.filter(is_active=True).count()
 
     def get_total_stock(self, obj):
-        """Sum variant stock when variants exist; otherwise product-level Inventory quantity."""
-        n = getattr(obj, '_admin_variant_count', None)
-        if n is None:
-            n = obj.variants.count()
-        if n == 0:
+        """Sum active-variant inventory when any variant rows exist; else product-level quantity."""
+        if not obj.variants.exists():
             inv = Inventory.objects.filter(product=obj, variant__isnull=True).values_list("quantity", flat=True).first()
             return int(inv or 0)
         s = getattr(obj, '_admin_variant_stock_sum', None)
         if s is None:
             from django.db.models import Sum as SumAgg
 
-            s = obj.variants.aggregate(x=SumAgg('inventory__quantity'))['x']
+            s = obj.variants.filter(is_active=True).aggregate(x=SumAgg("inventory__quantity"))["x"]
         return int(s or 0)
 
     def get_available_quantity(self, obj):
         return self.get_total_stock(obj)
 
     def get_stock_source(self, obj):
-        n = getattr(obj, '_admin_variant_count', None)
-        if n is None:
-            n = obj.variants.count()
-        if n > 0:
-            return "variant_inventory_sum"
-        return "product_inventory"
+        if not obj.variants.exists():
+            return "product_inventory"
+        return "variant_inventory_sum"
 
 
 class AdminProductSerializer(SafeModelSerializer):
     images = AdminProductImageSerializer(many=True, read_only=True)
+    remove_image = serializers.CharField(write_only=True, required=False, allow_blank=True)
     brand = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     original_price = AllowBlankNullDecimalField(
         max_digits=10, decimal_places=2, allow_null=True, required=False
@@ -145,7 +142,7 @@ class AdminProductSerializer(SafeModelSerializer):
         model = Product
         fields = [
             'public_id', 'name', 'brand', 'slug', 'price', 'original_price',
-            'image', 'category', 'category_name',
+            'image', 'remove_image', 'category', 'category_name',
             'description',
             'variant_count', 'total_stock', 'available_quantity', 'stock_source',
             'is_active', 'extra_data', 'images',
@@ -168,32 +165,26 @@ class AdminProductSerializer(SafeModelSerializer):
         n = getattr(obj, '_admin_variant_count', None)
         if n is not None:
             return int(n)
-        return obj.variants.count()
+        return obj.variants.filter(is_active=True).count()
 
     def get_total_stock(self, obj):
-        n = getattr(obj, '_admin_variant_count', None)
-        if n is None:
-            n = obj.variants.count()
-        if n == 0:
+        if not obj.variants.exists():
             inv = Inventory.objects.filter(product=obj, variant__isnull=True).values_list("quantity", flat=True).first()
             return int(inv or 0)
         s = getattr(obj, '_admin_variant_stock_sum', None)
         if s is None:
             from django.db.models import Sum as SumAgg
 
-            s = obj.variants.aggregate(x=SumAgg('inventory__quantity'))['x']
+            s = obj.variants.filter(is_active=True).aggregate(x=SumAgg("inventory__quantity"))["x"]
         return int(s or 0)
 
     def get_available_quantity(self, obj):
         return self.get_total_stock(obj)
 
     def get_stock_source(self, obj):
-        n = getattr(obj, '_admin_variant_count', None)
-        if n is None:
-            n = obj.variants.count()
-        if n > 0:
-            return "variant_inventory_sum"
-        return "product_inventory"
+        if not obj.variants.exists():
+            return "product_inventory"
+        return "variant_inventory_sum"
 
     def validate_brand(self, value):
         if value is None:
@@ -207,6 +198,34 @@ class AdminProductSerializer(SafeModelSerializer):
                 {"stock": "Direct stock mutation is disabled. Use inventory adjust endpoint."}
             )
         return super().validate(attrs)
+
+    def create(self, validated_data):
+        validated_data.pop("remove_image", None)
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        remove_raw = validated_data.pop("remove_image", None)
+        remove_flag = remove_raw is True or (
+            isinstance(remove_raw, str) and remove_raw.strip().lower() in ("true", "1")
+        )
+
+        old_main_key = (
+            instance.image.name
+            if instance.image and getattr(instance.image, "name", None)
+            else None
+        )
+
+        image_provided = "image" in validated_data
+        incoming_image = validated_data.get("image") if image_provided else None
+
+        if remove_flag and not image_provided:
+            if old_main_key:
+                schedule_media_deletion_from_keys([old_main_key])
+            validated_data["image"] = None
+        elif image_provided and incoming_image is not None and old_main_key:
+            schedule_media_deletion_from_keys([old_main_key])
+
+        return super().update(instance, validated_data)
 
 
 class AdminCategorySerializer(SafeModelSerializer):

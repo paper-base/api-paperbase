@@ -277,3 +277,160 @@ class StockRestoreLog(models.Model):
             )
         ]
         ordering = ["-created_at", "-id"]
+
+
+class _ImmutableAuditModel(models.Model):
+    """Append-only rows: no updates or deletes via the ORM (except raw DB / migrations)."""
+
+    class Meta:
+        abstract = True
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            raise ValidationError("Immutable row cannot be updated.")
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("Immutable row cannot be deleted.")
+
+
+class PurchaseLedgerEntry(_ImmutableAuditModel):
+    """
+    Immutable per-line purchase record for customer history.
+    Survives order and order-item row deletion via denormalized public IDs and SET_NULL FKs.
+    """
+
+    public_id = models.CharField(
+        max_length=32,
+        unique=True,
+        db_index=True,
+        editable=False,
+        help_text="Non-sequential public identifier (e.g. phl_xxx).",
+    )
+    store = models.ForeignKey(
+        Store,
+        on_delete=models.CASCADE,
+        related_name="purchase_ledger_entries",
+    )
+    customer = models.ForeignKey(
+        Customer,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="purchase_ledger_entries",
+    )
+    customer_public_id = models.CharField(max_length=32, blank=True, default="")
+    order = models.ForeignKey(
+        Order,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="purchase_ledger_entries",
+    )
+    order_public_id = models.CharField(max_length=32, db_index=True)
+    order_number = models.CharField(max_length=20)
+    order_uuid = models.UUIDField(null=True, blank=True, db_index=True)
+    order_item = models.ForeignKey(
+        OrderItem,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="purchase_ledger_entries",
+    )
+    order_item_public_id = models.CharField(max_length=32, unique=True, db_index=True)
+    product_public_id = models.CharField(max_length=32, blank=True, default="")
+    variant_public_id = models.CharField(max_length=32, blank=True, null=True)
+    product_name = models.CharField(max_length=255)
+    variant_label = models.CharField(max_length=255, blank=True, default="")
+    quantity = models.PositiveIntegerField()
+    unit_price = models.DecimalField(max_digits=10, decimal_places=2)
+    line_total = models.DecimalField(max_digits=12, decimal_places=2)
+    order_status_snapshot = models.CharField(max_length=20)
+    recorded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-recorded_at", "-id"]
+        indexes = [
+            models.Index(fields=["store", "customer", "recorded_at"]),
+            models.Index(fields=["store", "order_public_id"]),
+        ]
+
+    objects = TenantAwareManager()
+
+    def save(self, *args, **kwargs):
+        if not self.public_id:
+            self.public_id = generate_public_id("purchaseledger")
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.order_public_id} {self.product_name} x{self.quantity}"
+
+
+class PurchaseLedgerAdjustment(_ImmutableAuditModel):
+    """Append-only correction log; does not modify purchase ledger lines."""
+
+    class FieldKey(models.TextChoices):
+        QUANTITY = "quantity", "Quantity"
+        UNIT_PRICE = "unit_price", "Unit price"
+        VARIANT = "variant", "Variant"
+        LINE_REMOVED = "line_removed", "Line removed"
+        LINE_ADDED = "line_added", "Line added"
+
+    public_id = models.CharField(
+        max_length=32,
+        unique=True,
+        db_index=True,
+        editable=False,
+        help_text="Non-sequential public identifier (e.g. pad_xxx).",
+    )
+    store = models.ForeignKey(
+        Store,
+        on_delete=models.CASCADE,
+        related_name="purchase_ledger_adjustments",
+    )
+    customer = models.ForeignKey(
+        Customer,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="purchase_ledger_adjustments",
+    )
+    customer_public_id = models.CharField(max_length=32, blank=True, default="")
+    order = models.ForeignKey(
+        Order,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="purchase_ledger_adjustments",
+    )
+    order_public_id = models.CharField(max_length=32, blank=True, default="", db_index=True)
+    order_item_public_id = models.CharField(max_length=32, blank=True, default="")
+    field_key = models.CharField(max_length=32, choices=FieldKey.choices)
+    old_value = models.JSONField()
+    new_value = models.JSONField()
+    reason = models.CharField(max_length=255, default="staff_dashboard_edit")
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="purchase_ledger_adjustments",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["store", "order_public_id", "created_at"]),
+            models.Index(fields=["store", "customer", "created_at"]),
+        ]
+
+    objects = TenantAwareManager()
+
+    def save(self, *args, **kwargs):
+        if not self.public_id:
+            self.public_id = generate_public_id("purchaseadjustment")
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.field_key} {self.order_public_id or '—'}"

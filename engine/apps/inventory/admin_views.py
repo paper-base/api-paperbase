@@ -7,6 +7,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from config.permissions import IsDashboardUser
 from engine.apps.products.models import ProductVariantAttribute
 from engine.core.admin_views import StoreRolePermissionMixin
+from engine.core.query_params import include_inactive_truthy
 from engine.core.tenancy import get_active_store
 from .models import Inventory, StockMovement
 from .admin_serializers import InventoryListSerializer, InventoryDetailSerializer, StockMovementSerializer
@@ -28,6 +29,9 @@ class AdminInventoryViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
         if not ctx.store:
             return qs.none()
         qs = qs.filter(product__store=ctx.store)
+
+        if self.action == "list" and not include_inactive_truthy(self.request):
+            qs = qs.filter(Q(variant__isnull=True) | Q(variant__is_active=True))
 
         stock_filter = (self.request.query_params.get("stock") or "").strip().lower()
         if stock_filter == "in_stock":

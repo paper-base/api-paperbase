@@ -71,12 +71,14 @@ def resolve_and_attach_customer(
         if update_fields:
             customer.save(update_fields=update_fields)
 
+        had_customer = order.customer_id is not None
         if order.customer_id != customer.pk:
             order.customer = customer
             order.save(update_fields=["customer"])
 
-        Customer.objects.filter(pk=customer.pk, store=store).update(total_orders=F("total_orders") + 1)
-        customer.refresh_from_db(fields=["total_orders"])
+        if not had_customer:
+            Customer.objects.filter(pk=customer.pk, store=store).update(total_orders=F("total_orders") + 1)
+            customer.refresh_from_db(fields=["total_orders"])
         return customer
 
 

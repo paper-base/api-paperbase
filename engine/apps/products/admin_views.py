@@ -14,6 +14,7 @@ from engine.core.activity import log_activity
 from engine.core.admin_views import StoreRolePermissionMixin
 from engine.core.media_deletion_service import schedule_media_deletion
 from engine.core.models import ActivityLog
+from engine.core.query_params import include_inactive_truthy
 from engine.core.tenancy import get_active_store
 from engine.apps.inventory.models import Inventory
 from engine.apps.inventory.utils import clamp_stock
@@ -50,8 +51,11 @@ class AdminProductViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
         Product.objects.select_related("category")
         .prefetch_related("images")
         .annotate(
-            _admin_variant_count=Count("variants", distinct=False),
-            _admin_variant_stock_sum=Sum("variants__inventory__quantity"),
+            _admin_variant_total=Count("variants", distinct=False),
+            _admin_variant_count=Count("variants", filter=Q(variants__is_active=True), distinct=False),
+            _admin_variant_stock_sum=Sum(
+                "variants__inventory__quantity", filter=Q(variants__is_active=True)
+            ),
         )
         .all()
     )
@@ -73,19 +77,25 @@ class AdminProductViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
         stock_filter = (self.request.query_params.get("stock") or "").strip().lower()
         if stock_filter == "in_stock":
             qs = qs.filter(
-                Q(_admin_variant_count=0, stock__gt=0)
-                | Q(_admin_variant_count__gt=0, _admin_variant_stock_sum__gt=0)
+                Q(_admin_variant_total=0, stock__gt=0)
+                | Q(_admin_variant_total__gt=0, _admin_variant_stock_sum__gt=0)
             )
         elif stock_filter == "out_of_stock":
             qs = qs.filter(
-                Q(_admin_variant_count=0, stock=0)
-                | Q(_admin_variant_count__gt=0, _admin_variant_stock_sum__lte=0)
+                Q(_admin_variant_total=0, stock=0)
+                | (
+                    Q(_admin_variant_total__gt=0)
+                    & (
+                        Q(_admin_variant_stock_sum__isnull=True)
+                        | Q(_admin_variant_stock_sum__lte=0)
+                    )
+                )
             )
         elif stock_filter == "low_stock":
             qs = qs.filter(
-                Q(_admin_variant_count=0, stock__gt=0, stock__lte=5)
+                Q(_admin_variant_total=0, stock__gt=0, stock__lte=5)
                 | Q(
-                    _admin_variant_count__gt=0,
+                    _admin_variant_total__gt=0,
                     _admin_variant_stock_sum__gt=0,
                     _admin_variant_stock_sum__lte=5,
                 )
@@ -401,6 +411,8 @@ class AdminProductVariantViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet
         product_public_id = self.request.query_params.get("product_public_id")
         if product_public_id:
             qs = qs.filter(product__public_id=product_public_id)
+        if self.action == "list" and not include_inactive_truthy(self.request):
+            qs = qs.filter(is_active=True)
         return qs.order_by("product__public_id", "sku", "id")
 
     def get_serializer_context(self):
