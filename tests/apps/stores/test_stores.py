@@ -5,10 +5,7 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import AccessToken
 
-from engine.apps.analytics.models import (
-    StoreAnalytics,
-    StoreDashboardStatsSnapshot,
-)
+from engine.apps.basic_analytics.models import StoreDashboardStatsSnapshot
 from engine.apps.billing.models import Plan
 from engine.apps.billing.services import activate_subscription
 from engine.apps.customers.models import Customer
@@ -127,7 +124,6 @@ def _make_catalog_data(store: Store, user: User):
         customer = Customer.objects.create(store=store, user=user)
 
     today = datetime.date.today()
-    StoreAnalytics.objects.create(store=store, period_date=today)
     StoreDashboardStatsSnapshot.objects.create(
         store=store,
         start_date=today,
@@ -191,7 +187,7 @@ class DeleteStoreEndpointTests(TestCase):
             with tenant_scope_from_store(store=store, reason="test assertions"):
                 self.assertEqual(Order.objects.filter(store_id=store.id).count(), 0)
             self.assertEqual(Customer.objects.filter(store_id=store.id).count(), 0)
-            self.assertEqual(StoreAnalytics.objects.filter(store_id=store.id).count(), 0)
+            self.assertEqual(StoreDashboardStatsSnapshot.objects.filter(store_id=store.id).count(), 0)
 
     def test_delete_store_premium_redirects_to_other_store(self):
         _set_default_plan(max_stores=5)  # Premium

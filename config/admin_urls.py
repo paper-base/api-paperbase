@@ -25,11 +25,11 @@ from engine.apps.shipping.admin_views import (
 from engine.apps.couriers.admin_views import AdminCourierViewSet
 from engine.apps.marketing_integrations.admin_views import AdminMarketingIntegrationViewSet
 
+from engine.apps.basic_analytics.views import BasicAnalyticsOverviewView
+
 from .admin_api import (
     DashboardStatsView,
-    DashboardStatsOverviewView,
     BrandingView,
-    DashboardAnalyticsView,
 )
 from .admin_notifications_summary import AdminNotificationsSummaryView
 from engine.core.search_views import UnifiedSearchView
@@ -74,8 +74,11 @@ urlpatterns = [
         name="admin-notifications-summary",
     ),
     path('stats/', DashboardStatsView.as_view(), name='admin-dashboard-stats'),
-    path('stats/overview/', DashboardStatsOverviewView.as_view(), name='admin-dashboard-stats-overview'),
-    path('analytics/overview/', DashboardAnalyticsView.as_view(), name='admin-dashboard-analytics'),
+    path(
+        'basic-analytics/overview/',
+        BasicAnalyticsOverviewView.as_view(),
+        name='admin-basic-analytics-overview',
+    ),
     path('branding/', BrandingView.as_view(), name='admin-branding'),
     path('', include(router.urls)),
 ]

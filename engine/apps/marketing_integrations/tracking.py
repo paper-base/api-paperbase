@@ -1,12 +1,8 @@
 """
-Analytics integration service.
+Marketing / Meta Conversions API tracking facade.
 
-Delegates all tracking calls to the marketing_integrations dispatcher
-which resolves active integrations per store and fans out to provider-
-specific services (Facebook, etc.).
-
-The module-level ``meta_conversions`` singleton preserves the import
-interface used across the codebase.
+Delegates to the marketing_integrations dispatcher. Import as ``meta_conversions``
+from storefront views (orders, products, support, search).
 """
 
 from engine.apps.marketing_integrations.services import dispatcher

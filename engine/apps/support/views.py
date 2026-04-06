@@ -4,7 +4,7 @@ from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 
 from config.permissions import IsStorefrontAPIKey
-from engine.apps.analytics.service import meta_conversions
+from engine.apps.marketing_integrations.tracking import meta_conversions
 from engine.core.tenancy import require_api_key_store
 
 from .models import SupportTicket

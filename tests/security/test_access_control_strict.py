@@ -194,7 +194,7 @@ def test_api_key_order_with_other_store_product_fails():
         ("get", "/api/v1/orders/non-existent/"),
         ("patch", "/api/v1/orders/non-existent/"),
         ("get", "/api/v1/customers/me/"),
-        ("get", "/api/v1/admin/analytics/overview/"),
+        ("get", "/api/v1/admin/basic-analytics/overview/"),
     ],
 )
 def test_api_key_restricted_access_is_blocked(method, path):

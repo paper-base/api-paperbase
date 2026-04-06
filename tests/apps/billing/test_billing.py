@@ -21,7 +21,7 @@ User = get_user_model()
 def _plan_features(limits=None, features=None):
     return {
         "limits": limits or {"max_stores": 1},
-        "features": features or {"advanced_analytics": False, "marketing_tools": False},
+        "features": features or {"basic_analytics": False, "marketing_tools": False},
     }
 
 
@@ -45,7 +45,7 @@ class BillingServicesTests(TestCase):
                 billing_cycle="monthly",
                 features=_plan_features(
                     limits={"max_stores": 3},
-                    features={"advanced_analytics": True, "marketing_tools": True},
+                    features={"basic_analytics": True, "marketing_tools": True},
                 ),
                 is_active=True,
             )
@@ -139,7 +139,7 @@ class FeatureGateTests(TestCase):
             billing_cycle="monthly",
             features=_plan_features(
                 limits={"max_stores": 3},
-                features={"advanced_analytics": True, "marketing_tools": True},
+                features={"basic_analytics": True, "marketing_tools": True},
             ),
             is_active=True,
         )
@@ -151,12 +151,12 @@ class FeatureGateTests(TestCase):
         )
 
     def test_has_feature_returns_false_without_subscription_uses_default(self):
-        self.assertFalse(has_feature(self.user, "advanced_analytics"))
+        self.assertFalse(has_feature(self.user, "basic_analytics"))
         self.assertEqual(get_limit(self.user, "max_stores"), 1)
 
     def test_has_feature_returns_true_when_subscription_has_feature(self):
         activate_subscription(self.user, self.plan_premium, source="manual", amount=0, provider="manual")
-        self.assertTrue(has_feature(self.user, "advanced_analytics"))
+        self.assertTrue(has_feature(self.user, "basic_analytics"))
         self.assertTrue(has_feature(self.user, "marketing_tools"))
         self.assertEqual(get_limit(self.user, "max_stores"), 3)
 
@@ -175,18 +175,18 @@ class FeatureGateTests(TestCase):
         from rest_framework.exceptions import PermissionDenied
 
         with self.assertRaises(PermissionDenied):
-            require_feature(self.user, "advanced_analytics")
+            require_feature(self.user, "marketing_tools")
 
     def test_require_feature_passes_when_allowed(self):
         activate_subscription(self.user, self.plan_premium, source="manual", amount=0, provider="manual")
-        require_feature(self.user, "advanced_analytics")
+        require_feature(self.user, "marketing_tools")
 
     def test_expired_subscription_uses_default_plan(self):
         activate_subscription(self.user, self.plan_premium, source="manual", amount=0, provider="manual")
         sub = get_active_subscription(self.user)
         sub.status = Subscription.Status.EXPIRED
         sub.save()
-        self.assertFalse(has_feature(self.user, "advanced_analytics"))
+        self.assertFalse(has_feature(self.user, "basic_analytics"))
         self.assertEqual(get_limit(self.user, "max_stores"), 1)
 
 
@@ -213,7 +213,7 @@ class StoreCreationEnforcementTests(TestCase):
                 billing_cycle="monthly",
                 features=_plan_features(
                     limits={"max_stores": 3},
-                    features={"advanced_analytics": True, "marketing_tools": True},
+                    features={"basic_analytics": True, "marketing_tools": True},
                 ),
                 is_active=True,
             )
@@ -301,60 +301,3 @@ class FeaturesEndpointTests(TestCase):
         self.assertIn("limits", resp.data)
         self.assertIn("max_stores", resp.data["limits"])
 
-
-class AnalyticsFeatureGateTests(TestCase):
-    """Verify analytics endpoint requires advanced_analytics feature."""
-
-    def setUp(self):
-        self.client = APIClient()
-
-        self.store = Store.objects.create(
-            name="Test Store",
-            code=allocate_unique_store_code("TESTSTORE"),
-            owner_name="Owner",
-            owner_email="owner@example.com",
-        )
-        self.plan_basic = Plan.objects.filter(is_default=True).first()
-        if not self.plan_basic:
-            self.plan_basic = Plan.objects.create(
-                name="basic",
-                price=0,
-                billing_cycle="monthly",
-                features=_plan_features(limits={"max_stores": 1}),
-                is_default=True,
-                is_active=True,
-            )
-        self.plan_premium = Plan.objects.create(
-            name="premium",
-            price=999,
-            billing_cycle="monthly",
-            features=_plan_features(
-                limits={"max_stores": 3},
-                features={"advanced_analytics": True, "marketing_tools": True},
-            ),
-            is_active=True,
-        )
-        self.user = User.objects.create_user(
-            username="analyticsuser",
-            email="a@example.com",
-            password="pass",
-            is_verified=True,
-        )
-        StoreMembership.objects.create(user=self.user, store=self.store, role=StoreMembership.Role.OWNER)
-        self.client.force_authenticate(user=self.user)
-
-    def test_analytics_blocked_without_advanced_analytics(self):
-        activate_subscription(self.user, self.plan_basic, source="manual", amount=0, provider="manual")
-        resp = self.client.get(
-            "/api/v1/admin/analytics/overview/",
-            HTTP_X_STORE_PUBLIC_ID=self.store.public_id,
-        )
-        self.assertEqual(resp.status_code, 403)
-
-    def test_analytics_allowed_with_advanced_analytics(self):
-        activate_subscription(self.user, self.plan_premium, source="manual", amount=0, provider="manual")
-        resp = self.client.get(
-            "/api/v1/admin/analytics/overview/",
-            HTTP_X_STORE_PUBLIC_ID=self.store.public_id,
-        )
-        self.assertEqual(resp.status_code, 200)

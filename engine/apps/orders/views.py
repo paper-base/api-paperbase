@@ -11,7 +11,7 @@ from rest_framework.views import APIView
 
 from config.permissions import DenyAPIKeyAccess, IsAdminUser, IsStorefrontAPIKey
 
-from engine.apps.analytics.service import meta_conversions
+from engine.apps.marketing_integrations.tracking import meta_conversions
 from engine.core.tenancy import get_active_store, require_api_key_store
 
 from .models import Order, OrderItem

@@ -183,7 +183,7 @@ class SubscriptionPaymentEmailTests(TestCase):
                 price="999.00",
                 billing_cycle="monthly",
                 is_active=True,
-                features={"limits": {"max_stores": 3}, "features": {"advanced_analytics": True}},
+                features={"limits": {"max_stores": 3}, "features": {"basic_analytics": True}},
             )
 
     @patch("engine.apps.emails.tasks.send_email_task.delay")
@@ -244,7 +244,7 @@ class PlatformNewSubscriptionEmailTests(TestCase):
                 price="999.00",
                 billing_cycle="monthly",
                 is_active=True,
-                features={"limits": {"max_stores": 3}, "features": {"advanced_analytics": True}},
+                features={"limits": {"max_stores": 3}, "features": {"basic_analytics": True}},
             )
         activate_subscription(user, plan, source="manual", amount=0, provider="manual")
         types_queued = [c.args[0] for c in mock_delay.call_args_list]

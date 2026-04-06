@@ -5,7 +5,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from config.permissions import IsStorefrontAPIKey
-from engine.apps.analytics.service import meta_conversions
+from engine.apps.marketing_integrations.tracking import meta_conversions
 from engine.apps.products.models import Category, Product
 from engine.apps.products.serializers import (
     StorefrontCategorySerializer,

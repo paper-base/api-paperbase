@@ -73,8 +73,14 @@ core/
       shipping/            # Shipping zones, methods, rates
       notifications/       # Banners and system notifications
       support/             # Support tickets (public submit + admin CRUD)
-  engine.apps.analytics/              # Optional Meta Conversions API
+  engine.apps.basic_analytics/        # Home dashboard stats snapshots + overview API
 ```
+
+### Database: upgrading from the removed `analytics` app
+
+`basic_analytics.0001_initial` creates `analytics_storedashboardstatssnapshot` only if the table is missing, so you can run `python manage.py migrate` on both new databases and databases that already had this table from the old `analytics` app.
+
+If your `django_migrations` table still lists migrations for the removed `analytics` app, delete those rows to avoid confusion (the app no longer exists in the codebase).
 
 ## API overview (all under `/api/v1/`)
 
@@ -113,9 +119,9 @@ Storefront catalog, checkout, and public content endpoints require the **publish
 | GET | `/api/v1/notifications/active/` | API key | Active storefront CTAs |
 | GET | `/api/v1/search/?q=…` | API key | Storefront search |
 | POST | `/api/v1/support/tickets/` | API key | Submit support ticket |
-| POST | `/api/v1/orders/initiate-checkout/` | API key | Checkout funnel signal (analytics) |
+| POST | `/api/v1/orders/initiate-checkout/` | API key | Checkout funnel signal (marketing / conversions tracking) |
 
-**Admin API** (staff only): `/api/v1/admin/` – stats (`support_tickets`, `supportTickets` in analytics series), analytics, branding, CRUD including `support-tickets/`, products, orders, inventory, notifications, etc.
+**Admin API** (staff only): `/api/v1/admin/` – stats, `basic-analytics/overview/` (home dashboard series), branding, CRUD including `support-tickets/`, products, orders, inventory, notifications, etc.
 
 ### Storefront JSON contract (breaking conventions)
 

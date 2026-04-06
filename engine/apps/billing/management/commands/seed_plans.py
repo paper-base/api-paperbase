@@ -17,7 +17,7 @@ PLAN_SEED_DATA = (
                 "storefront_aggregate_rpm": 100,
             },
             "features": {
-                "advanced_analytics": False,
+                "basic_analytics": True,
                 "order_email_notifications": False,
             },
         },
@@ -33,7 +33,7 @@ PLAN_SEED_DATA = (
                 "storefront_aggregate_rpm": 500,
             },
             "features": {
-                "advanced_analytics": True,
+                "basic_analytics": True,
                 "order_email_notifications": True,
             },
         },

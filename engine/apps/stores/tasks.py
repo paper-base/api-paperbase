@@ -3,7 +3,7 @@ from __future__ import annotations
 from config.celery import app
 from django.db import transaction
 
-from engine.apps.analytics.models import StoreAnalytics, StoreDashboardStatsSnapshot
+from engine.apps.basic_analytics.models import StoreDashboardStatsSnapshot
 from engine.apps.customers.models import Customer
 from engine.apps.orders.models import Order
 from engine.apps.products.models import Category, Product, ProductImage
@@ -84,8 +84,7 @@ def hard_delete_store(job_public_id: str) -> None:
             job.current_step = StoreDeletionJob.STEP_DELETING_ANALYTICS
             job.save(update_fields=["current_step"])
 
-            # Step 4: Delete analytics.
-            StoreAnalytics.objects.filter(store_id=store.id).delete()
+            # Step 4: Delete basic analytics snapshots.
             StoreDashboardStatsSnapshot.objects.filter(store_id=store.id).delete()
 
             job.current_step = StoreDeletionJob.STEP_FINALIZING
