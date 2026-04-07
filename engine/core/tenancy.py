@@ -73,12 +73,7 @@ def get_active_store(request: HttpRequest) -> ActiveStoreContext:
     # This is needed because tenant context is resolved in middleware (before DRF auth
     # attaches request.auth), so JWT-claim-only selection would otherwise be unavailable.
     if getattr(user, "is_authenticated", False):
-        header_store_public_id = (
-            request.headers.get("X-Store-ID")
-            or request.headers.get("x-store-id")
-            or request.headers.get("X-Store-Public-ID")
-            or request.headers.get("x-store-public-id")
-        )
+        header_store_public_id = request.headers.get("X-Store-Public-ID")
         if header_store_public_id:
             candidate = Store.objects.filter(public_id=header_store_public_id).first()
             if candidate:
@@ -96,6 +91,19 @@ def get_active_store(request: HttpRequest) -> ActiveStoreContext:
         if membership is None:
             store = None
         return ActiveStoreContext(store=store, membership=membership)
+
+    # 6) Unauthenticated request with explicit store header.
+    # Covers the JWT / middleware timing gap: DRF authenticates at the view
+    # level, but TenantContextMiddleware runs earlier when request.user is
+    # still anonymous.  The frontend sends X-Store-Public-ID explicitly for
+    # this case.  We resolve the store here so the ContextVar is populated;
+    # view-level permission classes (IsAdminUser, IsStoreAdmin, …) enforce
+    # actual access control.
+    header_store_public_id = request.headers.get("X-Store-Public-ID")
+    if header_store_public_id:
+        candidate = Store.objects.filter(public_id=header_store_public_id).first()
+        if candidate:
+            return ActiveStoreContext(store=candidate, membership=None)
 
     return ActiveStoreContext(store=None, membership=None)
 
