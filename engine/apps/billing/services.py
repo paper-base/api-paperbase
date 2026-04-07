@@ -6,6 +6,7 @@ from decimal import Decimal
 from django.db import transaction
 from django.utils import timezone
 
+from engine.apps.emails.display_time import format_email_date_in_display_tz
 from engine.apps.emails.triggers import (
     queue_platform_new_subscription_email,
     queue_subscription_activated_email,
@@ -121,7 +122,7 @@ def activate_subscription(
             subscription=subscription,
             old_plan_name=prev_plan.name,
             new_plan_name=subscription.plan.name,
-            effective_date=subscription.start_date.isoformat(),
+            effective_date=format_email_date_in_display_tz(subscription.start_date),
             change_reason=change_reason,
         )
     else:

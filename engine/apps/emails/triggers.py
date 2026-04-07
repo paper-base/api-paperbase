@@ -161,7 +161,7 @@ def queue_subscription_payment_email(user, subscription, payment) -> None:
             "plan_name": subscription.plan.name,
             "amount": str(payment.amount),
             "currency": payment.currency,
-            "billing_date": subscription.end_date.isoformat(),
+            "billing_date": format_email_date_in_display_tz(subscription.end_date),
             "payment_date": format_email_date_in_display_tz(),
         },
     )
@@ -181,8 +181,8 @@ def queue_subscription_activated_email(
             "user_name": user.get_short_name() or user.email,
             "plan_name": subscription.plan.name,
             "billing_cycle": subscription.get_billing_cycle_display(),
-            "start_date": subscription.start_date.isoformat(),
-            "end_date": subscription.end_date.isoformat(),
+            "start_date": format_email_date_in_display_tz(subscription.start_date),
+            "end_date": format_email_date_in_display_tz(subscription.end_date),
             "subscription_status": subscription.get_status_display(),
             "amount": str(payment.amount),
             "currency": payment.currency,
@@ -211,7 +211,7 @@ def queue_subscription_changed_email(
             "effective_date": effective_date,
             "change_reason": (change_reason or "").strip() or "—",
             "plan_name": subscription.plan.name,
-            "end_date": subscription.end_date.isoformat(),
+            "end_date": format_email_date_in_display_tz(subscription.end_date),
             "subscription_status": subscription.get_status_display(),
         },
     )

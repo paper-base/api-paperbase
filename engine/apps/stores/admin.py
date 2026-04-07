@@ -5,8 +5,19 @@ from .models import Store, StoreMembership, StoreSettings
 
 @admin.register(Store)
 class StoreAdmin(admin.ModelAdmin):
-    list_display = ("id", "name", "code", "owner_name", "owner_email", "currency_symbol", "is_active", "created_at")
-    list_filter = ("is_active", "created_at")
+    list_display = (
+        "id",
+        "name",
+        "code",
+        "owner_name",
+        "owner_email",
+        "currency_symbol",
+        "status",
+        "is_active",
+        "delete_at",
+        "created_at",
+    )
+    list_filter = ("is_active", "status", "created_at")
     search_fields = ("name", "owner_name", "owner_email")
     ordering = ("-created_at",)
 

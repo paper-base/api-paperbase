@@ -5,8 +5,8 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from engine.apps.products.models import ProductAttribute
-from engine.apps.stores.models import StoreMembership
 from tests.core.test_core import _ensure_default_plan, _make_store, make_user
+from tests.test_helpers.jwt_auth import login_dashboard_jwt
 
 
 class ProductAttributeSlugModelTests(TestCase):
@@ -57,23 +57,15 @@ class ProductAttributeSlugAdminAPITests(TestCase):
     def setUp(self):
         _ensure_default_plan()
         self.client = APIClient()
-        self.store = _make_store("Attr API Store", "attr-api.local")
         self.user = make_user("attr-api-owner@example.com")
-        StoreMembership.objects.create(
-            user=self.user,
-            store=self.store,
-            role=StoreMembership.Role.OWNER,
-            is_active=True,
-        )
-        self.client.force_authenticate(user=self.user)
-        self.headers = {"HTTP_X_STORE_PUBLIC_ID": self.store.public_id}
+        self.store = _make_store("Attr API Store", "attr-api.local", owner_email=self.user.email)
+        login_dashboard_jwt(self.client, self.user.email)
 
     def test_post_without_slug_assigns_slug(self):
         resp = self.client.post(
             "/api/v1/admin/product-attributes/",
             {"name": "Size Chart", "order": 0},
             format="json",
-            **self.headers,
         )
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED, resp.data)
         self.assertEqual(resp.data["slug"], "size-chart")
@@ -86,7 +78,6 @@ class ProductAttributeSlugAdminAPITests(TestCase):
             "/api/v1/admin/product-attributes/",
             {"name": "Size Chart", "order": 1},
             format="json",
-            **self.headers,
         )
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED, resp.data)
         self.assertEqual(resp.data["slug"], "size-chart-1")
@@ -100,7 +91,6 @@ class ProductAttributeSlugAdminAPITests(TestCase):
             f"/api/v1/admin/product-attributes/{a.public_id}/",
             {"name": "Colour"},
             format="json",
-            **self.headers,
         )
         self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.data)
         self.assertEqual(resp.data["slug"], orig_slug)
@@ -113,7 +103,6 @@ class ProductAttributeSlugAdminAPITests(TestCase):
             "/api/v1/admin/product-attributes/",
             {"name": "Material", "order": 0, "slug": "hacker-slug"},
             format="json",
-            **self.headers,
         )
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED, resp.data)
         self.assertEqual(resp.data["slug"], "material")

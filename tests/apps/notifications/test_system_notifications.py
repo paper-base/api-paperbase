@@ -14,6 +14,16 @@ User = get_user_model()
 ACTIVE_URL = "/api/v1/system-notifications/active/"
 
 
+def _jwt_auth(client, user):
+    r = client.post(
+        "/api/v1/auth/token/",
+        {"email": user.email, "password": "secret123"},
+        format="json",
+    )
+    assert r.status_code == 200
+    client.credentials(HTTP_AUTHORIZATION=f"Bearer {r.data['access']}")
+
+
 class ActiveSystemNotificationAPITests(TestCase):
     def setUp(self):
         self.client = APIClient()
@@ -25,11 +35,23 @@ class ActiveSystemNotificationAPITests(TestCase):
             is_staff=True,
             is_verified=True,
         )
+        self.owner = User.objects.create_user(
+            email="owner@sysnotify.example.com",
+            password="secret123",
+            is_verified=True,
+        )
         self.store = Store.objects.create(
+            owner=self.owner,
             name="SysNotify Store",
             code=allocate_unique_store_code("SYSNOTIFY"),
             owner_name="Owner",
             owner_email="owner@sysnotify.example.com",
+        )
+        StoreMembership.objects.create(
+            user=self.owner,
+            store=self.store,
+            role=StoreMembership.Role.OWNER,
+            is_active=True,
         )
         StoreMembership.objects.create(
             user=self.staff,
@@ -37,8 +59,6 @@ class ActiveSystemNotificationAPITests(TestCase):
             role=StoreMembership.Role.STAFF,
             is_active=True,
         )
-        self.store_hdr = {"HTTP_X_STORE_PUBLIC_ID": self.store.public_id}
-
     def test_unauthenticated_is_denied(self):
         response = self.client.get(ACTIVE_URL)
         self.assertIn(response.status_code, (401, 403))
@@ -53,8 +73,8 @@ class ActiveSystemNotificationAPITests(TestCase):
             is_active=True,
             start_at=now - timedelta(hours=1),
         )
-        self.client.force_authenticate(user=self.staff)
-        response = self.client.get(ACTIVE_URL, **self.store_hdr)
+        _jwt_auth(self.client, self.staff)
+        response = self.client.get(ACTIVE_URL)
         self.assertEqual(response.status_code, 200)
         data = response.data
         self.assertIsInstance(data, dict)
@@ -66,8 +86,8 @@ class ActiveSystemNotificationAPITests(TestCase):
         self.assertNotIn("id", data)
 
     def test_no_match_returns_null(self):
-        self.client.force_authenticate(user=self.staff)
-        response = self.client.get(ACTIVE_URL, **self.store_hdr)
+        _jwt_auth(self.client, self.staff)
+        response = self.client.get(ACTIVE_URL)
         self.assertEqual(response.status_code, 200)
         self.assertIsNone(response.data)
 
@@ -79,8 +99,8 @@ class ActiveSystemNotificationAPITests(TestCase):
             is_active=True,
             start_at=now + timedelta(days=1),
         )
-        self.client.force_authenticate(user=self.staff)
-        response = self.client.get(ACTIVE_URL, **self.store_hdr)
+        _jwt_auth(self.client, self.staff)
+        response = self.client.get(ACTIVE_URL)
         self.assertEqual(response.status_code, 200)
         self.assertIsNone(response.data)
 
@@ -93,8 +113,8 @@ class ActiveSystemNotificationAPITests(TestCase):
             start_at=now - timedelta(days=2),
             end_at=now - timedelta(days=1),
         )
-        self.client.force_authenticate(user=self.staff)
-        response = self.client.get(ACTIVE_URL, **self.store_hdr)
+        _jwt_auth(self.client, self.staff)
+        response = self.client.get(ACTIVE_URL)
         self.assertEqual(response.status_code, 200)
         self.assertIsNone(response.data)
 
@@ -106,8 +126,8 @@ class ActiveSystemNotificationAPITests(TestCase):
             is_active=False,
             start_at=now - timedelta(hours=1),
         )
-        self.client.force_authenticate(user=self.staff)
-        response = self.client.get(ACTIVE_URL, **self.store_hdr)
+        _jwt_auth(self.client, self.staff)
+        response = self.client.get(ACTIVE_URL)
         self.assertEqual(response.status_code, 200)
         self.assertIsNone(response.data)
 
@@ -127,8 +147,8 @@ class ActiveSystemNotificationAPITests(TestCase):
             priority=10,
             start_at=now - timedelta(hours=1),
         )
-        self.client.force_authenticate(user=self.staff)
-        response = self.client.get(ACTIVE_URL, **self.store_hdr)
+        _jwt_auth(self.client, self.staff)
+        response = self.client.get(ACTIVE_URL)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["public_id"], high.public_id)
         self.assertNotEqual(response.data["public_id"], low.public_id)
@@ -150,11 +170,23 @@ class SystemNotificationDismissAPITests(TestCase):
             is_staff=True,
             is_verified=True,
         )
+        self.owner = User.objects.create_user(
+            email="owner@dismiss.example.com",
+            password="secret123",
+            is_verified=True,
+        )
         self.store = Store.objects.create(
+            owner=self.owner,
             name="Dismiss Store",
             code=allocate_unique_store_code("DISMISS"),
             owner_name="Owner",
             owner_email="owner@dismiss.example.com",
+        )
+        StoreMembership.objects.create(
+            user=self.owner,
+            store=self.store,
+            role=StoreMembership.Role.OWNER,
+            is_active=True,
         )
         for u in (self.staff, self.other):
             StoreMembership.objects.create(
@@ -163,7 +195,6 @@ class SystemNotificationDismissAPITests(TestCase):
                 role=StoreMembership.Role.STAFF,
                 is_active=True,
             )
-        self.store_hdr = {"HTTP_X_STORE_PUBLIC_ID": self.store.public_id}
 
     def _active_banner(self):
         now = timezone.now()
@@ -180,8 +211,8 @@ class SystemNotificationDismissAPITests(TestCase):
 
     def test_dismiss_post_returns_shape_no_id(self):
         n = self._active_banner()
-        self.client.force_authenticate(user=self.staff)
-        r = self.client.post(self._dismiss_url(n.public_id), **self.store_hdr)
+        _jwt_auth(self.client, self.staff)
+        r = self.client.post(self._dismiss_url(n.public_id))
         self.assertEqual(r.status_code, 200)
         self.assertNotIn("id", r.data)
         self.assertEqual(r.data["public_id"], n.public_id)
@@ -189,25 +220,24 @@ class SystemNotificationDismissAPITests(TestCase):
         self.assertFalse(r.data["hidden"])
 
     def test_dismiss_unknown_public_id_404(self):
-        self.client.force_authenticate(user=self.staff)
+        _jwt_auth(self.client, self.staff)
         r = self.client.post(
             self._dismiss_url("sys_nonexistent00000000001"),
-            **self.store_hdr,
         )
         self.assertEqual(r.status_code, 404)
 
     def test_dismiss_until_limit_then_get_null(self):
         n = self._active_banner()
-        self.client.force_authenticate(user=self.staff)
-        r1 = self.client.post(self._dismiss_url(n.public_id), **self.store_hdr)
+        _jwt_auth(self.client, self.staff)
+        r1 = self.client.post(self._dismiss_url(n.public_id))
         self.assertEqual(r1.data["dismiss_count"], 1)
         self.assertFalse(r1.data["hidden"])
-        g1 = self.client.get(ACTIVE_URL, **self.store_hdr)
+        g1 = self.client.get(ACTIVE_URL)
         self.assertEqual(g1.data["public_id"], n.public_id)
-        r2 = self.client.post(self._dismiss_url(n.public_id), **self.store_hdr)
+        r2 = self.client.post(self._dismiss_url(n.public_id))
         self.assertEqual(r2.data["dismiss_count"], 2)
         self.assertTrue(r2.data["hidden"])
-        g2 = self.client.get(ACTIVE_URL, **self.store_hdr)
+        g2 = self.client.get(ACTIVE_URL)
         self.assertIsNone(g2.data)
 
     def test_each_dismiss_click_increments_count_independently(self):
@@ -219,31 +249,31 @@ class SystemNotificationDismissAPITests(TestCase):
             start_at=now - timedelta(hours=1),
             daily_limit=3,
         )
-        self.client.force_authenticate(user=self.staff)
+        _jwt_auth(self.client, self.staff)
 
-        r1 = self.client.post(self._dismiss_url(n.public_id), **self.store_hdr)
+        r1 = self.client.post(self._dismiss_url(n.public_id))
         self.assertEqual(r1.data["dismiss_count"], 1)
         self.assertFalse(r1.data["hidden"])
-        self.assertEqual(self.client.get(ACTIVE_URL, **self.store_hdr).data["public_id"], n.public_id)
+        self.assertEqual(self.client.get(ACTIVE_URL).data["public_id"], n.public_id)
 
-        r2 = self.client.post(self._dismiss_url(n.public_id), **self.store_hdr)
+        r2 = self.client.post(self._dismiss_url(n.public_id))
         self.assertEqual(r2.data["dismiss_count"], 2)
         self.assertFalse(r2.data["hidden"])
-        self.assertEqual(self.client.get(ACTIVE_URL, **self.store_hdr).data["public_id"], n.public_id)
+        self.assertEqual(self.client.get(ACTIVE_URL).data["public_id"], n.public_id)
 
-        r3 = self.client.post(self._dismiss_url(n.public_id), **self.store_hdr)
+        r3 = self.client.post(self._dismiss_url(n.public_id))
         self.assertEqual(r3.data["dismiss_count"], 3)
         self.assertTrue(r3.data["hidden"])
-        self.assertIsNone(self.client.get(ACTIVE_URL, **self.store_hdr).data)
+        self.assertIsNone(self.client.get(ACTIVE_URL).data)
 
     def test_other_user_not_affected_by_dismiss_limit(self):
         n = self._active_banner()
-        self.client.force_authenticate(user=self.staff)
-        self.client.post(self._dismiss_url(n.public_id), **self.store_hdr)
-        self.client.post(self._dismiss_url(n.public_id), **self.store_hdr)
-        self.assertIsNone(self.client.get(ACTIVE_URL, **self.store_hdr).data)
-        self.client.force_authenticate(user=self.other)
-        go = self.client.get(ACTIVE_URL, **self.store_hdr)
+        _jwt_auth(self.client, self.staff)
+        self.client.post(self._dismiss_url(n.public_id))
+        self.client.post(self._dismiss_url(n.public_id))
+        self.assertIsNone(self.client.get(ACTIVE_URL).data)
+        _jwt_auth(self.client, self.other)
+        go = self.client.get(ACTIVE_URL)
         self.assertEqual(go.data["public_id"], n.public_id)
 
     def test_yesterday_exhaust_does_not_block_today(self):
@@ -256,6 +286,6 @@ class SystemNotificationDismissAPITests(TestCase):
             date=yesterday,
             dismiss_count=99,
         )
-        self.client.force_authenticate(user=self.staff)
-        g = self.client.get(ACTIVE_URL, **self.store_hdr)
+        _jwt_auth(self.client, self.staff)
+        g = self.client.get(ACTIVE_URL)
         self.assertEqual(g.data["public_id"], n.public_id)

@@ -1,9 +1,9 @@
 import datetime
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
-from rest_framework_simplejwt.tokens import AccessToken
 
 from engine.apps.basic_analytics.models import StoreDashboardStatsSnapshot
 from engine.apps.billing.models import Plan
@@ -13,7 +13,14 @@ from engine.apps.orders.models import Order
 from engine.apps.shipping.models import ShippingZone
 from engine.apps.inventory.models import Inventory
 from engine.apps.products.models import Category, Product
-from engine.apps.stores.models import Store, StoreDeletionJob, StoreMembership, StoreSettings
+from engine.apps.stores.models import (
+    Store,
+    StoreDeletionJob,
+    StoreLifecycleAuditLog,
+    StoreMembership,
+    StoreSettings,
+)
+from engine.apps.stores.tasks import hard_delete_store
 from engine.apps.stores.services import allocate_unique_store_code, normalize_store_code_base_from_name
 from engine.core.tenant_execution import tenant_scope_from_store
 
@@ -40,16 +47,12 @@ def _auth_client(client: APIClient, email: str, password: str = "pass1234", stor
     return resp.data["access"]
 
 
-def _set_default_plan(max_stores: int):
+def _set_default_plan(*, premium_order_emails: bool = False):
     Plan.objects.all().update(is_default=False)
-    if max_stores <= 1:
-        plan_name = "basic"
-    else:
-        plan_name = "premium"
+    plan_name = "premium" if premium_order_emails else "basic"
 
     plan = Plan.objects.filter(name=plan_name).first()
     if not plan:
-        feature_flags = {"order_email_notifications": max_stores > 1}
         plan = Plan.objects.create(
             name=plan_name,
             price="0.00",
@@ -57,18 +60,17 @@ def _set_default_plan(max_stores: int):
             is_active=True,
             is_default=True,
             features={
-                "limits": {"max_stores": max_stores},
-                "features": feature_flags,
+                "limits": {"max_products": 100},
+                "features": {"order_email_notifications": premium_order_emails},
             },
         )
     else:
         features = plan.features or {}
-        limits = features.get("limits") or {}
-        limits["max_stores"] = max_stores
-        features["limits"] = limits
-        feature_flags = features.get("features") or {}
-        feature_flags["order_email_notifications"] = max_stores > 1
-        features["features"] = feature_flags
+        features["limits"] = {**(features.get("limits") or {}), "max_products": 500 if premium_order_emails else 100}
+        features["features"] = {
+            **(features.get("features") or {}),
+            "order_email_notifications": premium_order_emails,
+        }
         plan.features = features
         plan.is_default = True
         plan.save(update_fields=["features", "is_default"])
@@ -80,11 +82,21 @@ def _make_store(name: str, domain: str, owner_email: str):
     )
     if not base:
         base = "T"
+    owner = User.objects.get(email=owner_email)
     store = Store.objects.create(
+        owner=owner,
         name=name,
         code=allocate_unique_store_code(base),
         owner_name=f"{name} Owner",
         owner_email=owner_email,
+    )
+    StoreMembership.objects.get_or_create(
+        user=owner,
+        store=store,
+        defaults={
+            "role": StoreMembership.Role.OWNER,
+            "is_active": True,
+        },
     )
     return store
 
@@ -138,101 +150,133 @@ class DeleteStoreEndpointTests(TestCase):
     def setUp(self):
         self.client = APIClient()
 
-    def test_delete_store_rejects_non_owner_or_bad_inputs(self):
-        _set_default_plan(max_stores=1)  # Basic
+    def test_delete_legacy_endpoint_returns_410(self):
+        _set_default_plan(premium_order_emails=False)
+        user = _make_user("owner@legacy.example.com")
+        store = _make_store("Legacy Store", "legacy.local", owner_email=user.email)
+        _auth_client(self.client, user.email, store_public_id=store.public_id)
+        resp = self.client.post(
+            "/api/v1/store/settings/delete/",
+            {"account_email": user.email, "store_name": store.name},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 410)
+        self.assertEqual(resp.data.get("code"), "delete_requires_otp")
+
+    @patch("engine.apps.stores.store_lifecycle._generate_otp_code", return_value="445566")
+    def test_delete_store_otp_flow_schedules_deletion(self, _mock_otp):
+        _set_default_plan(premium_order_emails=False)
 
         user = _make_user("owner@example.com")
         other_user = _make_user("other@example.com")
 
         store = _make_store("Store A", "store-a.local", owner_email=user.email)
-        _make_owner_membership(user, store)
         _make_owner_membership(other_user, store)
 
         _make_catalog_data(store, user)
 
-        access = _auth_client(self.client, user.email, store_public_id=store.public_id)
+        _auth_client(self.client, user.email, store_public_id=store.public_id)
 
         # Wrong email (exact match should fail)
         resp = self.client.post(
-            "/api/v1/stores/settings/delete/",
-            {"account_email": "owner@example.com ", "store_name": store.name},
+            "/api/v1/store/settings/delete/send-otp/",
+            {
+                "account_email": "owner@example.com ",
+                "store_name": store.name,
+                "confirmation_phrase": "delete my store",
+            },
             format="json",
-            HTTP_X_STORE_PUBLIC_ID=store.public_id,
         )
         self.assertEqual(resp.status_code, 403)
         self.assertTrue(Store.objects.filter(id=store.id).exists())
         store.refresh_from_db()
         self.assertTrue(store.is_active)
 
-        # Correct email + store name
-        resp = self.client.post(
-            "/api/v1/stores/settings/delete/",
-            {"account_email": user.email, "store_name": store.name},
+        send = self.client.post(
+            "/api/v1/store/settings/delete/send-otp/",
+            {
+                "account_email": user.email,
+                "store_name": store.name,
+                "confirmation_phrase": "delete my store",
+            },
             format="json",
-            HTTP_X_STORE_PUBLIC_ID=store.public_id,
+        )
+        self.assertEqual(send.status_code, 200)
+        self.assertIn("challenge_public_id", send.data)
+        self.assertIn("expires_at", send.data)
+        self.assertTrue(
+            StoreLifecycleAuditLog.objects.filter(
+                store=store,
+                action=StoreLifecycleAuditLog.Action.STORE_DELETE_OTP_SENT,
+            ).exists()
+        )
+
+        bad_otp = self.client.post(
+            "/api/v1/store/settings/delete/confirm/",
+            {"challenge_public_id": send.data["challenge_public_id"], "otp": "000000"},
+            format="json",
+        )
+        self.assertEqual(bad_otp.status_code, 400)
+
+        resp = self.client.post(
+            "/api/v1/store/settings/delete/confirm/",
+            {"challenge_public_id": send.data["challenge_public_id"], "otp": "445566"},
+            format="json",
         )
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.data["redirect_route"], "/onboarding")
+        self.assertEqual(resp.data["redirect_route"], "/recover")
+        self.assertIn("scheduled_delete_at", resp.data)
+        self.assertTrue(
+            StoreLifecycleAuditLog.objects.filter(
+                store=store,
+                action=StoreLifecycleAuditLog.Action.STORE_DELETE_SCHEDULED,
+            ).exists()
+        )
 
         job_id = resp.data["job_id"]
         job = StoreDeletionJob.objects.get(public_id=job_id, user=user)
 
-        # The store should become inaccessible immediately (deactivated),
-        # and the job should drive eventual hard deletion.
-        store_exists = Store.objects.filter(id=store.id).exists()
-        if store_exists:
-            self.assertFalse(Store.objects.get(id=store.id).is_active)
+        store.refresh_from_db()
+        self.assertEqual(store.status, Store.Status.PENDING_DELETE)
+        self.assertFalse(store.is_active)
 
-        if job.status == StoreDeletionJob.Status.SUCCESS:
-            with tenant_scope_from_store(store=store, reason="test assertions"):
-                self.assertEqual(Order.objects.filter(store_id=store.id).count(), 0)
-            self.assertEqual(Customer.objects.filter(store_id=store.id).count(), 0)
-            self.assertEqual(StoreDashboardStatsSnapshot.objects.filter(store_id=store.id).count(), 0)
-
-    def test_delete_store_premium_redirects_to_other_store(self):
-        _set_default_plan(max_stores=5)  # Premium
-
-        user = _make_user("owner@example.com")
-
-        store_a = _make_store("Store A", "store-a.local", owner_email=user.email)
-        store_b = _make_store("Store B", "store-b.local", owner_email=user.email)
-        _make_owner_membership(user, store_a)
-        _make_owner_membership(user, store_b)
-
-        _make_catalog_data(store_a, user)
-
-        access = _auth_client(self.client, user.email, store_public_id=store_a.public_id)
-        resp = self.client.post(
-            "/api/v1/stores/settings/delete/",
-            {"account_email": user.email, "store_name": store_a.name},
-            format="json",
-            HTTP_X_STORE_PUBLIC_ID=store_a.public_id,
-        )
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.data["redirect_route"], "/")
-
-        # Response tokens should include active_store_public_id for the next store.
-        payload = AccessToken(resp.data["access"]).payload
-        self.assertEqual(payload.get("active_store_public_id"), store_b.public_id)
+        hard_delete_store(job.public_id)
+        job.refresh_from_db()
+        self.assertEqual(job.status, StoreDeletionJob.Status.SUCCESS)
+        self.assertFalse(Store.objects.filter(id=store.id).exists())
+        self.assertEqual(Order.objects.filter(store_id=store.id).count(), 0)
+        self.assertEqual(Customer.objects.filter(store_id=store.id).count(), 0)
+        self.assertEqual(StoreDashboardStatsSnapshot.objects.filter(store_id=store.id).count(), 0)
 
     def test_delete_status_is_user_scoped(self):
-        _set_default_plan(max_stores=1)
+        _set_default_plan(premium_order_emails=False)
 
         user = _make_user("owner@example.com")
         other_user = _make_user("other@example.com")
 
         store = _make_store("Store A", "store-a.local", owner_email=user.email)
-        _make_owner_membership(user, store)
 
         _make_catalog_data(store, user)
         _auth_client(self.client, user.email, store_public_id=store.public_id)
 
-        resp = self.client.post(
-            "/api/v1/stores/settings/delete/",
-            {"account_email": user.email, "store_name": store.name},
-            format="json",
-            HTTP_X_STORE_PUBLIC_ID=store.public_id,
-        )
+        with patch("engine.apps.stores.store_lifecycle._generate_otp_code", return_value="778899"):
+            send = self.client.post(
+                "/api/v1/store/settings/delete/send-otp/",
+                {
+                    "account_email": user.email,
+                    "store_name": store.name,
+                    "confirmation_phrase": "delete my store",
+                },
+                format="json",
+            )
+        self.assertEqual(send.status_code, 200)
+
+        with patch("engine.apps.stores.store_lifecycle._generate_otp_code", return_value="778899"):
+            resp = self.client.post(
+                "/api/v1/store/settings/delete/confirm/",
+                {"challenge_public_id": send.data["challenge_public_id"], "otp": "778899"},
+                format="json",
+            )
         self.assertEqual(resp.status_code, 200)
         job_id = resp.data["job_id"]
 
@@ -240,9 +284,67 @@ class DeleteStoreEndpointTests(TestCase):
         _auth_client(other_client, other_user.email, store_public_id=store.public_id)
 
         status_resp = other_client.get(
-            "/api/v1/stores/settings/delete-status/?job_id=" + str(job_id)
+            "/api/v1/store/settings/delete-status/?job_id=" + str(job_id)
         )
         self.assertEqual(status_resp.status_code, 404)
+
+
+class RemoveStoreEndpointTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+
+    def test_remove_requires_json_body(self):
+        _set_default_plan(premium_order_emails=False)
+        user = _make_user("remove@example.com")
+        store = _make_store("Rem Store", "rem.local", owner_email=user.email)
+        store.contact_email = user.email
+        store.save(update_fields=["contact_email"])
+        _auth_client(self.client, user.email, store_public_id=store.public_id)
+        resp = self.client.post("/api/v1/store/remove/", {}, format="json")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_remove_rejects_bad_confirmation(self):
+        _set_default_plan(premium_order_emails=False)
+        user = _make_user("remove2@example.com")
+        store = _make_store("Rem Store 2", "rem2.local", owner_email=user.email)
+        store.contact_email = user.email
+        store.save(update_fields=["contact_email"])
+        _auth_client(self.client, user.email, store_public_id=store.public_id)
+        resp = self.client.post(
+            "/api/v1/store/remove/",
+            {
+                "store_name": store.name,
+                "confirmation_phrase": "remove my shop",
+            },
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 403)
+
+    def test_remove_success(self):
+        _set_default_plan(premium_order_emails=False)
+        user = _make_user("remove3@example.com")
+        store = _make_store("Rem Store 3", "rem3.local", owner_email=user.email)
+        store.contact_email = user.email
+        store.save(update_fields=["contact_email"])
+        _auth_client(self.client, user.email, store_public_id=store.public_id)
+        resp = self.client.post(
+            "/api/v1/store/remove/",
+            {
+                "store_name": store.name,
+                "confirmation_phrase": "remove my store",
+            },
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["redirect_route"], "/recover")
+        store.refresh_from_db()
+        self.assertEqual(store.status, Store.Status.INACTIVE)
+        self.assertTrue(
+            StoreLifecycleAuditLog.objects.filter(
+                store=store,
+                action=StoreLifecycleAuditLog.Action.STORE_REMOVE,
+            ).exists()
+        )
 
 
 class StoreSettingsOrderEmailTests(TestCase):
@@ -250,11 +352,10 @@ class StoreSettingsOrderEmailTests(TestCase):
 
     def setUp(self):
         self.client = APIClient()
-        _set_default_plan(max_stores=5)
+        _set_default_plan(premium_order_emails=True)
         self.owner = _make_user("owner@order-email.test")
         self.staff_user = _make_user("staff@order-email.test")
         self.store = _make_store("Order Email Store", "order-email.test", self.owner.email)
-        _make_owner_membership(self.owner, self.store)
         StoreMembership.objects.create(
             user=self.staff_user,
             store=self.store,
@@ -269,7 +370,7 @@ class StoreSettingsOrderEmailTests(TestCase):
         activate_subscription(self.owner, premium, source="manual", amount=0, provider="manual")
         _auth_client(self.client, self.staff_user.email, store_public_id=self.store.public_id)
         resp = self.client.patch(
-            "/api/v1/stores/settings/current/",
+            "/api/v1/store/settings/current/",
             {"email_notify_owner_on_order_received": True},
             format="json",
             HTTP_X_STORE_PUBLIC_ID=self.store.public_id,
@@ -285,12 +386,12 @@ class StoreSettingsOrderEmailTests(TestCase):
                 billing_cycle="monthly",
                 is_active=True,
                 is_default=True,
-                features={"limits": {"max_stores": 1}, "features": {}},
+                features={"limits": {"max_products": 100}, "features": {}},
             )
         activate_subscription(self.owner, basic, source="manual", amount=0, provider="manual")
         _auth_client(self.client, self.owner.email, store_public_id=self.store.public_id)
         resp = self.client.patch(
-            "/api/v1/stores/settings/current/",
+            "/api/v1/store/settings/current/",
             {"email_notify_owner_on_order_received": True},
             format="json",
             HTTP_X_STORE_PUBLIC_ID=self.store.public_id,
@@ -303,7 +404,7 @@ class StoreSettingsOrderEmailTests(TestCase):
         activate_subscription(self.owner, premium, source="manual", amount=0, provider="manual")
         _auth_client(self.client, self.owner.email, store_public_id=self.store.public_id)
         resp = self.client.patch(
-            "/api/v1/stores/settings/current/",
+            "/api/v1/store/settings/current/",
             {
                 "email_notify_owner_on_order_received": True,
                 "email_customer_on_order_confirmed": True,

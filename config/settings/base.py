@@ -78,6 +78,10 @@ STORE_API_KEY_SECRET = os.getenv("STORE_API_KEY_SECRET", "").strip()
 STORE_API_KEY_LAST_USED_TOUCH_INTERVAL_SECONDS = int(
     os.getenv("STORE_API_KEY_LAST_USED_TOUCH_INTERVAL_SECONDS", "60")
 )
+STORE_ACTIVITY_TOUCH_INTERVAL_SECONDS = int(
+    os.getenv("STORE_ACTIVITY_TOUCH_INTERVAL_SECONDS", "60")
+)
+STORE_OTP_RATE_LIMIT_CACHE_ALIAS = os.getenv("STORE_OTP_RATE_LIMIT_CACHE_ALIAS", "default")
 INTERNAL_OVERRIDE_IP_ALLOWLIST = env_list(
     "INTERNAL_OVERRIDE_IP_ALLOWLIST",
     default=["127.0.0.1", "::1"],
@@ -252,6 +256,10 @@ CELERY_BEAT_SCHEDULE = {
     "trash-purge-expired-daily": {
         "task": "engine.core.purge_expired_trash",
         "schedule": crontab(minute=15, hour=3),
+    },
+    "store-lifecycle-every-15-min": {
+        "task": "engine.apps.stores.process_store_lifecycle",
+        "schedule": crontab(minute="*/15"),
     },
 }
 

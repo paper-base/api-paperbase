@@ -17,6 +17,7 @@ from engine.core import cache_service
 from engine.core.request_context import get_store_settings_request_cache
 
 from .models import Store, StoreApiKey, StoreMembership, StoreSettings
+from .store_lifecycle import touch_store_activity
 
 User = get_user_model()
 
@@ -174,6 +175,7 @@ def touch_store_api_key_last_used(key_row: StoreApiKey) -> None:
     ):
         return
     StoreApiKey.objects.filter(pk=key_row.pk).update(last_used_at=now)
+    touch_store_activity(key_row.store)
 
 
 def is_public_api_enabled_for_store(store: Store) -> bool:
@@ -183,7 +185,10 @@ def is_public_api_enabled_for_store(store: Store) -> bool:
 
 
 def get_store_owner_user(store: Store) -> User | None:
-    """Active OWNER membership user for the store, or None."""
+    """Owner user for the store (FK), falling back to OWNER membership."""
+    oid = getattr(store, "owner_id", None)
+    if oid:
+        return User.objects.filter(pk=oid).first()
     m = (
         StoreMembership.objects.filter(
             store=store,
@@ -240,20 +245,17 @@ def invalidate_store_settings_cache(store_public_id: str) -> None:
 def sync_order_email_notification_settings_for_user(user) -> None:
     """
     When the user loses premium order-email entitlement, disable both flags
-    on every store they own.
+    on the store they own.
     """
     if has_feature(user, ORDER_EMAIL_NOTIFICATIONS_FEATURE):
         return
-    store_ids = StoreMembership.objects.filter(
-        user=user,
-        role=StoreMembership.Role.OWNER,
-        is_active=True,
-    ).values_list("store_id", flat=True)
-    for store_id in store_ids:
-        StoreSettings.objects.update_or_create(
-            store_id=store_id,
-            defaults={
-                "email_notify_owner_on_order_received": False,
-                "email_customer_on_order_confirmed": False,
-            },
-        )
+    owned = getattr(user, "owned_store", None)
+    if owned is None:
+        return
+    StoreSettings.objects.update_or_create(
+        store_id=owned.pk,
+        defaults={
+            "email_notify_owner_on_order_received": False,
+            "email_customer_on_order_confirmed": False,
+        },
+    )

@@ -9,6 +9,16 @@ from .constants import (
     ORDER_RECEIVED,
     PASSWORD_RESET,
     PLATFORM_NEW_SUBSCRIPTION,
+    STORE_DELETE_CANCELLED,
+    STORE_DELETE_SCHEDULED,
+    STORE_INACTIVE_RECOVERY_REMINDER,
+    STORE_PENDING_DELETE_1D,
+    STORE_PENDING_DELETE_2D,
+    STORE_DELETE_OTP,
+    STORE_PERMANENTLY_DELETED,
+    STORE_RESTORE_OTP,
+    STORE_RESTORED,
+    STORE_REMOVED_INACTIVE,
     SUBSCRIPTION_ACTIVATED,
     SUBSCRIPTION_CHANGED,
     SUBSCRIPTION_PAYMENT,
@@ -26,16 +36,19 @@ DEFAULT_EMAIL_TEMPLATES: dict[str, dict[str, str]] = {
             "<p>Thanks for signing up. Please confirm that this email address belongs to you "
             "so we can finish setting up your account and reach you about important activity.</p>"
             "<p><strong>Confirm your email</strong><br />"
+            '<a href="{{ verification_link }}">Confirm</a></p>'
+            "<p>If the link does not work, copy and paste this link into your browser:</p>"
+            '<p style="word-break:break-all;">'
             '<a href="{{ verification_link }}">{{ verification_link }}</a></p>'
-            "<p>If the link does not open, copy the full URL into your browser.</p>"
             "<p>If you did not create an account, you can ignore this message—no changes will be made.</p>"
         ),
         "text_body": (
             "Hello {{ user_name|default:user_email }},\n\n"
             "Thanks for signing up. Please confirm this email address so we can finish "
             "setting up your account.\n\n"
-            "Open this link in your browser:\n"
+            "Confirm your email by opening this link in your browser:\n"
             "{{ verification_link }}\n\n"
+            "If the link does not work, copy and paste it from the line above.\n\n"
             "If you did not create an account, you can ignore this email.\n"
         ),
     },
@@ -228,43 +241,31 @@ DEFAULT_EMAIL_TEMPLATES: dict[str, dict[str, str]] = {
         ),
     },
     PLATFORM_NEW_SUBSCRIPTION: {
-        "subject": "Platform alert: new store subscription — {{ store_name }}",
+        "subject": "Platform alert: new user subscription — {{ plan_name }}",
         "html_body": (
-            "<p>A store subscription was just activated or recorded on the platform.</p>"
-            "<p><strong>Store</strong> {{ store_name }}<br />"
-            "{% if store_public_id %}<strong>Store ID</strong> {{ store_public_id }}<br />{% endif %}"
-            "<strong>Plan</strong> {{ plan_name }}<br />"
+            "<p>A user has subscribed on the platform.</p>"
+            "<p><strong>Plan</strong> {{ plan_name }}<br />"
             "<strong>Subscription status</strong> {{ subscription_status }}<br />"
             "<strong>Source</strong> {{ subscription_source }}</p>"
             "<p><strong>Account owner (auth)</strong><br />"
-            "{{ user_full_name }}<br />"
+            "{% if user_full_name != store_owner_email %}{{ user_full_name }}<br />{% endif %}"
             "{{ store_owner_email }}<br />"
             "{% if user_public_id %}User ID: {{ user_public_id }}{% endif %}</p>"
-            "<p><strong>Store profile (on record)</strong><br />"
-            "{% if store_owner_name_on_record %}Owner name: {{ store_owner_name_on_record }}<br />{% endif %}"
-            "{% if store_owner_email_on_record %}Owner email: {{ store_owner_email_on_record }}<br />{% endif %}"
-            "{% if store_phone %}Phone: {{ store_phone }}<br />{% endif %}"
-            "{% if store_contact_email %}Contact email: {{ store_contact_email }}<br />{% endif %}"
-            "{% if store_address %}Address: {{ store_address }}<br />{% endif %}"
-            "</p>"
             "<p><strong>Event time</strong> {{ timestamp }} (GMT+6)</p>"
             "<p>Use this summary for support, fraud review, or revenue operations as needed.</p>"
         ),
         "text_body": (
-            "New store subscription (platform)\n\n"
-            "Store: {{ store_name }}\n"
-            "{% if store_public_id %}Store ID: {{ store_public_id }}\n{% endif %}"
+            "New user subscription (platform)\n\n"
             "Plan: {{ plan_name }}\n"
             "Status: {{ subscription_status }}\n"
             "Source: {{ subscription_source }}\n\n"
-            "Owner (login): {{ user_full_name }} <{{ store_owner_email }}>\n"
+            "Account owner (auth):\n"
+            "{% if user_full_name == store_owner_email %}"
+            "{{ store_owner_email }}\n"
+            "{% else %}"
+            "{{ user_full_name }}\n{{ store_owner_email }}\n"
+            "{% endif %}"
             "{% if user_public_id %}User ID: {{ user_public_id }}\n{% endif %}\n"
-            "Store record:\n"
-            "{% if store_owner_name_on_record %}Owner name: {{ store_owner_name_on_record }}\n{% endif %}"
-            "{% if store_owner_email_on_record %}Owner email: {{ store_owner_email_on_record }}\n{% endif %}"
-            "{% if store_phone %}Phone: {{ store_phone }}\n{% endif %}"
-            "{% if store_contact_email %}Contact: {{ store_contact_email }}\n{% endif %}"
-            "{% if store_address %}Address: {{ store_address }}\n{% endif %}\n"
             "Time: {{ timestamp }} (GMT+6)\n"
         ),
     },
@@ -336,6 +337,162 @@ DEFAULT_EMAIL_TEMPLATES: dict[str, dict[str, str]] = {
             "{{ title|default:'Notification' }}\n\n"
             "{{ body }}\n"
             "{% if action_url %}\nOpen: {{ action_url }}\n{% endif %}\n"
+        ),
+    },
+    STORE_REMOVED_INACTIVE: {
+        "subject": "Store removed (recoverable) — {{ store_name }}",
+        "html_body": (
+            "<p>Hello,</p>"
+            "<p>This is a confirmation that <strong>{{ store_name }}</strong> was removed and is now inactive.</p>"
+            "<p><strong>What this means</strong></p>"
+            "<ul>"
+            "<li>Your store is hidden in the dashboard and API access is blocked.</li>"
+            "<li>Your data is still intact during the recovery window.</li>"
+            "</ul>"
+            "<p><strong>Recovery window</strong><br />"
+            "You can restore the store any time before <strong>{{ delete_at }}</strong>.</p>"
+            "<p>If you did not do this, please secure your account.</p>"
+        ),
+        "text_body": (
+            "Store removed (recoverable) — {{ store_name }}\n\n"
+            "This is a confirmation that your store was removed and is now inactive.\n"
+            "- The store is hidden in the dashboard and API access is blocked.\n"
+            "- Your data remains intact during the recovery window.\n\n"
+            "You can restore the store any time before: {{ delete_at }}\n\n"
+            "If you did not do this, please secure your account.\n"
+        ),
+    },
+    STORE_INACTIVE_RECOVERY_REMINDER: {
+        "subject": "Reminder: {{ store_name }} will be deleted in 7 days",
+        "html_body": (
+            "<p>Hello,</p>"
+            "<p>This is a reminder that <strong>{{ store_name }}</strong> will be permanently deleted on "
+            "<strong>{{ delete_at }}</strong></p>"
+            "<p><strong>{{ message }}</strong></p>"
+        ),
+        "text_body": (
+            "Reminder: {{ store_name }} will be permanently deleted on {{ delete_at }}.\n"
+            "{{ message }}\n",
+        ),
+    },
+    STORE_DELETE_SCHEDULED: {
+        "subject": "Permanent deletion scheduled — {{ store_name }}",
+        "html_body": (
+            "<p>Hello,</p>"
+            "<p>This is a confirmation that <strong>{{ store_name }}</strong> has been scheduled for "
+            "<strong>permanent deletion</strong>.</p>"
+            "<p><strong>Scheduled delete time</strong><br />"
+            "<strong>{{ delete_at }}</strong></p>"
+            "<p><strong>Until then</strong></p>"
+            "<ul>"
+            "<li>Your store is no longer active and API access is blocked.</li>"
+            "<li>You can restore/cancel deletion from the dashboard before the scheduled time.</li>"
+            "</ul>"
+            "<p>{{ message }}</p>"
+        ),
+        "text_body": (
+            "Permanent deletion scheduled — {{ store_name }}\n\n"
+            "Scheduled delete time: {{ delete_at }}\n\n"
+            "Until then:\n"
+            "- Your store is inactive and API access is blocked.\n"
+            "- You can restore/cancel deletion from the dashboard before the scheduled time.\n\n"
+            "{{ message }}\n"
+        ),
+    },
+    STORE_PENDING_DELETE_2D: {
+        "subject": "2 days left before {{ store_name }} is deleted",
+        "html_body": (
+            "<p>Hello,</p>"
+            "<p><strong>{{ store_name }}</strong> will be permanently deleted on <strong>{{ delete_at }}</strong>. "
+            "{{ message }}</p>"
+        ),
+        "text_body": (
+            "2 days left: {{ store_name }} will be deleted on {{ delete_at }}.\n"
+            "{{ message }}\n",
+        ),
+    },
+    STORE_PENDING_DELETE_1D: {
+        "subject": "Final warning: {{ store_name }} will be deleted tomorrow",
+        "html_body": (
+            "<p>Hello,</p>"
+            "<p>Final warning: <strong>{{ store_name }}</strong> will be permanently deleted on "
+            "<strong>{{ delete_at }}</strong></p>"
+            "<p>{{ message }}</p>"
+        ),
+        "text_body": (
+            "Final warning: {{ store_name }} will be deleted on {{ delete_at }}.\n"
+            "{{ message }}\n",
+        ),
+    },
+    STORE_RESTORED: {
+        "subject": "Store restored — {{ store_name }}",
+        "html_body": (
+            "<p>Hello,</p>"
+            "<p>{{ message }}</p>"
+        ),
+        "text_body": "{{ message }}\n",
+    },
+    STORE_DELETE_CANCELLED: {
+        "subject": "Deletion cancelled — {{ store_name }}",
+        "html_body": (
+            "<p>Hello,</p>"
+            "<p>{{ message }}</p>"
+        ),
+        "text_body": "{{ message }}\n",
+    },
+    STORE_PERMANENTLY_DELETED: {
+        "subject": "Store permanently deleted — {{ store_name }}",
+        "html_body": (
+            "<p>Hello,</p>"
+            "<p>This is a confirmation that <strong>{{ store_name }}</strong> has been permanently deleted.</p>"
+            "<p>All store data has been removed as part of this process (products, orders, customers, analytics, "
+            "settings, and media).</p>"
+            "<p>If you did not authorize this action, please contact support immediately.</p>"
+        ),
+        "text_body": (
+            "Store permanently deleted — {{ store_name }}\n\n"
+            "This confirms that the store has been permanently deleted and its data removed.\n\n"
+            "If you did not authorize this action, contact support immediately.\n"
+        ),
+    },
+    STORE_DELETE_OTP: {
+        "subject": "Your deletion confirmation code — {{ store_name }}",
+        "html_body": (
+            "<p>Hello,</p>"
+            "<p>We received a request to schedule <strong>permanent deletion</strong> for "
+            "<strong>{{ store_name }}</strong>.</p>"
+            "<p><strong>Verification code</strong></p>"
+            "<p style=\"font-size:20px; letter-spacing:0.2em;\"><strong>{{ code }}</strong></p>"
+            "<p>This code expires in <strong>{{ minutes }} minutes</strong>.</p>"
+            "<p><strong>Important</strong></p>"
+            "<ul>"
+            "<li>Do not share this code with anyone.</li>"
+            "<li>If you did not request this, you can ignore this email and no deletion will be scheduled.</li>"
+            "</ul>"
+        ),
+        "text_body": (
+            "Your deletion confirmation code — {{ store_name }}\n\n"
+            "We received a request to schedule permanent deletion.\n\n"
+            "Code: {{ code }}\n"
+            "Expires in: {{ minutes }} minutes\n\n"
+            "Do not share this code. If you did not request this, ignore this email.\n"
+        ),
+    },
+    STORE_RESTORE_OTP: {
+        "subject": "Your restore verification code — {{ store_name }}",
+        "html_body": (
+            "<p>Hello,</p>"
+            "<p>Use the code below to restore <strong>{{ store_name }}</strong> from the dashboard.</p>"
+            "<p><strong>Verification code</strong></p>"
+            "<p style=\"font-size:20px; letter-spacing:0.2em;\"><strong>{{ code }}</strong></p>"
+            "<p>This code expires in <strong>{{ minutes }} minutes</strong>.</p>"
+            "<p>If you did not request this, ignore this email.</p>"
+        ),
+        "text_body": (
+            "Your restore verification code — {{ store_name }}\n\n"
+            "Code: {{ code }}\n"
+            "Expires in: {{ minutes }} minutes\n\n"
+            "If you did not request this, ignore this email.\n"
         ),
     },
 }

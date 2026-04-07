@@ -43,12 +43,22 @@ def _enable_tenant_api_key_enforcement(settings):
 
 def _make_store(name: str) -> Store:
     base = normalize_store_code_base_from_name(name) or "T"
-    return Store.objects.create(
+    email = f"{name.lower().replace(' ', '')}@example.com"
+    owner = User.objects.create_user(email=email, password="pass1234", is_verified=True)
+    store = Store.objects.create(
+        owner=owner,
         name=name,
         code=allocate_unique_store_code(base),
         owner_name=f"{name} Owner",
-        owner_email=f"{name.lower().replace(' ', '')}@example.com",
+        owner_email=email,
     )
+    StoreMembership.objects.create(
+        user=owner,
+        store=store,
+        role=StoreMembership.Role.OWNER,
+        is_active=True,
+    )
+    return store
 
 
 def _make_product(store: Store, *, name: str = "Product", price: int = 100, stock: int = 20) -> Product:
@@ -89,19 +99,23 @@ def _admin_client_for_store(store: Store) -> APIClient:
     user = User.objects.create_user(
         email=f"admin-{store.public_id}@example.com",
         password="pass1234",
+        is_verified=True,
+        is_staff=True,
     )
-    user.is_verified = True
-    user.is_staff = True
-    user.save(update_fields=["is_verified", "is_staff"])
     StoreMembership.objects.create(
         user=user,
         store=store,
-        role=StoreMembership.Role.OWNER,
+        role=StoreMembership.Role.ADMIN,
         is_active=True,
     )
     client = APIClient()
-    client.force_authenticate(user=user)
-    client.credentials(HTTP_X_STORE_PUBLIC_ID=store.public_id)
+    resp = client.post(
+        "/api/v1/auth/token/",
+        {"email": user.email, "password": "pass1234"},
+        format="json",
+    )
+    assert resp.status_code == 200
+    client.credentials(HTTP_AUTHORIZATION=f"Bearer {resp.data['access']}")
     return client
 
 
@@ -313,7 +327,7 @@ def test_admin_can_list_orders_with_jwt():
         shipping_zone=zone,
     )
     client = _admin_client_for_store(store)
-    response = client.get("/api/v1/orders/")
+    response = client.get("/api/v1/admin/orders/")
     assert response.status_code == 200
 
 
@@ -412,11 +426,11 @@ def test_api_key_is_explicitly_blocked_on_exempt_dashboard_routes():
 
 
 @pytest.mark.django_db
-def test_staff_without_membership_cannot_switch_tenants_via_header():
+def test_staff_jwt_ignores_cross_store_header_for_tenant_resolution():
     store_a = _make_store("Tenant A")
     store_b = _make_store("Tenant B")
     zone_b = _make_zone(store_b)
-    Order.objects.create(
+    order_b = Order.objects.create(
         store=store_b,
         order_number="TENANTB0001",
         email="buyer@example.com",
@@ -428,22 +442,32 @@ def test_staff_without_membership_cannot_switch_tenants_via_header():
     user = User.objects.create_user(
         email="staff-no-membership@example.com",
         password="pass1234",
+        is_verified=True,
+        is_staff=True,
     )
-    user.is_verified = True
-    user.is_staff = True
-    user.save(update_fields=["is_verified", "is_staff"])
     StoreMembership.objects.create(
         user=user,
         store=store_a,
-        role=StoreMembership.Role.OWNER,
+        role=StoreMembership.Role.STAFF,
         is_active=True,
     )
     client = APIClient()
-    client.force_authenticate(user=user)
-    client.credentials(HTTP_X_STORE_PUBLIC_ID=store_b.public_id)
+    resp = client.post(
+        "/api/v1/auth/token/",
+        {"email": user.email, "password": "pass1234"},
+        format="json",
+    )
+    assert resp.status_code == 200
+    client.credentials(HTTP_AUTHORIZATION=f"Bearer {resp.data['access']}")
 
-    response = client.get("/api/v1/orders/")
-    assert response.status_code == 403
+    response = client.get(
+        "/api/v1/admin/orders/",
+        HTTP_X_STORE_PUBLIC_ID=store_b.public_id,
+    )
+    assert response.status_code == 200
+    results = response.data.get("results", response.data)
+    ids = [row.get("public_id") for row in results]
+    assert order_b.public_id not in ids
 
 
 @pytest.mark.django_db

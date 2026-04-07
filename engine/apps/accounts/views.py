@@ -13,7 +13,7 @@ from rest_framework_simplejwt.views import TokenRefreshView
 
 from engine.apps.billing.feature_gate import get_feature_config
 from engine.apps.emails.triggers import queue_two_fa_disabled_email
-from engine.apps.stores.models import StoreMembership
+from engine.apps.stores.models import Store, StoreMembership
 from engine.core.rate_limit_service import RateLimitExceeded
 from config.permissions import IsVerifiedUser
 from .models import UserTwoFactor
@@ -69,32 +69,24 @@ class StoreAwareTokenObtainPairSerializer(TokenObtainPairSerializer):
     @classmethod
     def get_token(cls, user):
         token = super().get_token(user)
-        membership = (
-            StoreMembership.objects.select_related("store")
-            .filter(user=user, is_active=True)
-            .order_by("created_at")
-            .first()
-        )
-        if membership:
-            token["active_store_public_id"] = membership.store.public_id
+        pid = _get_first_active_store_public_id(user)
+        if pid:
+            token["active_store_public_id"] = pid
         return token
 
     def validate(self, attrs):
         data = super().validate(attrs)
-        membership = (
-            StoreMembership.objects.select_related("store")
-            .filter(user=self.user, is_active=True)
-            .order_by("created_at")
-            .first()
-        )
-        data["active_store_public_id"] = membership.store.public_id if membership else None
+        data["active_store_public_id"] = _get_first_active_store_public_id(self.user)
         return data
 
 
 def _get_first_active_store_public_id(user):
+    owned = getattr(user, "owned_store", None)
+    if owned and owned.status == Store.Status.ACTIVE:
+        return owned.public_id
     membership = (
         StoreMembership.objects.select_related("store")
-        .filter(user=user, is_active=True)
+        .filter(user=user, is_active=True, store__status=Store.Status.ACTIVE)
         .order_by("created_at")
         .first()
     )
@@ -102,7 +94,17 @@ def _get_first_active_store_public_id(user):
 
 
 def _issue_tokens(user, store_public_id=None):
-    resolved_store_public_id = store_public_id or _get_first_active_store_public_id(user)
+    resolved = store_public_id
+    if resolved:
+        ok = StoreMembership.objects.filter(
+            user=user,
+            store__public_id=resolved,
+            is_active=True,
+            store__status=Store.Status.ACTIVE,
+        ).exists()
+        if not ok:
+            resolved = None
+    resolved_store_public_id = resolved or _get_first_active_store_public_id(user)
     refresh = RefreshToken.for_user(user)
     if resolved_store_public_id:
         refresh["active_store_public_id"] = resolved_store_public_id
@@ -157,8 +159,36 @@ class StrictTokenRefreshSerializer(TokenRefreshSerializer):
         return data
 
 
+class StoreAwareTokenRefreshSerializer(StrictTokenRefreshSerializer):
+    """
+    After validation, align `active_store_public_id` on the access token with
+    the user's first ACTIVE store membership (not suspended/inactive stores).
+    """
+
+    def validate(self, attrs):
+        data = super().validate(attrs)
+        refresh_str = data.get("refresh") or attrs.get("refresh")
+        if not refresh_str:
+            return data
+        refresh = RefreshToken(refresh_str)
+        user_public_id = refresh.get(api_settings.USER_ID_CLAIM)
+        if not user_public_id:
+            return data
+        user = User.objects.filter(public_id=user_public_id).first()
+        if user is None:
+            return data
+        store_pid = _get_first_active_store_public_id(user)
+        access = refresh.access_token
+        if store_pid:
+            access["active_store_public_id"] = store_pid
+        else:
+            access.pop("active_store_public_id", None)
+        data["access"] = str(access)
+        return data
+
+
 class StrictTokenRefreshView(TokenRefreshView):
-    serializer_class = StrictTokenRefreshSerializer
+    serializer_class = StoreAwareTokenRefreshSerializer
 
 
 class StoreAwareTokenObtainPairView(views.APIView):
@@ -269,59 +299,6 @@ class FeaturesView(views.APIView):
     def get(self, request):
         config = get_feature_config(request.user)
         return Response(config)
-
-
-# ---------------------------------------------------------------------------
-# Switch store
-# ---------------------------------------------------------------------------
-
-class SwitchStoreView(views.APIView):
-    """
-    POST /auth/switch-store/
-    Re-issue JWT tokens with a different `active_store_public_id` claim.
-    Requires `store_public_id` (public_id of the target store) in the request body.
-    """
-
-    permission_classes = [permissions.IsAuthenticated, IsVerifiedUser]
-
-    def post(self, request):
-        store_public_id = request.data.get("store_public_id")
-        if not store_public_id:
-            return Response(
-                {"detail": "store_public_id is required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        try:
-            membership = StoreMembership.objects.select_related("store").get(
-                user=request.user,
-                store__public_id=store_public_id,
-                is_active=True,
-            )
-        except (StoreMembership.DoesNotExist, ValueError):
-            return Response(
-                {"detail": "You do not have access to this store."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
-        store_public_id = membership.store.public_id
-        profile = get_or_create_profile(request.user)
-        if profile.is_enabled:
-            challenge = create_challenge(
-                request.user,
-                flow="switch_store",
-                payload={"store_public_id": store_public_id},
-            )
-            return Response(
-                {
-                    "2fa_required": True,
-                    "challenge_public_id": challenge.challenge_id,
-                    "flow": challenge.flow,
-                },
-                status=status.HTTP_202_ACCEPTED,
-            )
-
-        return Response(_issue_tokens(request.user, store_public_id=store_public_id), status=status.HTTP_200_OK)
 
 
 class TwoFactorStatusView(views.APIView):
@@ -442,11 +419,8 @@ class TwoFactorChallengeVerifyView(views.APIView):
         user = challenge.user
         if not user.is_verified:
             return _email_not_verified_response()
-        store_public_id = None
-        if challenge.flow == "switch_store":
-            store_public_id = challenge.payload.get("store_public_id")
 
-        return Response(_issue_tokens(user, store_public_id=store_public_id), status=status.HTTP_200_OK)
+        return Response(_issue_tokens(user), status=status.HTTP_200_OK)
 
 
 # ---------------------------------------------------------------------------

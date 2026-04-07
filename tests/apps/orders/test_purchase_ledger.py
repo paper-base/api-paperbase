@@ -24,6 +24,7 @@ from tests.apps.orders.test_order_item_snapshots import (
     _make_zone,
 )
 from tests.core.test_core import _ensure_default_plan, _make_membership, make_user
+from tests.test_helpers.jwt_auth import login_dashboard_jwt
 
 User = get_user_model()
 
@@ -106,8 +107,7 @@ def test_ledger_survives_order_soft_delete():
     admin = make_user("ledger-delete-details@example.com", is_staff=True)
     _make_membership(admin, store)
     admin_client = APIClient()
-    admin_client.force_authenticate(user=admin)
-    admin_client.credentials(HTTP_X_STORE_PUBLIC_ID=store.public_id)
+    login_dashboard_jwt(admin_client, admin.email)
     customer = Customer.objects.get(store=store, phone="01787654321")
     detail_resp = admin_client.get(f"/api/v1/admin/customers/{customer.public_id}/details/")
     assert detail_resp.status_code == 200
@@ -145,8 +145,7 @@ def test_admin_patch_quantity_creates_adjustment():
     admin = make_user("ledger-admin@example.com", is_staff=True)
     _make_membership(admin, store)
     admin_client = APIClient()
-    admin_client.force_authenticate(user=admin)
-    admin_client.credentials(HTTP_X_STORE_PUBLIC_ID=store.public_id)
+    login_dashboard_jwt(admin_client, admin.email)
 
     patch_resp = admin_client.patch(
         f"/api/v1/admin/orders/{opid}/",
@@ -199,8 +198,7 @@ def test_customer_list_exposes_ledger_order_count():
     admin = make_user("ledger-list@example.com", is_staff=True)
     _make_membership(admin, store)
     admin_client = APIClient()
-    admin_client.force_authenticate(user=admin)
-    admin_client.credentials(HTTP_X_STORE_PUBLIC_ID=store.public_id)
+    login_dashboard_jwt(admin_client, admin.email)
     list_resp = admin_client.get("/api/v1/admin/customers/")
     assert list_resp.status_code == 200
     results = list_resp.data.get("results", list_resp.data)
@@ -237,8 +235,7 @@ def test_two_orders_ledger_analytics_on_customer_details():
     admin = make_user("ledger-two@example.com", is_staff=True)
     _make_membership(admin, store)
     admin_client = APIClient()
-    admin_client.force_authenticate(user=admin)
-    admin_client.credentials(HTTP_X_STORE_PUBLIC_ID=store.public_id)
+    login_dashboard_jwt(admin_client, admin.email)
     detail_resp = admin_client.get(f"/api/v1/admin/customers/{customer.public_id}/details/")
     assert detail_resp.status_code == 200
     assert detail_resp.data["analytics"]["total_orders"] == 2
@@ -274,8 +271,7 @@ def test_customer_details_shows_ledger_product_name_not_live_catalog():
     admin = make_user("cust-details-admin@example.com", is_staff=True)
     _make_membership(admin, store)
     admin_client = APIClient()
-    admin_client.force_authenticate(user=admin)
-    admin_client.credentials(HTTP_X_STORE_PUBLIC_ID=store.public_id)
+    login_dashboard_jwt(admin_client, admin.email)
 
     detail_resp = admin_client.get(
         f"/api/v1/admin/customers/{customer.public_id}/details/",

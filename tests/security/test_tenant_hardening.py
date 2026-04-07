@@ -19,12 +19,22 @@ User = get_user_model()
 
 def _make_store(name: str) -> Store:
     base = normalize_store_code_base_from_name(name) or "T"
-    return Store.objects.create(
+    email = f"{name.lower().replace(' ', '')}@example.com"
+    owner = User.objects.create_user(email=email, password="pass1234", is_verified=True)
+    store = Store.objects.create(
+        owner=owner,
         name=name,
         code=allocate_unique_store_code(base),
         owner_name=f"{name} Owner",
-        owner_email=f"{name.lower().replace(' ', '')}@example.com",
+        owner_email=email,
     )
+    StoreMembership.objects.create(
+        user=owner,
+        store=store,
+        role=StoreMembership.Role.OWNER,
+        is_active=True,
+    )
+    return store
 
 
 @pytest.mark.django_db
@@ -93,12 +103,15 @@ def test_admin_product_attributes_are_scoped_by_store():
         is_active=True,
     )
     client = APIClient()
-    client.force_authenticate(user=staff)
-
-    response = client.get(
-        "/api/v1/admin/product-attributes/",
-        HTTP_X_STORE_PUBLIC_ID=store_a.public_id,
+    tok = client.post(
+        "/api/v1/auth/token/",
+        {"email": staff.email, "password": "secret123"},
+        format="json",
     )
+    assert tok.status_code == 200
+    client.credentials(HTTP_AUTHORIZATION=f"Bearer {tok.data['access']}")
+
+    response = client.get("/api/v1/admin/product-attributes/")
 
     assert response.status_code == 200
     public_ids = [row["public_id"] for row in response.data.get("results", response.data)]

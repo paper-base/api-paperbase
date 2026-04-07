@@ -20,7 +20,7 @@ User = get_user_model()
 
 def _plan_features(limits=None, features=None):
     return {
-        "limits": limits or {"max_stores": 1},
+        "limits": limits or {"max_products": 100},
         "features": features or {"basic_analytics": False, "marketing_tools": False},
     }
 
@@ -33,7 +33,7 @@ class BillingServicesTests(TestCase):
                 name="basic",
                 price=0,
                 billing_cycle="monthly",
-                features=_plan_features(limits={"max_stores": 1}),
+                features=_plan_features(limits={"max_products": 100}),
                 is_default=True,
                 is_active=True,
             )
@@ -44,7 +44,7 @@ class BillingServicesTests(TestCase):
                 price=999,
                 billing_cycle="monthly",
                 features=_plan_features(
-                    limits={"max_stores": 3},
+                    limits={"max_products": 500},
                     features={"basic_analytics": True, "marketing_tools": True},
                 ),
                 is_active=True,
@@ -61,8 +61,8 @@ class BillingServicesTests(TestCase):
 
     def test_activate_subscription_creates_subscription_and_payment(self):
         sub = activate_subscription(
-            user=self.user,
-            plan=self.plan_basic,
+            self.user,
+            self.plan_basic,
             billing_cycle="monthly",
             duration_days=30,
             source="manual",
@@ -95,6 +95,7 @@ class BillingServicesTests(TestCase):
 
     def test_downgrade_clears_order_email_notification_settings(self):
         store = Store.objects.create(
+            owner=self.user,
             name="Downgrade Store",
             code=allocate_unique_store_code("DOWNGRADE"),
             owner_name="O",
@@ -129,7 +130,7 @@ class FeatureGateTests(TestCase):
                 name="basic",
                 price=0,
                 billing_cycle="monthly",
-                features=_plan_features(limits={"max_stores": 1}),
+                features=_plan_features(limits={"max_products": 100}),
                 is_default=True,
                 is_active=True,
             )
@@ -138,7 +139,7 @@ class FeatureGateTests(TestCase):
             price=999,
             billing_cycle="monthly",
             features=_plan_features(
-                limits={"max_stores": 3},
+                limits={"max_products": 500},
                 features={"basic_analytics": True, "marketing_tools": True},
             ),
             is_active=True,
@@ -152,13 +153,13 @@ class FeatureGateTests(TestCase):
 
     def test_has_feature_returns_false_without_subscription_uses_default(self):
         self.assertFalse(has_feature(self.user, "basic_analytics"))
-        self.assertEqual(get_limit(self.user, "max_stores"), 1)
+        self.assertEqual(get_limit(self.user, "max_products"), 100)
 
     def test_has_feature_returns_true_when_subscription_has_feature(self):
         activate_subscription(self.user, self.plan_premium, source="manual", amount=0, provider="manual")
         self.assertTrue(has_feature(self.user, "basic_analytics"))
         self.assertTrue(has_feature(self.user, "marketing_tools"))
-        self.assertEqual(get_limit(self.user, "max_stores"), 3)
+        self.assertEqual(get_limit(self.user, "max_products"), 500)
 
     def test_get_limit_returns_zero_when_missing(self):
         config = get_feature_config(self.user)
@@ -187,11 +188,11 @@ class FeatureGateTests(TestCase):
         sub.status = Subscription.Status.EXPIRED
         sub.save()
         self.assertFalse(has_feature(self.user, "basic_analytics"))
-        self.assertEqual(get_limit(self.user, "max_stores"), 1)
+        self.assertEqual(get_limit(self.user, "max_products"), 100)
 
 
 class StoreCreationEnforcementTests(TestCase):
-    """Verify store creation API enforces subscription and plan limits."""
+    """Verify store creation API enforces subscription and one store per owner."""
 
     def setUp(self):
         self.client = APIClient()
@@ -201,7 +202,7 @@ class StoreCreationEnforcementTests(TestCase):
                 name="basic",
                 price=0,
                 billing_cycle="monthly",
-                features=_plan_features(limits={"max_stores": 1}),
+                features=_plan_features(limits={"max_products": 100}),
                 is_default=True,
                 is_active=True,
             )
@@ -212,7 +213,7 @@ class StoreCreationEnforcementTests(TestCase):
                 price=999,
                 billing_cycle="monthly",
                 features=_plan_features(
-                    limits={"max_stores": 3},
+                    limits={"max_products": 500},
                     features={"basic_analytics": True, "marketing_tools": True},
                 ),
                 is_active=True,
@@ -228,12 +229,13 @@ class StoreCreationEnforcementTests(TestCase):
     def _create_store_via_api(self, **overrides):
         data = {
             "name": "My Store",
-            "owner_name": "Owner",
+            "owner_first_name": "Owner",
+            "owner_last_name": "Name",
             "owner_email": "owner@example.com",
         }
         data.update(overrides)
         return self.client.post(
-            "/api/v1/stores/",
+            "/api/v1/store/",
             data,
             format="json",
             HTTP_HOST="localhost",
@@ -265,12 +267,12 @@ class StoreCreationEnforcementTests(TestCase):
         store_pid = resp.data["public_id"]
         self.assertEqual(StoreApiKey.objects.filter(store__public_id=store_pid).count(), 0)
 
-    def test_store_creation_blocked_when_limit_reached(self):
+    def test_second_store_creation_blocked(self):
         activate_subscription(self.user, self.plan_basic, source="manual", amount=0, provider="manual")
         self._create_store_via_api()
         resp = self._create_store_via_api(name="Second Store", owner_email="o2@example.com")
-        self.assertEqual(resp.status_code, 403)
-        self.assertIn("Store limit reached", resp.data.get("detail", ""))
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("already have a store", resp.data.get("detail", ""))
 
 
 class FeaturesEndpointTests(TestCase):
@@ -282,7 +284,7 @@ class FeaturesEndpointTests(TestCase):
                 name="basic",
                 price=0,
                 billing_cycle="monthly",
-                features=_plan_features(limits={"max_stores": 1}),
+                features=_plan_features(limits={"max_products": 100}),
                 is_default=True,
                 is_active=True,
             )
@@ -299,5 +301,4 @@ class FeaturesEndpointTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertIn("features", resp.data)
         self.assertIn("limits", resp.data)
-        self.assertIn("max_stores", resp.data["limits"])
-
+        self.assertIn("max_products", resp.data["limits"])

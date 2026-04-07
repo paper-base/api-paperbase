@@ -10,6 +10,11 @@ from engine.core.media_upload_paths import tenant_store_logo_upload_to
 class Store(models.Model):
     """Tenant store for the BaaS platform. Includes branding for dashboard and storefront."""
 
+    class Status(models.TextChoices):
+        ACTIVE = "active", "Active"
+        INACTIVE = "inactive", "Inactive"
+        PENDING_DELETE = "pending_delete", "Pending delete"
+
     public_id = models.CharField(
         max_length=32, unique=True, db_index=True, editable=False,
         help_text="Non-sequential public identifier used in APIs and URLs (e.g. str_xxx).",
@@ -32,7 +37,41 @@ class Store(models.Model):
         blank=True,
         help_text="Store type/category (e.g. Fashion, Retail, E-commerce). Max 4 words.",
     )
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.ACTIVE,
+        db_index=True,
+        help_text="Lifecycle state; is_active is kept in sync for legacy queries.",
+    )
+    removed_at = models.DateTimeField(null=True, blank=True)
+    delete_requested_at = models.DateTimeField(null=True, blank=True)
+    delete_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="Scheduled permanent deletion time (INACTIVE or PENDING_DELETE).",
+    )
+    last_activity_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="Last tenant API activity (ACTIVE stores only).",
+    )
+    inactive_recovery_reminder_sent_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Idempotency: INACTIVE reminder email (7 days before delete_at).",
+    )
+    pending_delete_2d_reminder_sent_at = models.DateTimeField(null=True, blank=True)
+    pending_delete_1d_reminder_sent_at = models.DateTimeField(null=True, blank=True)
     is_active = models.BooleanField(default=True)
+    owner = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="owned_store",
+        help_text="Account that owns this store (at most one store per user).",
+    )
     # Owner info (always stored with the store)
     owner_name = models.CharField(
         max_length=255,
@@ -55,9 +94,12 @@ class Store(models.Model):
     class Meta:
         indexes = [
             models.Index(fields=["is_active", "created_at"]),
+            models.Index(fields=["status", "delete_at"]),
+            models.Index(fields=["status", "last_activity_at"]),
         ]
 
     def save(self, *args, **kwargs):
+        self.is_active = self.status == self.Status.ACTIVE
         if not self.public_id:
             self.public_id = generate_public_id("store")
         locked_code = None
@@ -233,6 +275,85 @@ class StoreMembership(models.Model):
         return f"{self.user} @ {self.store} ({self.get_role_display()})"
 
 
+class StoreRestoreChallenge(models.Model):
+    """Dual-channel email OTP for restoring INACTIVE or PENDING_DELETE stores."""
+
+    class Purpose(models.TextChoices):
+        RESTORE_INACTIVE = "restore_inactive", "Restore inactive"
+        RESTORE_PENDING_DELETE = "restore_pending_delete", "Restore pending delete"
+
+    public_id = models.CharField(
+        max_length=32,
+        unique=True,
+        db_index=True,
+        editable=False,
+    )
+    store = models.ForeignKey(
+        Store,
+        on_delete=models.CASCADE,
+        related_name="restore_challenges",
+    )
+    purpose = models.CharField(max_length=40, choices=Purpose.choices, db_index=True)
+    owner_code_hash = models.CharField(max_length=64)
+    contact_code_hash = models.CharField(max_length=64)
+    single_channel = models.BooleanField(
+        default=False,
+        help_text="True when owner_email equals contact_email; one code verifies both.",
+    )
+    owner_verified_at = models.DateTimeField(null=True, blank=True)
+    contact_verified_at = models.DateTimeField(null=True, blank=True)
+    expires_at = models.DateTimeField(db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["store", "purpose", "expires_at"]),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self.public_id:
+            self.public_id = generate_public_id("storerestorechallenge")
+        super().save(*args, **kwargs)
+
+
+class StoreDeletionOtpChallenge(models.Model):
+    """
+    One-time code for scheduling permanent store deletion (owner email only).
+
+    Distinct from StoreRestoreChallenge (restore uses dual-channel semantics).
+    """
+
+    public_id = models.CharField(
+        max_length=32,
+        unique=True,
+        db_index=True,
+        editable=False,
+    )
+    store = models.ForeignKey(
+        Store,
+        on_delete=models.CASCADE,
+        related_name="deletion_otp_challenges",
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="store_deletion_otp_challenges",
+    )
+    code_hash = models.CharField(max_length=64)
+    expires_at = models.DateTimeField(db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["store", "expires_at"]),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self.public_id:
+            self.public_id = generate_public_id("stordeleteotp")
+        super().save(*args, **kwargs)
+
+
 class StoreDeletionJob(models.Model):
     """
     Track irreversible store deletion progress for the initiating user.
@@ -277,6 +398,11 @@ class StoreDeletionJob(models.Model):
         db_index=True,
         help_text="Store primary key snapshot taken at deletion request time.",
     )
+    delete_at_snapshot = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Expected hard-delete time when the job was created (scheduled deletion).",
+    )
 
     celery_task_id = models.CharField(max_length=255, blank=True, null=True, db_index=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING, db_index=True)
@@ -311,6 +437,40 @@ class StoreDeletionJob(models.Model):
 
     def __str__(self) -> str:
         return f"StoreDeletionJob({self.store_public_id_snapshot})[{self.status}]"
+
+
+class StoreLifecycleAuditLog(models.Model):
+    """Append-only security audit for store lifecycle actions."""
+
+    class Action(models.TextChoices):
+        STORE_REMOVE = "STORE_REMOVE", "Store remove"
+        STORE_DELETE_OTP_SENT = "STORE_DELETE_OTP_SENT", "Delete OTP sent"
+        STORE_DELETE_SCHEDULED = "STORE_DELETE_SCHEDULED", "Delete scheduled"
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    store = models.ForeignKey(
+        Store,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="lifecycle_audit_logs",
+    )
+    store_public_id = models.CharField(max_length=32, db_index=True)
+    action = models.CharField(max_length=40, choices=Action.choices, db_index=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["store_public_id", "-created_at"]),
+        ]
 
 
 class StoreApiKey(models.Model):

@@ -14,49 +14,71 @@ class ActiveStoreContext:
     membership: Optional[StoreMembership]
 
 
+def _membership_for(user, store: Store) -> Optional[StoreMembership]:
+    if not user or not getattr(user, "is_authenticated", False):
+        return None
+    try:
+        return StoreMembership.objects.get(
+            user=user,
+            store=store,
+            is_active=True,
+        )
+    except StoreMembership.DoesNotExist:
+        return None
+
+
 def get_active_store(request: HttpRequest) -> ActiveStoreContext:
     """
     Resolve the active store for the current request.
 
     Priority:
-    1) API key-resolved request.store (for tenant/public APIs)
-    2) Explicit X-Store-Public-ID header (dashboard/admin)
-    3) JWT claim `active_store_public_id`
+    1) API key-resolved request.store (storefront / tenant public APIs)
+    2) Superuser: optional X-Store-Public-ID for platform tooling
+    3) Authenticated store owner: request.user.owned_store (ignores client store hints)
+    4) Staff (no owned store): JWT claim active_store_public_id only (no header)
     """
     store_from_api_key = getattr(request, "store", None)
     store: Optional[Store] = store_from_api_key
     membership: Optional[StoreMembership] = None
-    header_store_public_id = request.headers.get("X-Store-Public-ID") or request.headers.get("x-store-public-id")
-    token_store_public_id = None
-    if getattr(request, "auth", None):
+    user = getattr(request, "user", None)
+
+    # 1) Storefront API key
+    if store is not None:
+        if user and getattr(user, "is_authenticated", False):
+            membership = _membership_for(user, store)
+        return ActiveStoreContext(store=store, membership=membership)
+
+    # 2) Platform superuser
+    if getattr(user, "is_authenticated", False) and getattr(user, "is_superuser", False):
+        header_store_public_id = request.headers.get("X-Store-Public-ID") or request.headers.get(
+            "x-store-public-id"
+        )
+        if header_store_public_id:
+            store = Store.objects.filter(public_id=header_store_public_id).first()
+        if store:
+            membership = _membership_for(user, store)
+        return ActiveStoreContext(store=store, membership=membership)
+
+    # 3) Owner: single source of truth — never trust header/JWT for tenancy
+    if getattr(user, "is_authenticated", False):
+        owned = getattr(user, "owned_store", None)
+        if owned is not None:
+            store = owned
+            membership = _membership_for(user, store)
+            return ActiveStoreContext(store=store, membership=membership)
+
+    # 4) Staff: JWT claim only
+    if getattr(user, "is_authenticated", False) and getattr(request, "auth", None):
         token_store_public_id = request.auth.get("active_store_public_id")  # type: ignore[union-attr]
-
-    if store is None and header_store_public_id:
-        store = Store.objects.filter(public_id=header_store_public_id, is_active=True).first()
-    if store is None and token_store_public_id:
-        store = Store.objects.filter(public_id=token_store_public_id, is_active=True).first()
-
-    if store and getattr(request.user, "is_authenticated", False):
-        try:
-            membership = StoreMembership.objects.get(
-                user=request.user,
-                store=store,
-                is_active=True,
-            )
-        except StoreMembership.DoesNotExist:
-            membership = None
-        # Fail-closed for dashboard/authenticated contexts:
-        # selecting a store by header/JWT claim requires explicit membership.
-        # Storefront publishable key already bound `request.store`; do not strip it
-        # when the logged-in user has no StoreMembership (e.g. shopper + session).
-        if (
-            membership is None
-            and not getattr(request.user, "is_superuser", False)
-            and store_from_api_key is None
-        ):
+        if token_store_public_id:
+            store = Store.objects.filter(public_id=token_store_public_id).first()
+        if store:
+            membership = _membership_for(user, store)
+        if membership is None:
             store = None
+        return ActiveStoreContext(store=store, membership=membership)
 
-    return ActiveStoreContext(store=store, membership=membership)
+    return ActiveStoreContext(store=None, membership=None)
 
 
 def require_resolved_store(request: HttpRequest) -> None:

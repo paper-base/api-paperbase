@@ -6,7 +6,6 @@ from .views import (
     RegisterView,
     MeView,
     FeaturesView,
-    SwitchStoreView,
     PasswordChangeView,
     PasswordResetRequestView,
     PasswordResetConfirmView,
@@ -37,7 +36,6 @@ urlpatterns = [
     # Profile
     path("me/", MeView.as_view(), name="auth_me"),
     path("features/", FeaturesView.as_view(), name="auth_features"),
-    path("switch-store/", SwitchStoreView.as_view(), name="auth_switch_store"),
 
     # Password management
     path("password/change/", PasswordChangeView.as_view(), name="password_change"),

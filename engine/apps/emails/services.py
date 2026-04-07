@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import copy
+from datetime import date, datetime
 
 from django.conf import settings
 from django.template import Context, Template
 from django.utils import timezone
 
+from .display_time import format_email_date_in_display_tz, format_email_datetime
 from .models import EmailLog, EmailTemplate
 from .template_catalog import DEFAULT_EMAIL_TEMPLATES
 
@@ -14,6 +16,24 @@ from .providers.django_mail import DjangoCoreMailProvider
 from .providers.resend import ResendEmailProvider
 
 _ERROR_MAX_LEN = 8000
+
+
+def _normalize_email_context(obj):
+    """
+    Recursively format datetime/date values for templates (DD-MM-YYYY HH:MM or DD-MM-YYYY).
+    datetime is handled before date because datetime is a subclass of date.
+    """
+    if isinstance(obj, datetime):
+        return format_email_datetime(obj)
+    if type(obj) is date:
+        return format_email_date_in_display_tz(obj)
+    if isinstance(obj, dict):
+        return {k: _normalize_email_context(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_normalize_email_context(v) for v in obj]
+    if isinstance(obj, tuple):
+        return tuple(_normalize_email_context(v) for v in obj)
+    return obj
 
 
 def _render(template_string: str, context: dict) -> str:
@@ -39,7 +59,7 @@ def send_email(
 
     Intended to be called from Celery tasks (not from HTTP views directly).
     """
-    ctx = copy.deepcopy(context) if context else {}
+    ctx = _normalize_email_context(copy.deepcopy(context) if context else {})
     try:
         template = EmailTemplate.objects.get(type=email_type, is_active=True)
     except EmailTemplate.DoesNotExist:

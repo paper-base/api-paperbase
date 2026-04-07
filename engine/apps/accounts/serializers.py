@@ -8,7 +8,7 @@ from rest_framework import serializers
 from engine.core.serializers import SafeModelSerializer
 
 from engine.apps.emails.tasks import send_email_task  # Backwards-compatible test patch target.
-from engine.apps.stores.models import StoreMembership
+from engine.apps.stores.models import Store, StoreMembership
 from .avatar_url import dicebear_avatar_url
 from .services import (
     change_user_password,
@@ -93,20 +93,26 @@ class RegisterSerializer(serializers.Serializer):
 # Me / Profile
 # ---------------------------------------------------------------------------
 
-class StoreSummarySerializer(SafeModelSerializer):
-    role = serializers.CharField(source="get_role_display")
-    store_public_id = serializers.CharField(source="store.public_id", read_only=True)
 
-    class Meta:
-        model = StoreMembership
-        fields = ["store_public_id", "role"]
+def _first_active_store_public_id_for_user(user):
+    owned = getattr(user, "owned_store", None)
+    if owned and owned.status == Store.Status.ACTIVE:
+        return owned.public_id
+    m = (
+        StoreMembership.objects.select_related("store")
+        .filter(user=user, is_active=True, store__status=Store.Status.ACTIVE)
+        .order_by("created_at")
+        .first()
+    )
+    return m.store.public_id if m else None
 
 
 class MeSerializer(SafeModelSerializer):
     full_name = serializers.CharField(read_only=True)
     avatar_url = serializers.SerializerMethodField()
-    stores = serializers.SerializerMethodField()
+    store = serializers.SerializerMethodField()
     active_store_public_id = serializers.SerializerMethodField()
+    has_recoverable_stores = serializers.SerializerMethodField()
     subscription = serializers.SerializerMethodField()
 
     class Meta:
@@ -125,8 +131,9 @@ class MeSerializer(SafeModelSerializer):
             "is_superuser",
             "date_joined",
             "active_store_public_id",
+            "has_recoverable_stores",
             "subscription",
-            "stores",
+            "store",
         ]
         read_only_fields = [
             "public_id",
@@ -142,10 +149,16 @@ class MeSerializer(SafeModelSerializer):
         return dicebear_avatar_url(seed)
 
     def get_active_store_public_id(self, obj):
-        request = self.context.get("request")
-        if request and getattr(request, "auth", None):
-            return request.auth.get("active_store_public_id")
-        return None
+        # Server truth: first ACTIVE membership (avoids stale JWT pointing at suspended stores).
+        return _first_active_store_public_id_for_user(obj)
+
+    def get_has_recoverable_stores(self, obj):
+        return Store.objects.filter(
+            memberships__user=obj,
+            memberships__role=StoreMembership.Role.OWNER,
+            memberships__is_active=True,
+            status__in=[Store.Status.INACTIVE, Store.Status.PENDING_DELETE],
+        ).exists()
 
     def get_subscription(self, obj):
         from engine.apps.billing.services import get_active_subscription
@@ -158,19 +171,27 @@ class MeSerializer(SafeModelSerializer):
             "end_date": sub.end_date.isoformat(),
         }
 
-    def get_stores(self, obj):
-        memberships = StoreMembership.objects.select_related("store").filter(
-            user=obj,
-            is_active=True,
+    def get_store(self, obj):
+        owned = getattr(obj, "owned_store", None)
+        if owned:
+            return {
+                "public_id": owned.public_id,
+                "name": owned.name,
+                "role": "Owner",
+            }
+        m = (
+            StoreMembership.objects.select_related("store")
+            .filter(user=obj, is_active=True, store__status=Store.Status.ACTIVE)
+            .order_by("created_at")
+            .first()
         )
-        return [
-            {
+        if m:
+            return {
                 "public_id": m.store.public_id,
                 "name": m.store.name,
                 "role": m.get_role_display(),
             }
-            for m in memberships
-        ]
+        return None
 
 
 # ---------------------------------------------------------------------------

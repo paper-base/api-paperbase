@@ -20,17 +20,29 @@ from engine.core.tenant_execution import tenant_scope_from_store
 
 def _store():
     d = f"t{_uuid.uuid4().hex[:12]}.local"
-    from engine.apps.stores.models import Store
+    from django.contrib.auth import get_user_model
+
+    from engine.apps.stores.models import Store, StoreMembership
     from engine.apps.stores.services import allocate_unique_store_code
 
-    return Store.objects.create(
+    email = f"owner@{d}"
+    owner = get_user_model().objects.create_user(email=email, password="pass1234", is_verified=True)
+    store = Store.objects.create(
+        owner=owner,
         name="S",
         code=allocate_unique_store_code("S"),
         owner_name="O",
-        owner_email=f"owner@{d}",
+        owner_email=email,
         currency="BDT",
         currency_symbol="৳",
     )
+    StoreMembership.objects.create(
+        user=owner,
+        store=store,
+        role=StoreMembership.Role.OWNER,
+        is_active=True,
+    )
+    return store
 
 
 def _zone(store):

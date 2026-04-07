@@ -1,45 +1,39 @@
 """Admin PATCH product: remove_image clears main image; new upload replaces."""
 
+from io import BytesIO
+
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from rest_framework import status
 from rest_framework.test import APIClient
 
 from engine.apps.products.models import Product
-from engine.apps.stores.models import StoreMembership
 from tests.core.test_core import (
     _ensure_default_plan,
     _make_category,
     _make_store,
     make_user,
 )
+from tests.test_helpers.jwt_auth import login_dashboard_jwt
 
 
 def _tiny_png() -> bytes:
-    return (
-        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
-        b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01"
-        b"\x00\x00\x05\x00\x01\r\n-\xdb\x00\x00\x00\x00IEND\xaeB`\x82"
-    )
+    """Minimal valid PNG bytes (Pillow) so django validates the upload."""
+    from PIL import Image
+
+    buf = BytesIO()
+    Image.new("RGB", (2, 2), color=(200, 100, 50)).save(buf, format="PNG")
+    return buf.getvalue()
 
 
 class AdminProductRemoveImageTests(TestCase):
     def setUp(self):
         _ensure_default_plan()
         self.client = APIClient()
-        self.store = _make_store("ImgRm Store", "img-rm.local")
         self.user = make_user("img-rm-owner@example.com")
-        StoreMembership.objects.create(
-            user=self.user,
-            store=self.store,
-            role=StoreMembership.Role.OWNER,
-            is_active=True,
-        )
-        self.client.force_authenticate(user=self.user)
+        self.store = _make_store("ImgRm Store", "img-rm.local", owner_email=self.user.email)
+        login_dashboard_jwt(self.client, self.user.email)
         self.category = _make_category(self.store, "ImgRmCat")
-
-    def _headers(self):
-        return {"HTTP_X_STORE_PUBLIC_ID": self.store.public_id}
 
     def test_patch_remove_image_true_clears_main_image(self):
         png = _tiny_png()
@@ -55,7 +49,6 @@ class AdminProductRemoveImageTests(TestCase):
                 "image": up,
             },
             format="multipart",
-            **self._headers(),
         )
         self.assertEqual(pr.status_code, status.HTTP_201_CREATED, pr.data)
         pid = pr.data["public_id"]
@@ -65,7 +58,6 @@ class AdminProductRemoveImageTests(TestCase):
             f"/api/v1/admin/products/{pid}/",
             {"remove_image": "true"},
             format="multipart",
-            **self._headers(),
         )
         self.assertEqual(patch.status_code, status.HTTP_200_OK, patch.data)
         self.assertFalse(patch.data.get("image"))
@@ -85,7 +77,6 @@ class AdminProductRemoveImageTests(TestCase):
                 "image": SimpleUploadedFile("a.png", png, content_type="image/png"),
             },
             format="multipart",
-            **self._headers(),
         )
         self.assertEqual(pr.status_code, status.HTTP_201_CREATED, pr.data)
         pid = pr.data["public_id"]
@@ -94,7 +85,6 @@ class AdminProductRemoveImageTests(TestCase):
             f"/api/v1/admin/products/{pid}/",
             {"remove_image": "true"},
             format="multipart",
-            **self._headers(),
         )
         self.assertEqual(patch_clear.status_code, status.HTTP_200_OK, patch_clear.data)
 
@@ -104,7 +94,6 @@ class AdminProductRemoveImageTests(TestCase):
                 "image": SimpleUploadedFile("b.png", png, content_type="image/png"),
             },
             format="multipart",
-            **self._headers(),
         )
         self.assertEqual(patch_new.status_code, status.HTTP_200_OK, patch_new.data)
         self.assertTrue(patch_new.data.get("image") or patch_new.data.get("image_url"))

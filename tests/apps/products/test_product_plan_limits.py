@@ -10,7 +10,6 @@ from rest_framework.test import APIClient
 from engine.apps.billing.models import Plan
 from engine.apps.billing.services import activate_subscription
 from engine.apps.products.models import Product
-from engine.apps.stores.models import StoreMembership
 from engine.core.ids import generate_public_id
 from engine.core.tenant_execution import tenant_scope_from_store
 from tests.core.test_core import _make_category, _make_store, make_user
@@ -41,19 +40,10 @@ def _bulk_products(store, category, n: int) -> None:
 class ProductPlanLimitTests(TestCase):
     def setUp(self):
         self.client = APIClient()
-        self.store = _make_store("Plan Limit Store", "plan-limit.local")
         self.user = make_user("plan-limit-owner@example.com")
-        StoreMembership.objects.create(
-            user=self.user,
-            store=self.store,
-            role=StoreMembership.Role.OWNER,
-            is_active=True,
-        )
+        self.store = _make_store("Plan Limit Store", "plan-limit.local", owner_user=self.user)
         self.client.force_authenticate(user=self.user)
         self.category = _make_category(self.store, "PlanLimitCat")
-
-    def _headers(self):
-        return {"HTTP_X_STORE_PUBLIC_ID": self.store.public_id}
 
     def _post_product(self, name: str = "API Product"):
         return self.client.post(
@@ -66,7 +56,6 @@ class ProductPlanLimitTests(TestCase):
                 "description": "",
             },
             format="json",
-            **self._headers(),
         )
 
     def test_max_products_100_allows_100_blocks_101(self):
@@ -76,7 +65,7 @@ class ProductPlanLimitTests(TestCase):
             billing_cycle=Plan.BillingCycle.MONTHLY,
             is_active=True,
             features={
-                "limits": {"max_stores": 5, "max_products": 100},
+                "limits": {"max_products": 100},
                 "features": {},
             },
         )
@@ -101,7 +90,7 @@ class ProductPlanLimitTests(TestCase):
             billing_cycle=Plan.BillingCycle.MONTHLY,
             is_active=True,
             features={
-                "limits": {"max_stores": 5, "max_products": 200},
+                "limits": {"max_products": 200},
                 "features": {},
             },
         )
@@ -126,7 +115,7 @@ class ProductPlanLimitTests(TestCase):
             billing_cycle=Plan.BillingCycle.MONTHLY,
             is_active=True,
             features={
-                "limits": {"max_stores": 1},
+                "limits": {},
                 "features": {},
             },
         )

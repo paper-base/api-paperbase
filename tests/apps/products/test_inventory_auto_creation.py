@@ -8,9 +8,9 @@ from engine.apps.inventory.models import Inventory
 from engine.apps.inventory.services import adjust_inventory_stock, adjust_stock
 from engine.apps.inventory.utils import MAX_STOCK_QUANTITY
 from engine.apps.products.models import Product, ProductVariant
-from engine.apps.stores.models import StoreMembership
 from engine.core.tenant_execution import tenant_scope_from_store
 from tests.core.test_core import _ensure_default_plan, _make_category, _make_store, make_user
+from tests.test_helpers.jwt_auth import login_dashboard_jwt
 
 
 class InventoryAutoCreationTests(TestCase):
@@ -19,19 +19,10 @@ class InventoryAutoCreationTests(TestCase):
     def setUp(self):
         _ensure_default_plan()
         self.client = APIClient()
-        self.store = _make_store("Inv Auto Store", "inv-auto.local")
         self.user = make_user("inv-auto-owner@example.com")
-        StoreMembership.objects.create(
-            user=self.user,
-            store=self.store,
-            role=StoreMembership.Role.OWNER,
-            is_active=True,
-        )
-        self.client.force_authenticate(user=self.user)
+        self.store = _make_store("Inv Auto Store", "inv-auto.local", owner_email=self.user.email)
+        login_dashboard_jwt(self.client, self.user.email)
         self.category = _make_category(self.store, "InvAutoCat")
-
-    def _store_headers(self):
-        return {"HTTP_X_STORE_PUBLIC_ID": self.store.public_id}
 
     # ------------------------------------------------------------------
     # Case 1: Simple product gets product-level inventory
@@ -48,7 +39,6 @@ class InventoryAutoCreationTests(TestCase):
                 "description": "",
             },
             format="json",
-            **self._store_headers(),
         )
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED, resp.data)
         with tenant_scope_from_store(store=self.store, reason="test"):
@@ -72,7 +62,6 @@ class InventoryAutoCreationTests(TestCase):
                 "description": "",
             },
             format="json",
-            **self._store_headers(),
         )
         self.assertEqual(pr.status_code, status.HTTP_201_CREATED)
         with tenant_scope_from_store(store=self.store, reason="test"):
@@ -92,7 +81,6 @@ class InventoryAutoCreationTests(TestCase):
                 "is_active": True,
             },
             format="json",
-            **self._store_headers(),
         )
         self.assertEqual(vr.status_code, status.HTTP_201_CREATED, vr.data)
 
@@ -123,7 +111,6 @@ class InventoryAutoCreationTests(TestCase):
                 "description": "",
             },
             format="json",
-            **self._store_headers(),
         )
         product_pid = pr.data["public_id"]
         with tenant_scope_from_store(store=self.store, reason="test"):
@@ -138,7 +125,6 @@ class InventoryAutoCreationTests(TestCase):
                 "is_active": True,
             },
             format="json",
-            **self._store_headers(),
         )
         self.assertEqual(vr.status_code, status.HTTP_201_CREATED)
         with tenant_scope_from_store(store=self.store, reason="test"):
@@ -164,7 +150,6 @@ class InventoryAutoCreationTests(TestCase):
                 "description": "",
             },
             format="json",
-            **self._store_headers(),
         )
         product_pid = pr.data["public_id"]
         for _ in range(2):
@@ -176,7 +161,6 @@ class InventoryAutoCreationTests(TestCase):
                     "is_active": True,
                 },
                 format="json",
-                **self._store_headers(),
             )
             self.assertEqual(r.status_code, status.HTTP_201_CREATED, r.data)
         with tenant_scope_from_store(store=self.store, reason="test"):
@@ -205,7 +189,6 @@ class InventoryAutoCreationTests(TestCase):
                 "description": "",
             },
             format="json",
-            **self._store_headers(),
         )
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
         with tenant_scope_from_store(store=self.store, reason="test"):
@@ -236,7 +219,6 @@ class InventoryAutoCreationTests(TestCase):
                 "description": "",
             },
             format="json",
-            **self._store_headers(),
         )
         product_pid = pr.data["public_id"]
 
@@ -248,7 +230,6 @@ class InventoryAutoCreationTests(TestCase):
                 "is_active": True,
             },
             format="json",
-            **self._store_headers(),
         )
         self.assertEqual(vr.status_code, status.HTTP_201_CREATED)
         with tenant_scope_from_store(store=self.store, reason="test"):
@@ -258,15 +239,11 @@ class InventoryAutoCreationTests(TestCase):
                 Inventory.objects.filter(product=product, variant__isnull=True).exists()
             )
 
-        self.user.is_superuser = True
-        self.user.save(update_fields=["is_superuser"])
-
         variant_pid = vr.data["public_id"]
         dr = self.client.delete(
             f"/api/v1/admin/product-variants/{variant_pid}/",
-            **self._store_headers(),
         )
-        self.assertEqual(dr.status_code, status.HTTP_204_NO_CONTENT, dr.data if hasattr(dr, 'data') else "")
+        self.assertEqual(dr.status_code, status.HTTP_204_NO_CONTENT, dr.data if hasattr(dr, "data") else "")
         with tenant_scope_from_store(store=self.store, reason="test"):
             product = Product.objects.get(public_id=product_pid)
             variant = ProductVariant.objects.filter(public_id=variant_pid).first()
@@ -291,7 +268,6 @@ class InventoryAutoCreationTests(TestCase):
                 "description": "",
             },
             format="json",
-            **self._store_headers(),
         )
         product_pid = pr.data["public_id"]
         variant_pids: list[str] = []
@@ -304,17 +280,12 @@ class InventoryAutoCreationTests(TestCase):
                     "is_active": True,
                 },
                 format="json",
-                **self._store_headers(),
             )
             self.assertEqual(r.status_code, status.HTTP_201_CREATED)
             variant_pids.append(r.data["public_id"])
 
-        self.user.is_superuser = True
-        self.user.save(update_fields=["is_superuser"])
-
         dr = self.client.delete(
             f"/api/v1/admin/product-variants/{variant_pids[0]}/",
-            **self._store_headers(),
         )
         self.assertEqual(dr.status_code, status.HTTP_204_NO_CONTENT)
         with tenant_scope_from_store(store=self.store, reason="test"):
@@ -339,7 +310,6 @@ class InventoryAutoCreationTests(TestCase):
                 "description": "",
             },
             format="json",
-            **self._store_headers(),
         )
         self.assertEqual(pr.status_code, status.HTTP_201_CREATED, pr.data)
         with tenant_scope_from_store(store=self.store, reason="test"):
@@ -368,7 +338,6 @@ class InventoryAutoCreationTests(TestCase):
                 "description": "",
             },
             format="json",
-            **self._store_headers(),
         )
         self.assertEqual(pr.status_code, status.HTTP_201_CREATED, pr.data)
         product_pid = pr.data["public_id"]
@@ -384,7 +353,6 @@ class InventoryAutoCreationTests(TestCase):
                 "is_active": True,
             },
             format="json",
-            **self._store_headers(),
         )
         self.assertEqual(vr.status_code, status.HTTP_201_CREATED, vr.data)
         with tenant_scope_from_store(store=self.store, reason="test"):

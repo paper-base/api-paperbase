@@ -17,13 +17,14 @@ User = get_user_model()
 class TwoFactorFlowTests(TestCase):
     def setUp(self):
         self.client = APIClient()
+        self.user = User.objects.create_user(email="owner@2fa.local", password="pass1234", is_verified=True)
         self.store = Store.objects.create(
+            owner=self.user,
             name="2FA Store",
             code=allocate_unique_store_code("TWOFASTOR"),
             owner_name="Owner",
             owner_email="owner@2fa.local",
         )
-        self.user = User.objects.create_user(email="owner@2fa.local", password="pass1234", is_verified=True)
         StoreMembership.objects.create(
             user=self.user,
             store=self.store,
@@ -36,7 +37,6 @@ class TwoFactorFlowTests(TestCase):
             "/api/v1/auth/token/",
             {"email": self.user.email, "password": "pass1234"},
             format="json",
-            HTTP_X_STORE_PUBLIC_ID=self.store.public_id,
         )
         self.assertEqual(resp.status_code, 200)
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {resp.data['access']}")
@@ -59,7 +59,6 @@ class TwoFactorFlowTests(TestCase):
             "/api/v1/auth/token/",
             {"email": self.user.email, "password": "pass1234"},
             format="json",
-            HTTP_X_STORE_PUBLIC_ID=self.store.public_id,
         )
         self.assertEqual(login_resp.status_code, 202)
         self.assertTrue(login_resp.data["2fa_required"])
@@ -78,7 +77,6 @@ class TwoFactorFlowTests(TestCase):
             "/api/v1/auth/token/",
             {"email": self.user.email, "password": "pass1234"},
             format="json",
-            HTTP_X_STORE_PUBLIC_ID=self.store.public_id,
         )
         self.assertEqual(login_resp.status_code, 202)
         challenge_public_id = login_resp.data["challenge_public_id"]
@@ -144,13 +142,14 @@ class TwoFactorRecoveryTests(TestCase):
     def setUp(self):
         cache.clear()
         self.client = APIClient()
+        self.user = User.objects.create_user(email="owner@rec.local", password="pass1234", is_verified=True)
         self.store = Store.objects.create(
+            owner=self.user,
             name="Rec Store",
             code=allocate_unique_store_code("RECSTORE"),
             owner_name="Owner",
             owner_email="owner@rec.local",
         )
-        self.user = User.objects.create_user(email="owner@rec.local", password="pass1234", is_verified=True)
         StoreMembership.objects.create(
             user=self.user,
             store=self.store,
@@ -163,7 +162,6 @@ class TwoFactorRecoveryTests(TestCase):
             "/api/v1/auth/token/",
             {"email": self.user.email, "password": "pass1234"},
             format="json",
-            HTTP_X_STORE_PUBLIC_ID=self.store.public_id,
         )
         self.assertEqual(resp.status_code, 200)
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {resp.data['access']}")

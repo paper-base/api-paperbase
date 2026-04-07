@@ -1,8 +1,8 @@
-"""Fixed GMT+6 formatting for transactional email copy (independent of server TIME_ZONE)."""
+"""Display formatting for transactional email copy (GMT+6, no DST)."""
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from django.utils import timezone as dj_tz
 
@@ -17,14 +17,26 @@ def _ensure_aware_utc(dt: datetime) -> datetime:
 
 
 def format_email_datetime(dt: datetime | None = None) -> str:
-    """Format an instant as YYYY-MM-DD HH:MM:SS AM/PM in GMT+6 (callers/templates add zone label if needed)."""
+    """
+    Format an instant as DD-MM-YYYY HH:MM (24h) in GMT+6.
+    Used for event times, expiries, and timestamps in email bodies.
+    """
     if dt is None:
         dt = dj_tz.now()
-    return _ensure_aware_utc(dt).astimezone(EMAIL_DISPLAY_TZ).strftime("%Y-%m-%d %I:%M:%S %p")
+    return _ensure_aware_utc(dt).astimezone(EMAIL_DISPLAY_TZ).strftime("%d-%m-%Y %H:%M")
 
 
-def format_email_date_in_display_tz(dt: datetime | None = None) -> str:
-    """Calendar date in GMT+6 as YYYY-MM-DD (e.g. payment date lines)."""
+def format_email_date_in_display_tz(dt: datetime | date | None = None) -> str:
+    """
+    Calendar date as DD-MM-YYYY.
+    For datetime values, uses the calendar date in GMT+6; for date values, formats as-is.
+    """
     if dt is None:
-        dt = dj_tz.now()
-    return _ensure_aware_utc(dt).astimezone(EMAIL_DISPLAY_TZ).date().isoformat()
+        d = dj_tz.now().astimezone(EMAIL_DISPLAY_TZ).date()
+    elif isinstance(dt, datetime):
+        d = _ensure_aware_utc(dt).astimezone(EMAIL_DISPLAY_TZ).date()
+    elif isinstance(dt, date):
+        d = dt
+    else:
+        d = dj_tz.now().astimezone(EMAIL_DISPLAY_TZ).date()
+    return d.strftime("%d-%m-%Y")

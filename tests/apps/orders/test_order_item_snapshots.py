@@ -28,12 +28,22 @@ User = get_user_model()
 
 def _make_store(name: str) -> Store:
     base = normalize_store_code_base_from_name(name) or "T"
-    return Store.objects.create(
+    email = f"{name.lower().replace(' ', '')}@example.com"
+    owner = User.objects.create_user(email=email, password="pass1234", is_verified=True)
+    store = Store.objects.create(
+        owner=owner,
         name=name,
         code=allocate_unique_store_code(base),
         owner_name=f"{name} Owner",
-        owner_email=f"{name.lower().replace(' ', '')}@example.com",
+        owner_email=email,
     )
+    StoreMembership.objects.create(
+        user=owner,
+        store=store,
+        role=StoreMembership.Role.OWNER,
+        is_active=True,
+    )
+    return store
 
 
 def _make_product(store: Store, *, name: str = "Product", price: int = 100, stock: int = 20) -> Product:
@@ -93,19 +103,23 @@ def _admin_client_for_store(store: Store) -> APIClient:
     user = User.objects.create_user(
         email=f"admin-{store.public_id}@example.com",
         password="pass1234",
+        is_verified=True,
+        is_staff=True,
     )
-    user.is_verified = True
-    user.is_staff = True
-    user.save(update_fields=["is_verified", "is_staff"])
     StoreMembership.objects.create(
         user=user,
         store=store,
-        role=StoreMembership.Role.OWNER,
+        role=StoreMembership.Role.ADMIN,
         is_active=True,
     )
     client = APIClient()
-    client.force_authenticate(user=user)
-    client.credentials(HTTP_X_STORE_PUBLIC_ID=store.public_id)
+    resp = client.post(
+        "/api/v1/auth/token/",
+        {"email": user.email, "password": "pass1234"},
+        format="json",
+    )
+    assert resp.status_code == 200
+    client.credentials(HTTP_AUTHORIZATION=f"Bearer {resp.data['access']}")
     return client
 
 

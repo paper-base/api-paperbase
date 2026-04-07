@@ -35,11 +35,20 @@ User = get_user_model()
 
 def _store():
     d = f"t{_uuid.uuid4().hex[:12]}.local"
+    email = f"owner@{d}"
+    owner = User.objects.create_user(email=email, password="pass1234", is_verified=True)
     store = Store.objects.create(
+        owner=owner,
         name="S",
         code=allocate_unique_store_code("S"),
         owner_name="O",
-        owner_email=f"owner@{d}",
+        owner_email=email,
+    )
+    StoreMembership.objects.create(
+        user=owner,
+        store=store,
+        role=StoreMembership.Role.OWNER,
+        is_active=True,
     )
     return store
 
@@ -69,14 +78,6 @@ def _store_with_owner_and_settings(
     email_notify_customer: bool = True,
 ):
     store = _store()
-    User.objects.create_user(email=store.owner_email, password="pass")
-    owner = User.objects.get(email=store.owner_email)
-    StoreMembership.objects.create(
-        user=owner,
-        store=store,
-        role=StoreMembership.Role.OWNER,
-        is_active=True,
-    )
     settings, _ = StoreSettings.objects.get_or_create(store=store)
     settings.email_notify_owner_on_order_received = email_notify_owner
     settings.email_customer_on_order_confirmed = email_notify_customer
@@ -183,7 +184,7 @@ class SubscriptionPaymentEmailTests(TestCase):
                 price="999.00",
                 billing_cycle="monthly",
                 is_active=True,
-                features={"limits": {"max_stores": 3}, "features": {"basic_analytics": True}},
+                features={"limits": {"max_products": 500}, "features": {"basic_analytics": True}},
             )
 
     @patch("engine.apps.emails.tasks.send_email_task.delay")
@@ -244,7 +245,7 @@ class PlatformNewSubscriptionEmailTests(TestCase):
                 price="999.00",
                 billing_cycle="monthly",
                 is_active=True,
-                features={"limits": {"max_stores": 3}, "features": {"basic_analytics": True}},
+                features={"limits": {"max_products": 500}, "features": {"basic_analytics": True}},
             )
         activate_subscription(user, plan, source="manual", amount=0, provider="manual")
         types_queued = [c.args[0] for c in mock_delay.call_args_list]

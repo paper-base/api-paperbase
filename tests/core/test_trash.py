@@ -24,21 +24,20 @@ from .test_core import (
     _make_store,
     make_user,
 )
+from tests.test_helpers.jwt_auth import login_dashboard_jwt
 
 
 class TrashSoftDeleteTests(TestCase):
     def setUp(self):
         self.client = APIClient()
         _ensure_default_plan()
-        self.store = _make_store("Trash Store", "trash-store.local")
         self.owner = make_user("trash-owner@example.com")
-        _make_membership(self.owner, self.store, StoreMembership.Role.OWNER)
+        self.store = _make_store("Trash Store", "trash-store.local", owner_email=self.owner.email)
         self.cat = _make_category(self.store, "Trash Cat")
         self.product = _make_product(self.store, self.cat, name="Trash Product")
 
     def _auth_owner(self):
-        self.client.force_authenticate(user=self.owner)
-        self.client.credentials(HTTP_X_STORE_PUBLIC_ID=self.store.public_id)
+        login_dashboard_jwt(self.client, self.owner.email)
 
     def test_store_admin_delete_creates_trash_and_removes_product(self):
         self._auth_owner()
@@ -67,8 +66,7 @@ class TrashSoftDeleteTests(TestCase):
     def test_staff_cannot_access_trash(self):
         staff = make_user("trash-staff@example.com")
         _make_membership(staff, self.store, StoreMembership.Role.STAFF)
-        self.client.force_authenticate(user=staff)
-        self.client.credentials(HTTP_X_STORE_PUBLIC_ID=self.store.public_id)
+        login_dashboard_jwt(self.client, staff.email)
         resp = self.client.get("/api/v1/admin/trash/")
         self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
 
@@ -87,11 +85,9 @@ class TrashSoftDeleteTests(TestCase):
         self.client.delete(f"/api/v1/admin/products/{self.product.public_id}/")
         tid = TrashItem.objects.get(store=self.store).pk
 
-        other = _make_store("Other Trash", "other-trash.local")
         other_owner = make_user("other-trash@example.com")
-        _make_membership(other_owner, other, StoreMembership.Role.OWNER)
-        self.client.force_authenticate(user=other_owner)
-        self.client.credentials(HTTP_X_STORE_PUBLIC_ID=other.public_id)
+        other = _make_store("Other Trash", "other-trash.local", owner_email=other_owner.email)
+        login_dashboard_jwt(self.client, other_owner.email)
         resp = self.client.get(f"/api/v1/admin/trash/{tid}/")
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
 
@@ -145,14 +141,12 @@ class TrashOrderSoftDeleteTests(TestCase):
     def setUp(self):
         self.client = APIClient()
         _ensure_default_plan()
-        self.store = _make_store("Trash Order Store", "trash-order.local")
         self.owner = make_user("trash-order-owner@example.com")
-        _make_membership(self.owner, self.store, StoreMembership.Role.OWNER)
+        self.store = _make_store("Trash Order Store", "trash-order.local", owner_email=self.owner.email)
         self.order = _make_order(self.store)
 
     def _auth(self):
-        self.client.force_authenticate(user=self.owner)
-        self.client.credentials(HTTP_X_STORE_PUBLIC_ID=self.store.public_id)
+        login_dashboard_jwt(self.client, self.owner.email)
 
     def test_order_delete_creates_trash(self):
         self._auth()

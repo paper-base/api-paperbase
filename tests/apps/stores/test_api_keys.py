@@ -38,12 +38,22 @@ def _response_payload(response):
 
 def make_store(name: str) -> Store:
     base = normalize_store_code_base_from_name(name) or "T"
-    return Store.objects.create(
+    email = f"{name.lower().replace(' ', '')}@example.com"
+    owner = User.objects.create_user(email=email, password="pass1234", is_verified=True)
+    store = Store.objects.create(
+        owner=owner,
         name=name,
         code=allocate_unique_store_code(base),
         owner_name=f"{name} Owner",
-        owner_email=f"{name.lower().replace(' ', '')}@example.com",
+        owner_email=email,
     )
+    StoreMembership.objects.create(
+        user=owner,
+        store=store,
+        role=StoreMembership.Role.OWNER,
+        is_active=True,
+    )
+    return store
 
 
 def make_product(store: Store, *, name: str) -> Product:
@@ -149,7 +159,7 @@ class APIKeyTenantEnforcementTests(TestCase):
 
     def test_route_matrix_guard_for_api_key_enforcement(self):
         self.assertFalse(requires_tenant_api_key("/api/v1/auth/token/"))
-        self.assertFalse(requires_tenant_api_key("/api/v1/stores/"))
+        self.assertFalse(requires_tenant_api_key("/api/v1/store/"))
         self.assertFalse(requires_tenant_api_key("/api/v1/admin/products/"))
         self.assertFalse(requires_tenant_api_key("/api/v1/system-notifications/active/"))
         self.assertFalse(requires_tenant_api_key("/api/v1/settings/network/api-keys/"))
@@ -254,7 +264,7 @@ class JWTExemptRoutesTests(TestCase):
 
     def test_stores_route_is_jwt_only_not_api_key_required(self):
         response = self.client.get(
-            "/api/v1/stores/",
+            "/api/v1/store/",
             HTTP_AUTHORIZATION=f"Bearer {self.access}",
         )
         self.assertEqual(response.status_code, 200)
@@ -276,12 +286,11 @@ class JWTExemptRoutesTests(TestCase):
         key_row, old_key = create_store_api_key(self.store, name="Initial")
         make_product(self.store, name="Regen Product")
 
-        self.client.force_authenticate(user=self.user)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {self.access}")
         regen_response = self.client.post(
             f"/api/v1/settings/network/api-keys/{key_row.public_id}/regenerate/",
             {"name": "Rotated"},
             format="json",
-            HTTP_X_STORE_PUBLIC_ID=self.store.public_id,
         )
         self.assertEqual(regen_response.status_code, 201)
         new_key = regen_response.data["api_key"]

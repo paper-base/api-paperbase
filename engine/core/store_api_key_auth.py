@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 API_KEY_EXEMPT_PATHS = (
     "/api/v1/auth/",
     "/api/v1/admin/",
-    "/api/v1/stores/",
+    "/api/v1/store/",
     "/api/v1/system-notifications/",
     "/api/v1/settings/network/",
 )
@@ -38,7 +38,7 @@ TENANT_API_KEY_REQUIRED_DETAIL = (
 STORE_FRONTEND_ROUTE_POLICY = (
     ("/api/v1/products/", {"GET"}),
     ("/api/v1/catalog/", {"GET"}),
-    ("/api/v1/store/", {"GET"}),
+    ("/api/v1/store/public/", {"GET"}),
     ("/api/v1/categories/", {"GET"}),
     ("/api/v1/banners/", {"GET"}),
     ("/api/v1/notifications/", {"GET"}),
@@ -139,6 +139,9 @@ def requires_tenant_api_key(path: str) -> bool:
     normalized_path = _normalized_path(path)
     if normalized_path in API_KEY_EXACT_EXEMPT_PATHS:
         return False
+    # `/api/v1/store/` is JWT-exempt, but `store/public/` is storefront (API key required).
+    if _path_starts_with_prefix(normalized_path, "/api/v1/store/public/"):
+        return True
     if any(_path_starts_with_prefix(normalized_path, prefix) for prefix in API_KEY_EXEMPT_PATHS):
         return False
     prefix = _normalized_prefix(getattr(settings, "TENANT_API_PREFIX", "/api/v1/"))
@@ -218,6 +221,8 @@ class TenantApiKeyMiddleware(MiddlewareMixin):
 
         request.api_key = key_row
         request.store = key_row.store
+        if not key_row.store.is_active:
+            return JsonResponse({"detail": "Store is not active."}, status=403)
         touch_store_api_key_last_used(key_row)
         return None
 

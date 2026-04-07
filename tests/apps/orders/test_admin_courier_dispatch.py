@@ -7,26 +7,24 @@ from rest_framework.test import APIClient
 
 from engine.apps.couriers.models import Courier
 from engine.apps.orders.models import Order
-from engine.apps.stores.models import StoreMembership
 from engine.core.encryption import encrypt_value
 
 from tests.core.test_core import (
     _default_shipping_zone,
     _ensure_default_plan,
-    _make_membership,
     _make_order,
     _make_store,
     make_user,
 )
+from tests.test_helpers.jwt_auth import login_dashboard_jwt
 
 
 class AdminCourierDispatchTests(TestCase):
     def setUp(self):
         _ensure_default_plan()
         self.client = APIClient()
-        self.store = _make_store("Courier Test Store", "courier-test.local")
         self.user = make_user("courier-admin@example.com")
-        _make_membership(self.user, self.store, StoreMembership.Role.OWNER)
+        self.store = _make_store("Courier Test Store", "courier-test.local", owner_email=self.user.email)
         self.zone = _default_shipping_zone(self.store)
         self.order = _make_order(
             self.store,
@@ -45,8 +43,7 @@ class AdminCourierDispatchTests(TestCase):
         )
 
     def _auth(self):
-        self.client.force_authenticate(user=self.user)
-        self.client.credentials(HTTP_X_STORE_PUBLIC_ID=self.store.public_id)
+        login_dashboard_jwt(self.client, self.user.email)
 
     @patch("engine.apps.orders.admin_views.queue_customer_order_dispatched_email")
     @patch("engine.apps.orders.admin_views.run_courier_api", return_value={"consignment_id": "C-99"})

@@ -7,28 +7,19 @@ from rest_framework.test import APIClient
 from engine.apps.inventory.cache_sync import sync_product_stock_cache
 from engine.apps.inventory.models import Inventory
 from engine.apps.products.models import Product, ProductVariant
-from engine.apps.stores.models import StoreMembership
 from engine.core.tenant_execution import tenant_scope_from_store
 from tests.core.test_core import _ensure_default_plan, _make_category, _make_store, make_user
+from tests.test_helpers.jwt_auth import login_dashboard_jwt
 
 
 class InactiveVariantEnforcementTests(TestCase):
     def setUp(self):
         _ensure_default_plan()
         self.client = APIClient()
-        self.store = _make_store("Inactive Var Store", "inactive-var.local")
         self.user = make_user("inactive-var-owner@example.com")
-        StoreMembership.objects.create(
-            user=self.user,
-            store=self.store,
-            role=StoreMembership.Role.OWNER,
-            is_active=True,
-        )
-        self.client.force_authenticate(user=self.user)
+        self.store = _make_store("Inactive Var Store", "inactive-var.local", owner_email=self.user.email)
+        login_dashboard_jwt(self.client, self.user.email)
         self.category = _make_category(self.store, "InactiveVarCat")
-
-    def _headers(self):
-        return {"HTTP_X_STORE_PUBLIC_ID": self.store.public_id}
 
     def _create_variant_product(self):
         pr = self.client.post(
@@ -41,7 +32,6 @@ class InactiveVariantEnforcementTests(TestCase):
                 "description": "",
             },
             format="json",
-            **self._headers(),
         )
         self.assertEqual(pr.status_code, status.HTTP_201_CREATED, pr.data)
         product_pid = pr.data["public_id"]
@@ -53,7 +43,6 @@ class InactiveVariantEnforcementTests(TestCase):
                 "is_active": True,
             },
             format="json",
-            **self._headers(),
         )
         self.assertEqual(active.status_code, status.HTTP_201_CREATED, active.data)
         inactive = self.client.post(
@@ -64,7 +53,6 @@ class InactiveVariantEnforcementTests(TestCase):
                 "is_active": False,
             },
             format="json",
-            **self._headers(),
         )
         self.assertEqual(inactive.status_code, status.HTTP_201_CREATED, inactive.data)
         return product_pid, active.data["public_id"], inactive.data["public_id"]
@@ -74,7 +62,6 @@ class InactiveVariantEnforcementTests(TestCase):
         r = self.client.get(
             "/api/v1/admin/product-variants/",
             {"product_public_id": product_pid},
-            **self._headers(),
         )
         self.assertEqual(r.status_code, status.HTTP_200_OK, r.data)
         ids = {row["public_id"] for row in r.data["results"]}
@@ -86,7 +73,6 @@ class InactiveVariantEnforcementTests(TestCase):
         r = self.client.get(
             "/api/v1/admin/product-variants/",
             {"product_public_id": product_pid, "include_inactive": "true"},
-            **self._headers(),
         )
         self.assertEqual(r.status_code, status.HTTP_200_OK, r.data)
         ids = {row["public_id"] for row in r.data["results"]}
@@ -97,7 +83,6 @@ class InactiveVariantEnforcementTests(TestCase):
         _, _, inactive_pid = self._create_variant_product()
         r = self.client.get(
             f"/api/v1/admin/product-variants/{inactive_pid}/",
-            **self._headers(),
         )
         self.assertEqual(r.status_code, status.HTTP_200_OK, r.data)
         self.assertFalse(r.data["is_active"])
@@ -110,7 +95,7 @@ class InactiveVariantEnforcementTests(TestCase):
             inv.quantity = 5
             inv.save(update_fields=["quantity"])
 
-        r = self.client.get("/api/v1/admin/inventory/", **self._headers())
+        r = self.client.get("/api/v1/admin/inventory/")
         self.assertEqual(r.status_code, status.HTTP_200_OK, r.data)
         inv_ids = {row.get("public_id") for row in r.data["results"]}
         self.assertNotIn(inv.public_id, inv_ids)
@@ -118,7 +103,6 @@ class InactiveVariantEnforcementTests(TestCase):
         r2 = self.client.get(
             "/api/v1/admin/inventory/",
             {"include_inactive": "true"},
-            **self._headers(),
         )
         self.assertEqual(r2.status_code, status.HTTP_200_OK, r2.data)
         inv_ids2 = {row.get("public_id") for row in r2.data["results"]}

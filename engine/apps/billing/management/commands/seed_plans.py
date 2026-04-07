@@ -12,7 +12,6 @@ PLAN_SEED_DATA = (
         "billing_cycle": Plan.BillingCycle.MONTHLY,
         "features": {
             "limits": {
-                "max_stores": 1,
                 "max_products": 100,
                 "storefront_aggregate_rpm": 100,
             },
@@ -28,7 +27,6 @@ PLAN_SEED_DATA = (
         "billing_cycle": Plan.BillingCycle.MONTHLY,
         "features": {
             "limits": {
-                "max_stores": 3,
                 "max_products": 500,
                 "storefront_aggregate_rpm": 500,
             },

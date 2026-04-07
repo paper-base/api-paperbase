@@ -35,7 +35,7 @@ def test_resolve_storefront_aggregate_limit_uses_plan_limits():
         price=0,
         billing_cycle=Plan.BillingCycle.MONTHLY,
         features={
-            "limits": {"max_stores": 1, "storefront_aggregate_rpm": 777},
+            "limits": {"storefront_aggregate_rpm": 777},
             "features": {},
         },
         is_active=True,
@@ -55,6 +55,7 @@ def test_resolve_storefront_aggregate_limit_uses_plan_limits():
         provider="manual",
     )
     store = Store.objects.create(
+        owner=user,
         name="RPM Store",
         code=allocate_unique_store_code("RPM"),
         owner_name="O",
@@ -73,14 +74,22 @@ def test_resolve_storefront_aggregate_limit_uses_plan_limits():
 
 @pytest.mark.django_db
 def test_resolve_storefront_aggregate_limit_fallback_without_owner():
+    """When owner cannot be resolved, use settings aggregate fallback."""
+    user = User.objects.create_user(
+        email="ghost@example.com",
+        password="pass12345",
+        is_verified=True,
+    )
     store = Store.objects.create(
-        name="No Owner Store",
+        owner=user,
+        name="Owner Store",
         code=allocate_unique_store_code("NOOWN"),
         owner_name="Ghost",
-        owner_email="ghost@example.com",
+        owner_email=user.email,
     )
-    with override_settings(TENANT_API_KEY_AGGREGATE_RATE_LIMIT_PER_MIN=4242):
-        assert resolve_storefront_aggregate_limit(store) == 4242
+    with patch("engine.core.rate_limit.get_store_owner_user", return_value=None):
+        with override_settings(TENANT_API_KEY_AGGREGATE_RATE_LIMIT_PER_MIN=4242):
+            assert resolve_storefront_aggregate_limit(store) == 4242
 
 
 @pytest.mark.django_db
@@ -90,7 +99,7 @@ def test_storefront_rate_check_returns_aggregate_reason():
         price=0,
         billing_cycle=Plan.BillingCycle.MONTHLY,
         features={
-            "limits": {"max_stores": 1, "storefront_aggregate_rpm": 1},
+            "limits": {"storefront_aggregate_rpm": 1},
             "features": {},
         },
         is_active=True,
@@ -110,6 +119,7 @@ def test_storefront_rate_check_returns_aggregate_reason():
         provider="manual",
     )
     store = Store.objects.create(
+        owner=user,
         name="Tight Store",
         code=allocate_unique_store_code("TIGHT"),
         owner_name="O",
@@ -156,7 +166,7 @@ class RateLimitMiddlewareLoggingTests(TestCase):
             price=0,
             billing_cycle=Plan.BillingCycle.MONTHLY,
             features={
-                "limits": {"max_stores": 1, "storefront_aggregate_rpm": 1},
+                "limits": {"storefront_aggregate_rpm": 1},
                 "features": {},
             },
             is_active=True,
@@ -176,6 +186,7 @@ class RateLimitMiddlewareLoggingTests(TestCase):
             provider="manual",
         )
         store = Store.objects.create(
+            owner=user,
             name="Log MW Store",
             code=allocate_unique_store_code("LOGMW"),
             owner_name="O",

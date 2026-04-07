@@ -41,6 +41,8 @@ _PREFIXES: dict[str, str] = {
     "staffnotification": "snt",
     "systemnotificationview": "ntv",
     "storedeletionjob": "dlj",
+    "stordeleteotp": "sdo",
+    "storerestorechallenge": "strc",
     "attachment": "ath",
     "courier": "crr",
     "mktintegration": "mkt",

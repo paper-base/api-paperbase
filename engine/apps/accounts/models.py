@@ -197,7 +197,6 @@ class UserTwoFactorChallenge(models.Model):
     class Flow(models.TextChoices):
         LOGIN = "login", "Login"
         REGISTER = "register", "Register"
-        SWITCH_STORE = "switch_store", "Switch Store"
 
     user = models.ForeignKey(
         User,
