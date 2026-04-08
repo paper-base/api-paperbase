@@ -5,7 +5,6 @@ from engine.core.authz import (
     IsPlatformRequest,
     IsPlatformSuperuser,
     IsPlatformSuperuserOrStoreAdmin,
-    IsStaffUser,
     IsStoreAdmin,
     IsStoreStaff,
     IsStorefrontAPIKey,
@@ -14,7 +13,6 @@ from engine.core.authz import (
 
 __all__ = [
     "IsPlatformRequest",
-    "IsStaffUser",
     "IsPlatformSuperuser",
     "IsPlatformSuperuserOrStoreAdmin",
     "IsVerifiedUser",

@@ -7,6 +7,7 @@ from rest_framework.response import Response
 from config.permissions import DenyAPIKeyAccess, IsPlatformSuperuserOrStoreAdmin
 from engine.core.models import TrashItem
 from engine.core.tenancy import get_active_store
+from engine.core.tenant_drf import ProvenTenantContextMixin
 from engine.core.trash_service import permanent_delete_trash_item, restore_trash_item
 
 
@@ -57,6 +58,7 @@ class AdminTrashItemSerializer(serializers.ModelSerializer):
 
 
 class AdminTrashViewSet(
+    ProvenTenantContextMixin,
     mixins.ListModelMixin,
     mixins.RetrieveModelMixin,
     mixins.DestroyModelMixin,

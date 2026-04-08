@@ -13,6 +13,7 @@ from django.test import override_settings
 
 from engine.core.client_ip import get_client_ip
 from engine.core.middleware.internal_override_middleware import InternalOverrideMiddleware
+from tests.core.test_core import _ensure_default_plan
 
 User = get_user_model()
 
@@ -47,7 +48,7 @@ def test_internal_override_requires_allowlisted_ip(settings):
     user = User.objects.create_user(
         email="staff-allowlist@example.com",
         password="secret123",
-        is_staff=True,
+        is_superuser=True,
         is_verified=True,
     )
 
@@ -84,6 +85,7 @@ def test_get_client_ip_matches_drf_num_proxies_one():
 
 @pytest.mark.django_db
 def test_admin_product_attributes_are_scoped_by_store():
+    _ensure_default_plan()
     store_a = _make_store("Store A")
     store_b = _make_store("Store B")
 
@@ -93,7 +95,6 @@ def test_admin_product_attributes_are_scoped_by_store():
     staff = User.objects.create_user(
         email="staff-admin@example.com",
         password="secret123",
-        is_staff=True,
         is_verified=True,
     )
     StoreMembership.objects.create(

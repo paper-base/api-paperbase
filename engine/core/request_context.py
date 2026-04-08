@@ -50,12 +50,14 @@ def get_branding_request_cache() -> dict[str, Any]:
 
 def get_dashboard_store_from_request(request: HttpRequest) -> "Store | None":
     """
-    Active store for dashboard/admin views: use tenant from middleware if present,
-    else fall back to get_active_store (e.g. tests or unusual entrypoints).
+    Active store for dashboard/admin views.
+
+    Always uses get_active_store (post-DRF-auth resolution). request.context.tenant
+    is updated by bind_validated_tenant_context / ProvenTenantContextMixin when used.
     """
     ctx = getattr(request, "context", None)
-    if ctx is not None and not ctx.is_platform_admin and ctx.tenant is not None:
-        return ctx.tenant
+    if ctx is not None and ctx.is_platform_admin:
+        return None
     from engine.core.tenancy import get_active_store
 
     return get_active_store(request).store

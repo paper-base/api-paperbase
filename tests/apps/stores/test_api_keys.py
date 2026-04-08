@@ -25,6 +25,7 @@ from engine.apps.stores.services import (
     revoke_store_api_key,
 )
 from django.contrib.auth import get_user_model
+from tests.core.test_core import _ensure_default_plan
 
 User = get_user_model()
 
@@ -222,13 +223,13 @@ class APIKeyWebSocketTests(TransactionTestCase):
 @override_settings(TENANT_API_KEY_ENFORCE=True)
 class JWTExemptRoutesTests(TestCase):
     def setUp(self):
+        _ensure_default_plan()
         self.client = APIClient()
         self.store = make_store("Dashboard Store")
         self.user = User.objects.create_user(
             email="dashboard@example.com",
             password="secret123",
             is_verified=True,
-            is_staff=True,
         )
         StoreMembership.objects.create(
             user=self.user,

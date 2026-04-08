@@ -371,6 +371,7 @@ class StoreDeletionJob(models.Model):
         RUNNING = "running", "Running"
         SUCCESS = "success", "Success"
         FAILED = "failed", "Failed"
+        SKIPPED_NOT_DUE = "skipped_not_due", "Skipped (not yet due)"
 
     public_id = models.CharField(
         max_length=32,
@@ -429,6 +430,12 @@ class StoreDeletionJob(models.Model):
     )
     error_message = models.TextField(blank=True, default="")
 
+    started_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When the worker began executing; used to compute lease expiry.",
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -454,6 +461,12 @@ class StoreLifecycleAuditLog(models.Model):
         STORE_REMOVE = "STORE_REMOVE", "Store remove"
         STORE_DELETE_OTP_SENT = "STORE_DELETE_OTP_SENT", "Delete OTP sent"
         STORE_DELETE_SCHEDULED = "STORE_DELETE_SCHEDULED", "Delete scheduled"
+        STORE_DELETE_SKIPPED_NOT_DUE = "STORE_DELETE_SKIPPED_NOT_DUE", "Delete skipped (not due)"
+        STORE_DELETE_STARTED = "STORE_DELETE_STARTED", "Delete started"
+        STORE_DELETE_SUCCESS = "STORE_DELETE_SUCCESS", "Delete success"
+        STORE_DELETE_FAILED = "STORE_DELETE_FAILED", "Delete failed"
+        STORE_DELETE_FORCED = "STORE_DELETE_FORCED", "Forced delete invoked"
+        STORE_DELETE_ALREADY_MISSING = "STORE_DELETE_ALREADY_MISSING", "Store already missing"
         STORE_RESTORE = "STORE_RESTORE", "Store restore"
         STORE_INACTIVITY_PENDING = "STORE_INACTIVITY_PENDING", "Inactivity pending delete"
 

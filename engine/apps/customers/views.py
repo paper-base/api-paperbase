@@ -10,13 +10,12 @@ stateless line-items payload (no server-side cart or storefront session). Accoun
 APIs on this module require this separate JWT + store header channel.
 """
 
-from rest_framework import status
 from rest_framework.generics import RetrieveAPIView, UpdateAPIView, ListCreateAPIView, RetrieveUpdateDestroyAPIView
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.response import Response
+from rest_framework.exceptions import PermissionDenied, ValidationError
 
-from config.permissions import DenyAPIKeyAccess
+from config.permissions import DenyAPIKeyAccess, IsDashboardUser
 from engine.core.tenancy import get_active_store
+from engine.core.tenant_drf import ProvenTenantContextMixin
 
 from .models import Customer, CustomerAddress
 from .serializers import CustomerProfileSerializer, CustomerAddressSerializer
@@ -31,9 +30,10 @@ def get_or_create_customer(user):
 def get_or_create_customer_for_request(request):
     ctx = get_active_store(request)
     if not ctx.store:
-        from rest_framework.exceptions import ValidationError
-
         raise ValidationError("No active store resolved for this request.")
+    user = request.user
+    if not getattr(user, "is_superuser", False) and not ctx.membership:
+        raise PermissionDenied("You do not have access to this store.")
     defaults = {
         "name": (request.user.get_full_name() or "").strip(),
         "email": (getattr(request.user, "email", "") or "").strip() or None,
@@ -43,18 +43,18 @@ def get_or_create_customer_for_request(request):
     return customer
 
 
-class CustomerProfileView(RetrieveAPIView, UpdateAPIView):
+class CustomerProfileView(ProvenTenantContextMixin, RetrieveAPIView, UpdateAPIView):
     """GET/PATCH /api/v1/customers/me/ - current user's profile."""
-    permission_classes = [DenyAPIKeyAccess, IsAuthenticated]
+    permission_classes = [DenyAPIKeyAccess, IsDashboardUser]
     serializer_class = CustomerProfileSerializer
 
     def get_object(self):
         return get_or_create_customer_for_request(self.request)
 
 
-class CustomerAddressListCreateView(ListCreateAPIView):
+class CustomerAddressListCreateView(ProvenTenantContextMixin, ListCreateAPIView):
     """GET/POST /api/v1/customers/addresses/ - list and create addresses."""
-    permission_classes = [DenyAPIKeyAccess, IsAuthenticated]
+    permission_classes = [DenyAPIKeyAccess, IsDashboardUser]
     serializer_class = CustomerAddressSerializer
 
     def get_queryset(self):
@@ -66,9 +66,9 @@ class CustomerAddressListCreateView(ListCreateAPIView):
         serializer.save(customer=customer)
 
 
-class CustomerAddressDetailView(RetrieveUpdateDestroyAPIView):
+class CustomerAddressDetailView(ProvenTenantContextMixin, RetrieveUpdateDestroyAPIView):
     """GET/PUT/PATCH/DELETE /api/v1/customers/addresses/<public_id>/"""
-    permission_classes = [DenyAPIKeyAccess, IsAuthenticated]
+    permission_classes = [DenyAPIKeyAccess, IsDashboardUser]
     serializer_class = CustomerAddressSerializer
     lookup_field = 'public_id'
 

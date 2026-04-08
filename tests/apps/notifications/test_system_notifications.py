@@ -8,6 +8,7 @@ from rest_framework.test import APIClient
 from engine.apps.notifications.models import NotificationDismissal, PlatformNotification
 from engine.apps.stores.models import Store, StoreMembership
 from engine.apps.stores.services import allocate_unique_store_code
+from tests.core.test_core import _ensure_default_plan
 
 User = get_user_model()
 
@@ -26,13 +27,13 @@ def _jwt_auth(client, user):
 
 class ActiveSystemNotificationAPITests(TestCase):
     def setUp(self):
+        _ensure_default_plan()
         self.client = APIClient()
         # Platform host: default test client host "testserver" is not in PLATFORM_HOSTS.
         self.client.defaults["HTTP_HOST"] = "localhost"
         self.staff = User.objects.create_user(
             email="banner-staff@example.com",
             password="secret123",
-            is_staff=True,
             is_verified=True,
         )
         self.owner = User.objects.create_user(
@@ -156,18 +157,17 @@ class ActiveSystemNotificationAPITests(TestCase):
 
 class SystemNotificationDismissAPITests(TestCase):
     def setUp(self):
+        _ensure_default_plan()
         self.client = APIClient()
         self.client.defaults["HTTP_HOST"] = "localhost"
         self.staff = User.objects.create_user(
             email="dismiss-staff@example.com",
             password="secret123",
-            is_staff=True,
             is_verified=True,
         )
         self.other = User.objects.create_user(
             email="dismiss-other@example.com",
             password="secret123",
-            is_staff=True,
             is_verified=True,
         )
         self.owner = User.objects.create_user(

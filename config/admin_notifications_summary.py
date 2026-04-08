@@ -8,6 +8,7 @@ from django.utils import timezone
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+
 from config.permissions import DenyAPIKeyAccess, IsDashboardUser
 from engine.apps.orders.models import Order
 from engine.apps.support.models import SupportTicket
@@ -16,6 +17,7 @@ from engine.core.admin_notifications_cache import (
     notifications_summary_cache_key,
 )
 from engine.core.request_context import get_dashboard_store_from_request
+from engine.core.tenant_drf import ProvenTenantContextMixin
 from engine.core.tenant_execution import tenant_scope_from_store
 
 logger = logging.getLogger(__name__)
@@ -180,7 +182,7 @@ def build_notifications_summary_payload(store):
     )
 
 
-class AdminNotificationsSummaryView(APIView):
+class AdminNotificationsSummaryView(ProvenTenantContextMixin, APIView):
     """
     Lightweight dashboard notification payload for the active store.
     Scoped by tenant context / get_active_store(request); does not replace list endpoints.

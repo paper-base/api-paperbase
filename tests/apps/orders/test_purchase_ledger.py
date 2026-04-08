@@ -104,7 +104,7 @@ def test_ledger_survives_order_soft_delete():
         assert e.product_name == "Keep Name"
 
     _ensure_default_plan()
-    admin = make_user("ledger-delete-details@example.com", is_staff=True)
+    admin = make_user("ledger-delete-details@example.com")
     _make_membership(admin, store)
     admin_client = APIClient()
     login_dashboard_jwt(admin_client, admin.email)
@@ -142,7 +142,7 @@ def test_admin_patch_quantity_creates_adjustment():
         oit_pid = item.public_id
         assert item.quantity == 2
 
-    admin = make_user("ledger-admin@example.com", is_staff=True)
+    admin = make_user("ledger-admin@example.com")
     _make_membership(admin, store)
     admin_client = APIClient()
     login_dashboard_jwt(admin_client, admin.email)
@@ -195,7 +195,7 @@ def test_customer_list_exposes_ledger_order_count():
     )
     assert response.status_code == 201
     customer = Customer.objects.get(store=store, phone="01755556666")
-    admin = make_user("ledger-list@example.com", is_staff=True)
+    admin = make_user("ledger-list@example.com")
     _make_membership(admin, store)
     admin_client = APIClient()
     login_dashboard_jwt(admin_client, admin.email)
@@ -232,7 +232,7 @@ def test_two_orders_ledger_analytics_on_customer_details():
         )
         assert r.status_code == 201
     customer = Customer.objects.get(store=store, phone=phone)
-    admin = make_user("ledger-two@example.com", is_staff=True)
+    admin = make_user("ledger-two@example.com")
     _make_membership(admin, store)
     admin_client = APIClient()
     login_dashboard_jwt(admin_client, admin.email)
@@ -268,7 +268,7 @@ def test_customer_details_shows_ledger_product_name_not_live_catalog():
         product.save(update_fields=["name"])
         customer = Customer.objects.get(store=store, phone="01733334444")
 
-    admin = make_user("cust-details-admin@example.com", is_staff=True)
+    admin = make_user("cust-details-admin@example.com")
     _make_membership(admin, store)
     admin_client = APIClient()
     login_dashboard_jwt(admin_client, admin.email)

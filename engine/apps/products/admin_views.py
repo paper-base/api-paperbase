@@ -1,5 +1,6 @@
 from decimal import Decimal, InvalidOperation
 
+from django.db import transaction
 from django.db.models import Count, Sum
 from django.db.models import Q
 from django.utils.text import slugify
@@ -15,7 +16,7 @@ from engine.core.admin_views import StoreRolePermissionMixin
 from engine.core.media_deletion_service import schedule_media_deletion
 from engine.core.models import ActivityLog
 from engine.core.query_params import include_inactive_truthy
-from engine.core.tenancy import get_active_store
+from engine.core.tenancy import assert_instance_belongs_to_store, get_active_store
 from engine.apps.inventory.models import Inventory
 from engine.apps.inventory.utils import clamp_stock
 from .models import (
@@ -183,8 +184,9 @@ class AdminProductViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
         )
 
     def perform_update(self, serializer):
-        instance = serializer.save()
         ctx = get_active_store(self.request)
+        assert_instance_belongs_to_store(serializer.instance, ctx.store)
+        instance = serializer.save()
         if ctx.store:
             invalidate_product_cache(ctx.store.public_id)
         log_activity(
@@ -477,13 +479,18 @@ class AdminProductVariantViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet
         ctx = get_active_store(self.request)
         super().perform_destroy(instance)
         if not product.variants.exists():
-            Inventory.objects.get_or_create(
-                product=product,
-                variant=None,
-                defaults={"quantity": clamp_stock(0)},
-            )
-            from engine.apps.inventory.cache_sync import sync_product_stock_cache
-            sync_product_stock_cache(int(product.store_id))
+            from engine.apps.inventory.cache_sync import refresh_product_stock_cache
+
+            with transaction.atomic():
+                Inventory.objects.get_or_create(
+                    product=product,
+                    variant=None,
+                    defaults={"quantity": clamp_stock(0)},
+                )
+                refresh_product_stock_cache(
+                    store_id=int(product.store_id),
+                    product_id=product.id,
+                )
         if ctx.store:
             invalidate_product_cache(ctx.store.public_id)
         log_activity(

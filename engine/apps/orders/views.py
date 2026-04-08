@@ -13,6 +13,7 @@ from config.permissions import DenyAPIKeyAccess, IsAdminUser, IsStorefrontAPIKey
 
 from engine.apps.marketing_integrations.tracking import meta_conversions
 from engine.core.tenancy import get_active_store, require_api_key_store
+from engine.core.tenant_drf import ProvenTenantContextMixin
 
 from .models import Order, OrderItem
 from .order_financials import compute_line_financials
@@ -303,7 +304,7 @@ class OrderCreateView(CreateAPIView):
         )
 
 
-class OrderDetailView(RetrieveAPIView):
+class OrderDetailView(ProvenTenantContextMixin, RetrieveAPIView):
     """Get order by public_id (dashboard staff). Not available with publishable API key."""
     serializer_class = OrderSerializer
     queryset = Order.objects.select_related(

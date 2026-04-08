@@ -6,9 +6,16 @@ from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.utils import timezone
 
-from config.permissions import IsStoreAdmin, IsStoreStaff
+from config.permissions import (
+    DenyAPIKeyAccess,
+    IsDashboardUser,
+    IsStoreAdmin,
+    IsStoreStaff,
+    IsVerifiedUser,
+)
 from engine.apps.billing.feature_gate import get_feature_config
 from engine.core.tenancy import get_active_store
+from engine.core.tenant_drf import ProvenTenantContextMixin
 
 from .audit import write_store_lifecycle_audit
 from .confirmation import confirm_delete_phrase, confirm_remove_phrase, confirm_store_name_against_store
@@ -99,7 +106,7 @@ def _reissue_jwt_active_store(request, store_public_id: str) -> dict:
     }
 
 
-class StoreViewSet(viewsets.ModelViewSet):
+class StoreViewSet(ProvenTenantContextMixin, viewsets.ModelViewSet):
     """
     Platform onboarding + store details.
 
@@ -113,13 +120,15 @@ class StoreViewSet(viewsets.ModelViewSet):
     lookup_field = 'public_id'
 
     def get_permissions(self):
-        if self.action in {"list", "create"}:
-            return [permissions.IsAuthenticated()]
+        if self.action in {"list", "retrieve"}:
+            return [DenyAPIKeyAccess(), IsDashboardUser()]
+        if self.action == "create":
+            return [DenyAPIKeyAccess(), IsVerifiedUser()]
         if self.action in {"recoverable", "restore_send_codes", "restore_verify"}:
-            return [permissions.IsAuthenticated()]
+            return [DenyAPIKeyAccess(), IsVerifiedUser()]
         if self.action == "remove":
-            return [permissions.IsAuthenticated(), IsStoreAdmin()]
-        return [permissions.IsAuthenticated(), IsStoreAdmin()]
+            return [DenyAPIKeyAccess(), IsStoreAdmin()]
+        return [DenyAPIKeyAccess(), IsStoreAdmin()]
 
     def get_queryset(self):
         ctx = get_active_store(self.request)
@@ -372,12 +381,12 @@ class StoreViewSet(viewsets.ModelViewSet):
         return Response({**tokens, "complete": True})
 
 
-class StoreMembershipViewSet(viewsets.ModelViewSet):
+class StoreMembershipViewSet(ProvenTenantContextMixin, viewsets.ModelViewSet):
     """
     Manage memberships for the active store.
     """
 
-    permission_classes = [permissions.IsAuthenticated, IsStoreAdmin]
+    permission_classes = [DenyAPIKeyAccess, IsStoreAdmin]
     serializer_class = StoreMembershipSerializer
     # Do NOT expose numeric PKs — use public_id in all URLs
     lookup_field = 'public_id'
@@ -394,6 +403,7 @@ class StoreMembershipViewSet(viewsets.ModelViewSet):
 
 
 class StoreSettingsViewSet(
+    ProvenTenantContextMixin,
     mixins.RetrieveModelMixin,
     mixins.UpdateModelMixin,
     viewsets.GenericViewSet,
@@ -402,7 +412,7 @@ class StoreSettingsViewSet(
     View/update settings for the active store.
     """
 
-    permission_classes = [permissions.IsAuthenticated, IsStoreStaff]
+    permission_classes = [DenyAPIKeyAccess, IsStoreStaff]
     serializer_class = StoreSettingsSerializer
 
     def get_serializer_context(self):
@@ -414,13 +424,13 @@ class StoreSettingsViewSet(
         return ctx
 
     def get_permissions(self):
-        # Scheduled deletion keeps memberships active for restore/OTP; deletion
-        # endpoints stay reachable with IsAuthenticated only.
         if self.action == "api_key":
-            return [permissions.IsAuthenticated(), IsStoreAdmin()]
-        if self.action in {"delete_store", "delete_send_otp", "delete_confirm", "delete_status"}:
-            return [permissions.IsAuthenticated()]
-        return [permissions.IsAuthenticated(), IsStoreStaff()]
+            return [DenyAPIKeyAccess(), IsStoreAdmin()]
+        if self.action == "delete_status":
+            return [DenyAPIKeyAccess(), IsVerifiedUser()]
+        if self.action in {"delete_store", "delete_send_otp", "delete_confirm"}:
+            return [DenyAPIKeyAccess(), IsStoreAdmin()]
+        return [DenyAPIKeyAccess(), IsStoreStaff()]
 
     def get_object(self):
         ctx = get_active_store(self.request)
@@ -698,12 +708,12 @@ class StoreSettingsViewSet(
         )
 
 
-class StoreAPIKeyManagementViewSet(viewsets.ViewSet):
+class StoreAPIKeyManagementViewSet(ProvenTenantContextMixin, viewsets.ViewSet):
     """
     Settings > Network API key management.
     """
 
-    permission_classes = [permissions.IsAuthenticated, IsStoreAdmin]
+    permission_classes = [DenyAPIKeyAccess, IsStoreAdmin]
     lookup_field = "public_id"
 
     def _active_store(self, request):

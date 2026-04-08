@@ -4,11 +4,12 @@ from rest_framework import mixins, viewsets
 
 from config.permissions import DenyAPIKeyAccess, IsDashboardUser, IsStoreAdmin
 from engine.core.tenancy import get_active_store
+from engine.core.tenant_drf import ProvenTenantContextMixin
 from .models import ActivityLog
 from .admin_serializers import AdminActivityLogSerializer
 
 
-class StoreRolePermissionMixin:
+class StoreRolePermissionMixin(ProvenTenantContextMixin):
     """
     Mixin that applies role-based permissions to ViewSet actions.
 
@@ -29,6 +30,7 @@ class StoreRolePermissionMixin:
 
 
 class AdminActivityLogViewSet(
+    ProvenTenantContextMixin,
     mixins.ListModelMixin,
     mixins.RetrieveModelMixin,
     viewsets.GenericViewSet,

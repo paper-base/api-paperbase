@@ -12,7 +12,7 @@ from config.permissions import IsDashboardUser
 from engine.core.activity import log_activity
 from engine.core.admin_views import StoreRolePermissionMixin
 from engine.core.models import ActivityLog
-from engine.core.tenancy import get_active_store
+from engine.core.tenancy import assert_instance_belongs_to_store, get_active_store
 from engine.apps.orders.models import Order, PurchaseLedgerEntry
 
 from .models import Customer, CustomerAddress
@@ -110,6 +110,8 @@ class AdminCustomerViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
         )
 
     def perform_update(self, serializer):
+        ctx = get_active_store(self.request)
+        assert_instance_belongs_to_store(serializer.instance, ctx.store)
         instance = serializer.save()
         label = (instance.email or (instance.user.email if instance.user else "") or instance.phone)
         log_activity(
@@ -121,6 +123,8 @@ class AdminCustomerViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
         )
 
     def perform_destroy(self, instance):
+        ctx = get_active_store(self.request)
+        assert_instance_belongs_to_store(instance, ctx.store)
         email = instance.email or (instance.user.email if instance.user else "") or instance.phone
         public_id = instance.public_id
         super().perform_destroy(instance)

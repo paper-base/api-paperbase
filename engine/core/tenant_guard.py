@@ -5,6 +5,8 @@ import os
 from django.conf import settings
 
 from engine.core.safety.tenant_safety import log_tenant_violation
+from django.db import models
+
 from engine.core.tenant_context import (
     TenantContextMissingError,
     _tenant_context_exists,
@@ -16,6 +18,20 @@ from engine.core.tenant_execution import in_system_scope
 
 class TenantViolationError(RuntimeError):
     """Raised when an unsafe unscoped tenant query is attempted."""
+
+
+class TenantIsolationError(TenantContextMissingError):
+    """Raised when a tenant-isolated model is queried without store scope."""
+
+
+def is_tenant_model(model: type[models.Model]) -> bool:
+    """True if the model has a ForeignKey ``store`` to ``Store`` (tenant-owned row)."""
+    try:
+        field = model._meta.get_field("store")
+    except Exception:
+        return False
+    rel = getattr(field, "related_model", None)
+    return rel is not None and rel.__name__ == "Store"
 
 
 def _is_production() -> bool:

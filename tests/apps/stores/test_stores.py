@@ -240,13 +240,66 @@ class DeleteStoreEndpointTests(TestCase):
         self.assertEqual(store.status, Store.Status.PENDING_DELETE)
         self.assertFalse(store.is_active)
 
-        hard_delete_store(job.public_id)
+        # Hard deletion must not occur before delete_at in production semantics.
+        # Simulate the worker running after the scheduled time.
+        self.assertIsNotNone(store.delete_at)
+        with patch(
+            "engine.apps.stores.tasks.timezone.now",
+            return_value=store.delete_at + datetime.timedelta(seconds=1),
+        ):
+            hard_delete_store(job.public_id)
         job.refresh_from_db()
         self.assertEqual(job.status, StoreDeletionJob.Status.SUCCESS)
         self.assertFalse(Store.objects.filter(id=store.id).exists())
         self.assertEqual(Order.objects.filter(store_id=store.id).count(), 0)
         self.assertEqual(Customer.objects.filter(store_id=store.id).count(), 0)
         self.assertEqual(StoreDashboardStatsSnapshot.objects.filter(store_id=store.id).count(), 0)
+
+    @patch("engine.apps.stores.store_lifecycle._generate_otp_code", return_value="112233")
+    def test_hard_delete_store_enforces_delete_at_unless_forced(self, _mock_otp):
+        _set_default_plan(premium_order_emails=False)
+
+        user = _make_user("owner-strict@example.com")
+        store = _make_store("Strict Store", "strict.local", owner_email=user.email)
+        _make_catalog_data(store, user)
+        _auth_client(self.client, user.email, store_public_id=store.public_id)
+
+        send = self.client.post(
+            "/api/v1/store/settings/delete/send-otp/",
+            {
+                "account_email": user.email,
+                "store_name": store.name,
+                "confirmation_phrase": "delete my store",
+            },
+            format="json",
+        )
+        self.assertEqual(send.status_code, 200)
+
+        resp = self.client.post(
+            "/api/v1/store/settings/delete/confirm/",
+            {"challenge_public_id": send.data["challenge_public_id"], "otp": "112233"},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        job = StoreDeletionJob.objects.get(public_id=resp.data["job_id"], user=user)
+        store.refresh_from_db()
+        self.assertIsNotNone(store.delete_at)
+
+        # Before delete_at: must refuse deletion.
+        with patch(
+            "engine.apps.stores.tasks.timezone.now",
+            return_value=store.delete_at - datetime.timedelta(seconds=1),
+        ):
+            hard_delete_store(job.public_id)
+        job.refresh_from_db()
+        self.assertEqual(job.status, StoreDeletionJob.Status.SKIPPED_NOT_DUE)
+        self.assertTrue(Store.objects.filter(id=store.id).exists())
+
+        # Forced deletion bypasses delete_at but must still work through the job.
+        hard_delete_store(job.public_id, force=True, reason="test")
+        job.refresh_from_db()
+        self.assertEqual(job.status, StoreDeletionJob.Status.SUCCESS)
+        self.assertFalse(Store.objects.filter(id=store.id).exists())
 
     def test_delete_status_is_user_scoped(self):
         _set_default_plan(premium_order_emails=False)
@@ -415,4 +468,178 @@ class StoreSettingsOrderEmailTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertTrue(resp.data["email_notify_owner_on_order_received"])
         self.assertTrue(resp.data["email_customer_on_order_confirmed"])
+
+
+class LeaseRecoveryTests(TestCase):
+    """Execution lease: stale RUNNING jobs are recovered via lease expiry."""
+
+    def setUp(self):
+        _set_default_plan(premium_order_emails=False)
+        self.user = _make_user("lease@example.com")
+        self.store = _make_store("Lease Store", "lease.local", owner_email=self.user.email)
+        _make_catalog_data(self.store, self.user)
+
+    def test_expired_lease_transitions_to_failed(self):
+        job = StoreDeletionJob.objects.create(
+            user=self.user,
+            store_public_id_snapshot=self.store.public_id,
+            store_id_snapshot=self.store.id,
+            delete_at_snapshot=None,
+            lifecycle_version_snapshot=self.store.lifecycle_version,
+            status=StoreDeletionJob.Status.RUNNING,
+            started_at=datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc),
+        )
+
+        hard_delete_store(job.public_id)
+
+        job.refresh_from_db()
+        self.assertEqual(job.status, StoreDeletionJob.Status.FAILED)
+        self.assertIn("Lease expired", job.error_message)
+        self.assertIsNone(job.started_at)
+        self.assertEqual(job.celery_task_id, "")
+
+        self.assertTrue(
+            StoreLifecycleAuditLog.objects.filter(
+                store_public_id=self.store.public_id,
+                action="STORE_DELETE_FAILED",
+                metadata__reason="lease_expired",
+            ).exists()
+        )
+
+    def test_valid_lease_blocks_duplicate_execution(self):
+        from django.utils import timezone as tz
+
+        now = tz.now()
+        job = StoreDeletionJob.objects.create(
+            user=self.user,
+            store_public_id_snapshot=self.store.public_id,
+            store_id_snapshot=self.store.id,
+            delete_at_snapshot=None,
+            lifecycle_version_snapshot=self.store.lifecycle_version,
+            status=StoreDeletionJob.Status.RUNNING,
+            started_at=now,
+        )
+
+        hard_delete_store(job.public_id)
+
+        job.refresh_from_db()
+        self.assertEqual(job.status, StoreDeletionJob.Status.RUNNING)
+        self.assertTrue(Store.objects.filter(id=self.store.id).exists())
+
+    def test_running_without_started_at_treated_as_stale(self):
+        job = StoreDeletionJob.objects.create(
+            user=self.user,
+            store_public_id_snapshot=self.store.public_id,
+            store_id_snapshot=self.store.id,
+            delete_at_snapshot=None,
+            lifecycle_version_snapshot=self.store.lifecycle_version,
+            status=StoreDeletionJob.Status.RUNNING,
+            started_at=None,
+        )
+
+        hard_delete_store(job.public_id)
+
+        job.refresh_from_db()
+        self.assertEqual(job.status, StoreDeletionJob.Status.FAILED)
+        self.assertIn("Lease expired", job.error_message)
+
+
+class SchedulerReenqueueTests(TestCase):
+    """Scheduler can re-dispatch SKIPPED_NOT_DUE / FAILED jobs after celery_task_id is cleared."""
+
+    def setUp(self):
+        _set_default_plan(premium_order_emails=False)
+        self.user = _make_user("sched@example.com")
+        self.store = _make_store("Sched Store", "sched.local", owner_email=self.user.email)
+        _make_catalog_data(self.store, self.user)
+
+    @patch("engine.apps.stores.store_lifecycle._generate_otp_code", return_value="998877")
+    def test_skipped_not_due_clears_celery_task_id(self, _mock_otp):
+        client = APIClient()
+        _auth_client(client, self.user.email, store_public_id=self.store.public_id)
+
+        send = client.post(
+            "/api/v1/store/settings/delete/send-otp/",
+            {
+                "account_email": self.user.email,
+                "store_name": self.store.name,
+                "confirmation_phrase": "delete my store",
+            },
+            format="json",
+        )
+        resp = client.post(
+            "/api/v1/store/settings/delete/confirm/",
+            {"challenge_public_id": send.data["challenge_public_id"], "otp": "998877"},
+            format="json",
+        )
+        job = StoreDeletionJob.objects.get(public_id=resp.data["job_id"])
+        self.store.refresh_from_db()
+
+        with patch(
+            "engine.apps.stores.tasks.timezone.now",
+            return_value=self.store.delete_at - datetime.timedelta(seconds=1),
+        ):
+            hard_delete_store(job.public_id)
+
+        job.refresh_from_db()
+        self.assertEqual(job.status, StoreDeletionJob.Status.SKIPPED_NOT_DUE)
+        self.assertEqual(job.celery_task_id, "")
+
+    def test_failed_clears_celery_task_id(self):
+        self.store.status = Store.Status.PENDING_DELETE
+        self.store.delete_at = datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc)
+        self.store.save(update_fields=["status", "delete_at"])
+
+        job = StoreDeletionJob.objects.create(
+            user=self.user,
+            store_public_id_snapshot=self.store.public_id,
+            store_id_snapshot=self.store.id,
+            delete_at_snapshot=self.store.delete_at,
+            lifecycle_version_snapshot=self.store.lifecycle_version + 999,
+            celery_task_id="old-celery-id",
+        )
+
+        hard_delete_store(job.public_id)
+
+        job.refresh_from_db()
+        self.assertEqual(job.status, StoreDeletionJob.Status.FAILED)
+        self.assertEqual(job.celery_task_id, "")
+
+
+class MissingStoreAuditTests(TestCase):
+    """Missing store during execution writes STORE_DELETE_ALREADY_MISSING, not SUCCESS."""
+
+    def setUp(self):
+        _set_default_plan(premium_order_emails=False)
+        self.user = _make_user("missing@example.com")
+
+    def test_missing_store_writes_already_missing_audit(self):
+        job = StoreDeletionJob.objects.create(
+            user=self.user,
+            store_public_id_snapshot="str_nonexistent",
+            store_id_snapshot=999999,
+            delete_at_snapshot=None,
+            lifecycle_version_snapshot=0,
+        )
+
+        hard_delete_store(job.public_id)
+
+        job.refresh_from_db()
+        self.assertEqual(job.status, StoreDeletionJob.Status.SUCCESS)
+
+        audit = StoreLifecycleAuditLog.objects.filter(
+            store_public_id="str_nonexistent",
+            action="STORE_DELETE_ALREADY_MISSING",
+        ).first()
+        self.assertIsNotNone(audit)
+        self.assertEqual(audit.metadata["reason"], "store not found during execution")
+        self.assertEqual(audit.metadata["store_public_id"], "str_nonexistent")
+        self.assertEqual(audit.metadata["job_public_id"], job.public_id)
+
+        self.assertFalse(
+            StoreLifecycleAuditLog.objects.filter(
+                store_public_id="str_nonexistent",
+                action="STORE_DELETE_SUCCESS",
+            ).exists()
+        )
 

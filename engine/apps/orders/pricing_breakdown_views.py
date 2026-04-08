@@ -54,7 +54,17 @@ class PricingBreakdownView(APIView):
 
         shipping_zone_public_id = (request.data.get("shipping_zone_public_id") or "").strip()
         shipping_method_public_id = (request.data.get("shipping_method_public_id") or "").strip()
+        if not shipping_zone_public_id:
+            return Response(
+                {"shipping_zone_public_id": "This field is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         zone = ShippingZone.objects.filter(store=store, public_id=shipping_zone_public_id, is_active=True).first()
+        if zone is None:
+            return Response(
+                {"shipping_zone_public_id": "Invalid or inactive shipping zone."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         method = None
         if shipping_method_public_id:
             method = ShippingMethod.objects.filter(
@@ -64,7 +74,7 @@ class PricingBreakdownView(APIView):
         breakdown = PricingEngine.compute(
             store=store,
             lines=pricing_lines,
-            shipping_zone_pk=zone.id if zone else None,
+            shipping_zone_pk=zone.id,
             shipping_method_pk=method.id if method else None,
         )
         return Response(

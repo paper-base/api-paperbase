@@ -16,6 +16,7 @@ from engine.apps.inventory.models import Inventory
 from engine.apps.products.models import Category, Product, ProductVariant
 from engine.apps.products.stock_sync import sync_product_stock_from_variants
 from engine.apps.shipping.models import ShippingZone
+from engine.apps.customers.models import Customer
 from engine.apps.stores.models import Store, StoreMembership
 from engine.apps.stores.services import (
     allocate_unique_store_code,
@@ -32,6 +33,7 @@ from engine.core.store_api_key_auth import (
     maybe_validate_storefront_api_key_view_flags,
 )
 from config.permissions import IsStorefrontAPIKey
+from tests.core.test_core import _ensure_default_plan
 
 User = get_user_model()
 
@@ -96,11 +98,11 @@ def _api_key_client(api_key: str) -> APIClient:
 
 
 def _admin_client_for_store(store: Store) -> APIClient:
+    _ensure_default_plan()
     user = User.objects.create_user(
         email=f"admin-{store.public_id}@example.com",
         password="pass1234",
         is_verified=True,
-        is_staff=True,
     )
     StoreMembership.objects.create(
         user=user,
@@ -427,6 +429,7 @@ def test_api_key_is_explicitly_blocked_on_exempt_dashboard_routes():
 
 @pytest.mark.django_db
 def test_staff_jwt_ignores_cross_store_header_for_tenant_resolution():
+    _ensure_default_plan()
     store_a = _make_store("Tenant A")
     store_b = _make_store("Tenant B")
     zone_b = _make_zone(store_b)
@@ -443,7 +446,6 @@ def test_staff_jwt_ignores_cross_store_header_for_tenant_resolution():
         email="staff-no-membership@example.com",
         password="pass1234",
         is_verified=True,
-        is_staff=True,
     )
     StoreMembership.objects.create(
         user=user,
@@ -464,10 +466,90 @@ def test_staff_jwt_ignores_cross_store_header_for_tenant_resolution():
         "/api/v1/admin/orders/",
         HTTP_X_STORE_PUBLIC_ID=store_b.public_id,
     )
-    assert response.status_code == 200
-    results = response.data.get("results", response.data)
-    ids = [row.get("public_id") for row in results]
-    assert order_b.public_id not in ids
+    assert response.status_code == 403
+
+
+@pytest.mark.django_db
+def test_customer_api_denies_verified_user_without_store_membership():
+    """Authenticated JWT without any StoreMembership must not access customer APIs."""
+    _ensure_default_plan()
+    user = User.objects.create_user(
+        email="cust-no-mbr@example.com",
+        password="pass1234",
+        is_verified=True,
+    )
+    client = APIClient()
+    resp = client.post(
+        "/api/v1/auth/token/",
+        {"email": user.email, "password": "pass1234"},
+        format="json",
+    )
+    assert resp.status_code == 200
+    client.credentials(HTTP_AUTHORIZATION=f"Bearer {resp.data['access']}")
+
+    me = client.get("/api/v1/customers/me/")
+    assert me.status_code == 403
+
+    addr_list = client.get("/api/v1/customers/addresses/")
+    assert addr_list.status_code == 403
+
+    addr_detail = client.get("/api/v1/customers/addresses/cus_addr_nonexistent/")
+    assert addr_detail.status_code in {403, 404}
+
+
+@pytest.mark.django_db
+def test_customer_jwt_resolves_store_from_token_not_cross_store_header():
+    """Manipulated X-Store-Public-ID must not create or bind a Customer to another store."""
+    _ensure_default_plan()
+    store_a = _make_store("Cust Iso A")
+    store_b = _make_store("Cust Iso B")
+    user = User.objects.create_user(
+        email="cust-iso@example.com",
+        password="pass1234",
+        is_verified=True,
+    )
+    StoreMembership.objects.create(
+        user=user,
+        store=store_a,
+        role=StoreMembership.Role.STAFF,
+        is_active=True,
+    )
+    client = APIClient()
+    resp = client.post(
+        "/api/v1/auth/token/",
+        {"email": user.email, "password": "pass1234"},
+        format="json",
+    )
+    assert resp.status_code == 200
+    client.credentials(HTTP_AUTHORIZATION=f"Bearer {resp.data['access']}")
+
+    r = client.get("/api/v1/customers/me/", HTTP_X_STORE_PUBLIC_ID=store_b.public_id)
+    assert r.status_code == 200
+    assert Customer.objects.filter(user=user, store=store_b).count() == 0
+    assert Customer.objects.filter(user=user, store=store_a).count() == 1
+
+
+@pytest.mark.django_db
+def test_superuser_customer_me_allowed_with_store_header():
+    _ensure_default_plan()
+    store = _make_store("Cust Superuser Store")
+    su = User.objects.create_user(
+        email="cust-su@example.com",
+        password="pass1234",
+        is_verified=True,
+        is_superuser=True,
+        is_staff=True,
+    )
+    client = APIClient()
+    resp = client.post(
+        "/api/v1/auth/token/",
+        {"email": su.email, "password": "pass1234"},
+        format="json",
+    )
+    assert resp.status_code == 200
+    client.credentials(HTTP_AUTHORIZATION=f"Bearer {resp.data['access']}")
+    r = client.get("/api/v1/customers/me/", HTTP_X_STORE_PUBLIC_ID=store.public_id)
+    assert r.status_code == 200
 
 
 @pytest.mark.django_db

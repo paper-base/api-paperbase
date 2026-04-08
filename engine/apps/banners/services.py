@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from django.conf import settings
+from django.db import connection
 from django.db.models import Q
 from django.utils import timezone
 
@@ -14,18 +15,30 @@ from .serializers import PublicBannerSerializer
 
 def get_active_banners(store, request, slot: str | None = None):
     """Return cached active banners list for the storefront, falling back to DB."""
-    key = cache_service.build_key(store.public_id, "banners", "active", slot or "all")
+    key = cache_service.build_key(store.public_id, "banners", f"active:{slot or 'all'}")
 
     def fetcher():
         now = timezone.now()
-        qs = (
+        base = (
             Banner.objects.filter(store=store, is_active=True)
             .filter(Q(start_at__isnull=True) | Q(start_at__lte=now))
             .filter(Q(end_at__isnull=True) | Q(end_at__gte=now))
             .order_by("order", "id")
         )
         if slot:
-            qs = qs.filter(placement_slots__contains=[slot])
+            # JSONField __contains for list primitives is not supported on SQLite
+            # (local dev); PostgreSQL supports it natively.
+            if connection.vendor == "sqlite":
+                ids = [
+                    pk
+                    for pk, slots in base.values_list("id", "placement_slots")
+                    if isinstance(slots, list) and slot in slots
+                ]
+                qs = base.filter(id__in=ids)
+            else:
+                qs = base.filter(placement_slots__contains=[slot])
+        else:
+            qs = base
         return PublicBannerSerializer(
             qs, many=True, context={"request": request}
         ).data

@@ -13,10 +13,12 @@ from engine.apps.orders.models import Order
 from engine.apps.products.models import Category, Product, ProductImage
 from engine.apps.support.models import SupportTicketAttachment
 from engine.apps.stores.lifecycle_emails import owner_email_only, queue_store_permanently_deleted
+from engine.apps.stores.audit import write_store_lifecycle_audit
 from engine.apps.stores.models import Store, StoreDeletionJob
 from engine.apps.stores.services import get_store_owner_user
 from engine.apps.stores.store_lifecycle import (
     INACTIVITY_DAYS,
+    LEASE_TIMEOUT_MINUTES,
     apply_inactivity_pending_delete,
 )
 from engine.core.admin_dashboard_cache import invalidate_notifications_and_dashboard_caches
@@ -98,70 +100,215 @@ def _purge_store_graph(store: Store, job: StoreDeletionJob | None) -> tuple[str,
 
 
 @app.task(name="engine.apps.stores.hard_delete_store")
-def hard_delete_store(job_public_id: str) -> None:
+def hard_delete_store(job_public_id: str, force: bool = False, reason: str | None = None) -> None:
     """
     Irreversibly delete a store and its data while updating job progress.
 
     Idempotent: if the store no longer exists, the job will be marked SUCCESS.
     """
 
-    job = StoreDeletionJob.objects.filter(public_id=job_public_id).first()
-    if not job:
-        return
-
     try:
         with system_scope(reason="hard_delete_store_task"):
-            store = Store.objects.filter(id=job.store_id_snapshot).first()
-            if not store:
-                job.status = StoreDeletionJob.Status.SUCCESS
-                job.current_step = ""
+            with transaction.atomic():
+                job = StoreDeletionJob.objects.select_for_update().filter(public_id=job_public_id).first()
+                if not job:
+                    return
+
+                # Idempotency: if already completed, do nothing.
+                if job.status == StoreDeletionJob.Status.SUCCESS:
+                    return
+                now = timezone.now()
+
+                # Lease-aware guard: if the job is RUNNING and the lease is still
+                # valid another worker owns it.  If the lease expired the worker
+                # crashed — transition to FAILED so the scheduler can re-enqueue.
+                if job.status == StoreDeletionJob.Status.RUNNING:
+                    lease_deadline = (
+                        job.started_at + timedelta(minutes=LEASE_TIMEOUT_MINUTES)
+                        if job.started_at
+                        else None
+                    )
+                    if lease_deadline and lease_deadline > now:
+                        return
+                    job.status = StoreDeletionJob.Status.FAILED
+                    job.error_message = "Lease expired (stale RUNNING); will be retried."
+                    job.started_at = None
+                    job.celery_task_id = ""
+                    job.save(update_fields=["status", "error_message", "started_at", "celery_task_id"])
+                    write_store_lifecycle_audit(
+                        user=getattr(job, "user", None),
+                        store=None,
+                        store_public_id=job.store_public_id_snapshot,
+                        action="STORE_DELETE_FAILED",
+                        metadata={
+                            "job_public_id": job.public_id,
+                            "store_id_snapshot": job.store_id_snapshot,
+                            "reason": "lease_expired",
+                        },
+                    )
+                    return
+
+                store = (
+                    Store.objects.select_for_update()
+                    .filter(id=job.store_id_snapshot)
+                    .first()
+                )
+
+                if not store:
+                    job.status = StoreDeletionJob.Status.SUCCESS
+                    job.current_step = ""
+                    job.error_message = ""
+                    job.save(update_fields=["status", "current_step", "error_message"])
+                    write_store_lifecycle_audit(
+                        user=getattr(job, "user", None),
+                        store=None,
+                        store_public_id=job.store_public_id_snapshot,
+                        action="STORE_DELETE_ALREADY_MISSING",
+                        metadata={
+                            "job_public_id": job.public_id,
+                            "store_public_id": job.store_public_id_snapshot,
+                            "store_id_snapshot": job.store_id_snapshot,
+                            "reason": "store not found during execution",
+                        },
+                    )
+                    return
+
+                if store.status not in (Store.Status.INACTIVE, Store.Status.PENDING_DELETE):
+                    job.status = StoreDeletionJob.Status.FAILED
+                    job.celery_task_id = ""
+                    job.error_message = (
+                        f"Store status is {store.status}; expected INACTIVE or PENDING_DELETE."
+                    )
+                    job.save(update_fields=["status", "celery_task_id", "error_message"])
+                    write_store_lifecycle_audit(
+                        user=getattr(job, "user", None),
+                        store=store,
+                        action="STORE_DELETE_FAILED",
+                        metadata={
+                            "job_public_id": job.public_id,
+                            "store_id_snapshot": job.store_id_snapshot,
+                            "lifecycle_version": store.lifecycle_version,
+                            "lifecycle_version_snapshot": job.lifecycle_version_snapshot,
+                            "reason": "invalid_store_status",
+                        },
+                    )
+                    return
+
+                if store.lifecycle_version != job.lifecycle_version_snapshot:
+                    job.status = StoreDeletionJob.Status.FAILED
+                    job.celery_task_id = ""
+                    job.error_message = (
+                        f"lifecycle_version mismatch: store={store.lifecycle_version}, "
+                        f"job={job.lifecycle_version_snapshot}. Store was likely restored."
+                    )
+                    job.save(update_fields=["status", "celery_task_id", "error_message"])
+                    write_store_lifecycle_audit(
+                        user=getattr(job, "user", None),
+                        store=store,
+                        action="STORE_DELETE_FAILED",
+                        metadata={
+                            "job_public_id": job.public_id,
+                            "store_id_snapshot": job.store_id_snapshot,
+                            "lifecycle_version": store.lifecycle_version,
+                            "lifecycle_version_snapshot": job.lifecycle_version_snapshot,
+                            "reason": "lifecycle_version_mismatch",
+                        },
+                    )
+                    return
+
+                if store.delete_at and store.delete_at > now and not force:
+                    job.status = StoreDeletionJob.Status.SKIPPED_NOT_DUE
+                    job.celery_task_id = ""
+                    job.current_step = ""
+                    job.error_message = ""
+                    job.save(update_fields=["status", "celery_task_id", "current_step", "error_message"])
+                    write_store_lifecycle_audit(
+                        user=getattr(job, "user", None),
+                        store=store,
+                        action="STORE_DELETE_SKIPPED_NOT_DUE",
+                        metadata={
+                            "job_public_id": job.public_id,
+                            "store_id_snapshot": job.store_id_snapshot,
+                            "lifecycle_version": store.lifecycle_version,
+                            "lifecycle_version_snapshot": job.lifecycle_version_snapshot,
+                            "delete_at": store.delete_at.isoformat() if store.delete_at else None,
+                        },
+                    )
+                    return
+
+                if force:
+                    why = (reason or "").strip() or "unspecified"
+                    write_store_lifecycle_audit(
+                        user=getattr(job, "user", None),
+                        store=store,
+                        action="STORE_DELETE_FORCED",
+                        metadata={
+                            "job_public_id": job.public_id,
+                            "store_id_snapshot": job.store_id_snapshot,
+                            "lifecycle_version": store.lifecycle_version,
+                            "lifecycle_version_snapshot": job.lifecycle_version_snapshot,
+                            "reason": why,
+                        },
+                    )
+
+                job.status = StoreDeletionJob.Status.RUNNING
+                job.started_at = now
+                job.current_step = StoreDeletionJob.STEP_REMOVING_ORDERS
                 job.error_message = ""
-                job.save(update_fields=["status", "current_step", "error_message"])
-                return
-
-            now = timezone.now()
-
-            if store.status not in (Store.Status.INACTIVE, Store.Status.PENDING_DELETE):
-                job.status = StoreDeletionJob.Status.FAILED
-                job.error_message = (
-                    f"Store status is {store.status}; expected INACTIVE or PENDING_DELETE."
+                job.save(update_fields=["status", "started_at", "current_step", "error_message"])
+                write_store_lifecycle_audit(
+                    user=getattr(job, "user", None),
+                    store=store,
+                    action="STORE_DELETE_STARTED",
+                    metadata={
+                        "job_public_id": job.public_id,
+                        "store_id_snapshot": job.store_id_snapshot,
+                        "lifecycle_version": store.lifecycle_version,
+                        "lifecycle_version_snapshot": job.lifecycle_version_snapshot,
+                        "force": bool(force),
+                    },
                 )
-                job.save(update_fields=["status", "error_message"])
-                return
 
-            if store.delete_at and store.delete_at > now:
-                job.status = StoreDeletionJob.Status.FAILED
-                job.error_message = "delete_at is in the future; not yet due."
-                job.save(update_fields=["status", "error_message"])
-                return
-
-            if store.lifecycle_version != job.lifecycle_version_snapshot:
-                job.status = StoreDeletionJob.Status.FAILED
-                job.error_message = (
-                    f"lifecycle_version mismatch: store={store.lifecycle_version}, "
-                    f"job={job.lifecycle_version_snapshot}. Store was likely restored."
-                )
-                job.save(update_fields=["status", "error_message"])
-                return
-
-            job.status = StoreDeletionJob.Status.RUNNING
-            job.current_step = StoreDeletionJob.STEP_REMOVING_ORDERS
-            job.error_message = ""
-            job.save(update_fields=["status", "current_step", "error_message"])
-
+            # Perform destructive work outside the row-locking transaction, but only after the
+            # decision has been made under DB locks.
             name, emails = _purge_store_graph(store, job)
-
             queue_store_permanently_deleted(name, emails)
 
             job.status = StoreDeletionJob.Status.SUCCESS
             job.current_step = ""
             job.error_message = ""
             job.save(update_fields=["status", "current_step", "error_message"])
+            write_store_lifecycle_audit(
+                user=getattr(job, "user", None),
+                store=None,
+                store_public_id=job.store_public_id_snapshot,
+                action="STORE_DELETE_SUCCESS",
+                metadata={
+                    "job_public_id": job.public_id,
+                    "store_id_snapshot": job.store_id_snapshot,
+                    "lifecycle_version_snapshot": job.lifecycle_version_snapshot,
+                },
+            )
     except Exception as exc:
-        job.status = StoreDeletionJob.Status.FAILED
-        job.current_step = StoreDeletionJob.STEP_FINALIZING
-        job.error_message = str(exc)
-        job.save(update_fields=["status", "current_step", "error_message"])
+        job = StoreDeletionJob.objects.filter(public_id=job_public_id).first()
+        if job:
+            job.status = StoreDeletionJob.Status.FAILED
+            job.celery_task_id = ""
+            job.current_step = StoreDeletionJob.STEP_FINALIZING
+            job.error_message = str(exc)
+            job.save(update_fields=["status", "celery_task_id", "current_step", "error_message"])
+            write_store_lifecycle_audit(
+                user=getattr(job, "user", None),
+                store=None,
+                store_public_id=job.store_public_id_snapshot,
+                action="STORE_DELETE_FAILED",
+                metadata={
+                    "job_public_id": job.public_id,
+                    "store_id_snapshot": job.store_id_snapshot,
+                    "lifecycle_version_snapshot": job.lifecycle_version_snapshot,
+                    "error": str(exc),
+                },
+            )
 
 
 @app.task(name="engine.apps.stores.process_store_lifecycle")
@@ -180,10 +327,17 @@ def _process_due_store_deletions() -> None:
         delete_at__lte=now,
     )
     for store in qs:
+        # SKIPPED_NOT_DUE and FAILED are eligible for re-dispatch, but only because
+        # the store-level delete_at__lte=now filter above already enforces the time
+        # constraint.  SKIPPED_NOT_DUE is NOT a generic retry flag.
         job = (
             StoreDeletionJob.objects.filter(
                 store_id_snapshot=store.id,
-                status=StoreDeletionJob.Status.PENDING,
+                status__in=[
+                    StoreDeletionJob.Status.PENDING,
+                    StoreDeletionJob.Status.SKIPPED_NOT_DUE,
+                    StoreDeletionJob.Status.FAILED,
+                ],
             )
             .order_by("-created_at")
             .first()

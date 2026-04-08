@@ -998,6 +998,7 @@ class EmailVerificationTests(TestCase):
 
 class IdrSecurityTests(TestCase):
     def setUp(self):
+        _ensure_default_plan()
         self.client = APIClient()
         self.store = _make_store("Security Store", "sec.local", owner_email="sec@example.com")
         self.user_a = make_user("a@example.com")

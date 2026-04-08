@@ -49,11 +49,19 @@ def fixed_window_increment(cache: BaseCache, raw_key: str, window_seconds: int) 
         return 1
 
 
-def incr_under_limit(cache: BaseCache, raw_key: str, window_seconds: int, limit: int) -> bool:
+def incr_under_limit(
+    cache: BaseCache,
+    raw_key: str,
+    window_seconds: int,
+    limit: int,
+    *,
+    fail_open_on_cache_error: bool = True,
+) -> bool:
     """
     Return True if the count after increment is within limit (inclusive).
 
-    On cache/Redis errors, logs a warning and returns True (fail open).
+    On cache/Redis errors: returns fail_open_on_cache_error (default True for generic callers).
+    Tenant storefront rate limiting passes fail_open_on_cache_error=False to fail closed.
     """
     if limit <= 0:
         return True
@@ -62,8 +70,9 @@ def incr_under_limit(cache: BaseCache, raw_key: str, window_seconds: int, limit:
         return n <= limit
     except Exception:
         logger.warning(
-            "rate_limit cache error; fail open (allow request)",
+            "rate_limit cache error; fail_open=%s",
+            fail_open_on_cache_error,
             exc_info=True,
             extra={"rate_limit_key": raw_key},
         )
-        return True
+        return fail_open_on_cache_error

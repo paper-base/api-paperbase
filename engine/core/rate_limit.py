@@ -86,9 +86,13 @@ def storefront_rate_check(
     agg_key = f"rate:api_key:{api_key_public_id}"
     aggregate_limit = resolve_storefront_aggregate_limit(store)
 
-    if not incr_under_limit(c, ip_key, window, _per_ip_limit()):
+    if not incr_under_limit(
+        c, ip_key, window, _per_ip_limit(), fail_open_on_cache_error=False
+    ):
         return False, "per_ip"
-    if not incr_under_limit(c, agg_key, window, aggregate_limit):
+    if not incr_under_limit(
+        c, agg_key, window, aggregate_limit, fail_open_on_cache_error=False
+    ):
         return False, "aggregate"
     return True, None
 

@@ -11,6 +11,7 @@ from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from config.permissions import DenyAPIKeyAccess, IsAdminUser
+from engine.core.tenant_drf import ProvenTenantContextMixin
 from engine.apps.basic_analytics.models import StoreDashboardStatsSnapshot
 from engine.apps.customers.models import Customer
 from engine.apps.orders.models import Order
@@ -33,7 +34,7 @@ DASHBOARD_LIVE_OVERVIEW_TTL_SECONDS = 20
 logger = logging.getLogger(__name__)
 
 
-class BasicAnalyticsOverviewView(APIView):
+class BasicAnalyticsOverviewView(ProvenTenantContextMixin, APIView):
     """
     Home dashboard stats: summary, time series, and meta (date range + bucket).
 
@@ -79,7 +80,7 @@ class BasicAnalyticsOverviewView(APIView):
     def _compute_payload(
         self,
         *,
-        store: Store | None,
+        store: Store,
         start_date: date,
         end_date: date,
         bucket: str,
@@ -102,11 +103,10 @@ class BasicAnalyticsOverviewView(APIView):
             created_at__date__lte=end_date,
         )
 
-        if store:
-            order_qs = order_qs.filter(store=store)
-            product_qs = product_qs.filter(store=store)
-            support_ticket_qs = support_ticket_qs.filter(store=store)
-            customer_qs = customer_qs.filter(store=store)
+        order_qs = order_qs.filter(store=store)
+        product_qs = product_qs.filter(store=store)
+        support_ticket_qs = support_ticket_qs.filter(store=store)
+        customer_qs = customer_qs.filter(store=store)
 
         summary = {
             "totalOrders": order_qs.count(),

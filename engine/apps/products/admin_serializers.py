@@ -3,7 +3,7 @@ from rest_framework import serializers
 
 from engine.core.media_deletion_service import schedule_media_deletion_from_keys
 
-from engine.apps.inventory.cache_sync import sync_product_stock_cache
+from engine.apps.inventory.cache_sync import refresh_product_stock_cache
 from engine.apps.inventory.models import Inventory
 from engine.apps.inventory.utils import clamp_stock
 from engine.core.serializers import SafeModelSerializer
@@ -473,22 +473,26 @@ class AdminProductVariantSerializer(SafeModelSerializer):
             ProductVariant.objects.filter(product_id=variant.product_id).count() == 1
         )
         transferred_qty = 0
-        if is_first_variant:
-            old_inv = Inventory.objects.filter(
-                product=variant.product, variant__isnull=True
-            ).first()
-            if old_inv:
-                transferred_qty = clamp_stock(old_inv.quantity)
-                Inventory.objects.filter(
+        with transaction.atomic():
+            if is_first_variant:
+                old_inv = Inventory.objects.filter(
                     product=variant.product, variant__isnull=True
-                ).delete()
-        Inventory.objects.get_or_create(
-            product=variant.product,
-            variant=variant,
-            defaults={"quantity": clamp_stock(transferred_qty)},
-        )
-        if is_first_variant:
-            sync_product_stock_cache(int(variant.product.store_id))
+                ).first()
+                if old_inv:
+                    transferred_qty = clamp_stock(old_inv.quantity)
+                    Inventory.objects.filter(
+                        product=variant.product, variant__isnull=True
+                    ).delete()
+            Inventory.objects.get_or_create(
+                product=variant.product,
+                variant=variant,
+                defaults={"quantity": clamp_stock(transferred_qty)},
+            )
+            if is_first_variant:
+                refresh_product_stock_cache(
+                    store_id=int(variant.product.store_id),
+                    product_id=variant.product_id,
+                )
         return variant
 
     def update(self, instance, validated_data):

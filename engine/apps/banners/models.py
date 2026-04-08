@@ -10,19 +10,9 @@ class Banner(models.Model):
     """Store-scoped promotional banner for the storefront (image + optional CTA)."""
 
     PLACEMENT_CHOICES = [
-        ("global_topbar", "Global Topbar"),
-        ("global_bottom", "Global Bottom"),
         ("home_top", "Home Top"),
         ("home_mid", "Home Mid"),
         ("home_bottom", "Home Bottom"),
-        ("dashboard_header", "Dashboard Header"),
-        ("dashboard_sidebar", "Dashboard Sidebar"),
-        ("dashboard_mid", "Dashboard Mid"),
-        ("product_top", "Product Top"),
-        ("product_mid", "Product Mid"),
-        ("product_bottom", "Product Bottom"),
-        ("checkout_top", "Checkout Top"),
-        ("checkout_bottom", "Checkout Bottom"),
     ]
 
     public_id = models.CharField(
@@ -65,8 +55,10 @@ class Banner(models.Model):
     def clean(self):
         super().clean()
         slots = self.placement_slots
-        if not slots or len(slots) == 0:
+        if not isinstance(slots, list) or len(slots) == 0:
             raise ValidationError({"placement_slots": "At least one placement slot is required"})
+        if not all(isinstance(x, str) for x in slots):
+            raise ValidationError({"placement_slots": "Invalid placement slot selected"})
         allowed = {k for k, _ in self.PLACEMENT_CHOICES}
         invalid = [p for p in slots if p not in allowed]
         if invalid:

@@ -22,6 +22,7 @@ API_KEY_EXEMPT_PATHS = (
     "/api/v1/auth/",
     "/api/v1/admin/",
     "/api/v1/store/",
+    "/api/v1/customers/",
     "/api/v1/system-notifications/",
     "/api/v1/settings/network/",
 )
@@ -94,11 +95,11 @@ def _throttle_invalid_api_key(raw_key: str | None) -> bool:
         current = fixed_window_increment(c, cache_key, 60)
     except Exception:
         logger.warning(
-            "invalid_api_key rate limit cache error; fail open",
+            "invalid_api_key rate limit cache error; fail closed (treat as throttled)",
             exc_info=True,
             extra={"rate_limit_key": cache_key},
         )
-        return False
+        return True
     return current > limit
 
 

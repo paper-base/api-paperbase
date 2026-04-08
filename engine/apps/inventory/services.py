@@ -1,26 +1,20 @@
 """Inventory services: tenant-safe stock adjustment and audit logging."""
 from __future__ import annotations
 
-import logging
-
 from django.core.exceptions import ValidationError
 from django.db import transaction
 
 from engine.core.tenant_context import require_store_context
+from .cache_sync import refresh_product_stock_cache
 from .utils import clamp_stock
-
-logger = logging.getLogger(__name__)
 
 
 def _lock_inventory(*, store_id: int, product_id, variant_id: int | None):
     from .models import Inventory
-    from engine.apps.products.models import Product, ProductVariant
+    from engine.apps.products.models import ProductVariant
 
     # Avoid JOINs in SELECT ... FOR UPDATE on nullable relations (Postgres disallows
     # locking the nullable side of an outer join).
-    if not Product.objects.filter(id=product_id, store_id=store_id).exists():
-        raise Inventory.DoesNotExist
-
     qs = Inventory.objects.select_for_update()
     if variant_id is None:
         return qs.get(
@@ -53,6 +47,7 @@ def adjust_inventory_stock(
     Tenant-scoped stock mutation entrypoint.
     Positive delta reduces available inventory, negative delta restores it.
     """
+    from engine.apps.products.models import Product
     from .models import Inventory, StockMovement
 
     if delta_qty is None:
@@ -62,6 +57,11 @@ def adjust_inventory_stock(
         raise ValidationError("delta_qty must be non-zero.")
 
     with transaction.atomic():
+        try:
+            Product.objects.select_for_update().get(id=product_id, store_id=store_id)
+        except Product.DoesNotExist as exc:
+            raise ValidationError("Invalid product for this store.") from exc
+
         try:
             inventory = _lock_inventory(store_id=store_id, product_id=product_id, variant_id=variant_id)
         except Inventory.DoesNotExist as exc:
@@ -87,18 +87,7 @@ def adjust_inventory_stock(
         if inventory.is_low_stock() and inventory.quantity <= inventory.low_stock_threshold:
             _create_low_stock_notification(inventory)
 
-        def _enqueue_cache_sync() -> None:
-            try:
-                from .tasks import sync_product_stock_cache_for_store
-
-                sync_product_stock_cache_for_store.delay(int(store_id))
-            except Exception:
-                logger.exception(
-                    "Failed to enqueue product stock cache sync",
-                    extra={"store_id": int(store_id)},
-                )
-
-        transaction.on_commit(_enqueue_cache_sync)
+        refresh_product_stock_cache(store_id=int(store_id), product_id=product_id)
         return inventory
 
 

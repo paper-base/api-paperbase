@@ -11,7 +11,7 @@ def can_enable_internal_override(*, user, client_ip: str) -> bool:
     return bool(
         user
         and getattr(user, "is_authenticated", False)
-        and getattr(user, "is_staff", False)
+        and getattr(user, "is_superuser", False)
         and override_flag
         and allowlist_match
     )
@@ -22,13 +22,6 @@ class IsPlatformRequest(BasePermission):
 
     def has_permission(self, request, view):
         return bool(getattr(request, "is_platform_request", False))
-
-
-class IsStaffUser(BasePermission):
-    """Backwards-compatible permission for authenticated Django staff users."""
-
-    def has_permission(self, request, view):
-        return bool(request.user and request.user.is_authenticated and request.user.is_staff)
 
 
 class IsPlatformSuperuser(BasePermission):
@@ -78,8 +71,6 @@ class IsDashboardUser(BasePermission):
         ctx = get_active_store(request)
         if not (ctx.store and ctx.membership):
             return False
-        if request.user.is_staff:
-            return True
         from engine.apps.billing.feature_gate import _get_effective_plan
 
         return _get_effective_plan(request.user) is not None
@@ -156,7 +147,6 @@ class IsStoreAdmin(BasePermission):
 __all__ = [
     "can_enable_internal_override",
     "IsPlatformRequest",
-    "IsStaffUser",
     "IsPlatformSuperuser",
     "IsPlatformSuperuserOrStoreAdmin",
     "IsVerifiedUser",

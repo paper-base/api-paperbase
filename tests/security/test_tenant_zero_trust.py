@@ -113,10 +113,10 @@ def test_auth_bypass_via_staff_without_auth_context_fails(settings):
     user = User.objects.create_user(
         email="staff-bypass@example.com",
         password="secret123",
-        is_staff=True,
+        is_superuser=True,
         is_verified=True,
     )
-    # Staff alone is not enough: IP must be on the allowlist.
+    # Superuser alone is not enough: IP must be on the allowlist.
     assert can_enable_internal_override(user=user, client_ip="10.0.0.1") is False
 
 

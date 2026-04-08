@@ -22,6 +22,7 @@ from engine.apps.stores.services import (
     normalize_store_code_base_from_name,
 )
 from engine.core.tenant_execution import tenant_scope_from_store
+from tests.core.test_core import _ensure_default_plan
 
 User = get_user_model()
 
@@ -100,11 +101,11 @@ def _api_key_client(api_key: str) -> APIClient:
 
 
 def _admin_client_for_store(store: Store) -> APIClient:
+    _ensure_default_plan()
     user = User.objects.create_user(
         email=f"admin-{store.public_id}@example.com",
         password="pass1234",
         is_verified=True,
-        is_staff=True,
     )
     StoreMembership.objects.create(
         user=user,

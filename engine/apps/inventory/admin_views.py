@@ -7,6 +7,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from config.permissions import IsDashboardUser
 from engine.apps.products.models import ProductVariantAttribute
 from engine.core.admin_views import StoreRolePermissionMixin
+from engine.core.tenant_drf import ProvenTenantContextMixin
 from engine.core.query_params import include_inactive_truthy
 from engine.core.tenancy import get_active_store
 from .models import Inventory, StockMovement
@@ -110,7 +111,7 @@ class AdminInventoryViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
         return Response(InventoryDetailSerializer(inventory).data)
 
 
-class AdminStockMovementViewSet(viewsets.ReadOnlyModelViewSet):
+class AdminStockMovementViewSet(ProvenTenantContextMixin, viewsets.ReadOnlyModelViewSet):
     permission_classes = [IsDashboardUser]
     serializer_class = StockMovementSerializer
     lookup_field = "public_id"

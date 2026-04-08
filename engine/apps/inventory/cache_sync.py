@@ -12,6 +12,42 @@ from .utils import clamp_stock
 logger = logging.getLogger(__name__)
 
 
+def _contribution_from_inventory_row(inv: Inventory) -> int:
+    """Per-row quantity counted toward Product.stock (inactive variants contribute 0)."""
+    if inv.variant_id and not inv.variant.is_active:
+        return 0
+    return clamp_stock(inv.quantity or 0)
+
+
+def total_stock_from_inventory_rows(inventories) -> int:
+    """
+    Aggregate Product.stock from inventory rows using the same rules as full-store sync:
+    each row is clamped, summed per product, then the total is clamped.
+    """
+    total = 0
+    for inv in inventories:
+        total += _contribution_from_inventory_row(inv)
+    return clamp_stock(total)
+
+
+def refresh_product_stock_cache(*, store_id: int, product_id) -> None:
+    """
+    Recompute Product.stock from Inventory for one product.
+
+    Locks Product, then all Inventory rows for that product (deterministic PK order).
+    Must run inside transaction.atomic().
+    """
+    Product.objects.select_for_update().get(id=product_id, store_id=store_id)
+    inv_rows = list(
+        Inventory.objects.select_related("variant")
+        .select_for_update()
+        .filter(product_id=product_id, product__store_id=store_id)
+        .order_by("pk")
+    )
+    expected = total_stock_from_inventory_rows(inv_rows)
+    Product.objects.filter(id=product_id, store_id=store_id).update(stock=expected)
+
+
 def sync_product_stock_cache(store_id: int) -> None:
     """
     Synchronize Product.stock cache field from Inventory.quantity.
@@ -29,23 +65,20 @@ def sync_product_stock_cache(store_id: int) -> None:
         product_expected: dict = {p.id: 0 for p in products}
 
         for inv in inventories:
-            if inv.variant_id and not inv.variant.is_active:
-                continue
             pid = inv.product_id
-            qty = clamp_stock(inv.quantity or 0)
-            product_expected[pid] = product_expected.get(pid, 0) + qty
+            product_expected[pid] = product_expected.get(pid, 0) + _contribution_from_inventory_row(inv)
 
         changed_products = []
         for p in products:
             expected = clamp_stock(product_expected.get(p.id, 0))
             if int(p.stock) != expected:
-                logger.warning(
-                    "Stock cache mismatch for product",
+                logger.info(
+                    "Reconciled product stock cache from inventory (full store sync)",
                     extra={
                         "store_id": store_id,
                         "product_id": str(p.id),
                         "expected_stock": expected,
-                        "actual_stock": int(p.stock),
+                        "previous_stock": int(p.stock),
                     },
                 )
                 p.stock = expected
