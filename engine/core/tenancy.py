@@ -218,7 +218,7 @@ def log_store_resolution(request: HttpRequest, ctx: ActiveStoreContext) -> None:
         return
     user = getattr(request, "user", None)
     uid = getattr(user, "public_id", None) if user else None
-    logger.info(
+    logger.debug(
         "tenant.store_resolved",
         extra={
             "provenance": ctx.provenance.value,

@@ -167,6 +167,11 @@ LOGGING = {
         "django": {"handlers": ["console"], "level": "WARNING", "propagate": False},
         "django.request": {"handlers": ["console"], "level": "ERROR", "propagate": False},
         "django.security": {"handlers": ["console"], "level": "WARNING", "propagate": False},
+        # Gunicorn (starts before Django; only effective if using gunicorn.conf.py / matching flags).
+        "gunicorn.error": {"handlers": ["console"], "level": "WARNING", "propagate": False},
+        "gunicorn.access": {"handlers": ["console"], "level": "WARNING", "propagate": False},
+        # Per-request store resolution is DEBUG-only (see engine.core.tenancy.log_store_resolution).
+        "engine.core.tenancy": {"handlers": ["console"], "level": "WARNING", "propagate": False},
         # Project code: info by default.
         "engine": {"handlers": ["console"], "level": "INFO", "propagate": False},
         "config": {"handlers": ["console"], "level": "INFO", "propagate": False},
