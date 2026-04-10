@@ -99,6 +99,8 @@ TRUSTED_IP_HEADER = (os.getenv("TRUSTED_IP_HEADER", "HTTP_X_FORWARDED_FOR") or "
 
 # Cloudflare Turnstile (login/register). Server-side secret only; leave unset to skip checks locally.
 TURNSTILE_SECRET_KEY = os.getenv("TURNSTILE_SECRET_KEY", "").strip()
+# When true, skip siteverify even if TURNSTILE_SECRET_KEY is set (local dev only; never enable in production).
+TURNSTILE_SKIP_VERIFICATION = env_bool("TURNSTILE_SKIP_VERIFICATION", False)
 
 # Storefront rate limits (per minute, fixed window) — see engine.core.rate_limit
 TENANT_STOREFRONT_RATE_LIMIT_PER_IP_PER_MIN = int(

@@ -24,6 +24,9 @@ def verify_turnstile_request(request) -> tuple[bool, str | None]:
     if getattr(settings, "TESTING", False):
         return True, None
 
+    if getattr(settings, "TURNSTILE_SKIP_VERIFICATION", False):
+        return True, None
+
     secret = (getattr(settings, "TURNSTILE_SECRET_KEY", None) or "").strip()
     if not secret:
         return True, None
