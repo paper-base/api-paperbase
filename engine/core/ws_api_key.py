@@ -12,6 +12,17 @@ from engine.apps.stores.services import (
 )
 
 
+def _storefront_ws_blocked(store) -> bool:
+    """True if the store owner may not use storefront-scoped WebSockets (mirror HTTP IsStorefrontAPIKey)."""
+    owner = getattr(store, "owner", None)
+    if owner is None:
+        return False
+    from engine.apps.billing.subscription_status import get_user_subscription_status
+
+    uss = get_user_subscription_status(owner)
+    return uss in ("EXPIRED", "PENDING_REVIEW", "REJECTED")
+
+
 def _extract_ws_api_key(scope) -> str | None:
     headers = dict(scope.get("headers", []))
     header = headers.get(b"authorization", b"").decode("latin1")
@@ -39,6 +50,8 @@ async def resolve_scope_api_key(scope) -> bool:
         return False
     key_row = await sync_to_async(resolve_active_store_api_key)(raw_key)
     if key_row is None:
+        return False
+    if await sync_to_async(_storefront_ws_blocked)(key_row.store):
         return False
     scope["api_key"] = key_row
     scope["store"] = key_row.store

@@ -63,6 +63,8 @@ class Subscription(models.Model):
 
     class Status(models.TextChoices):
         ACTIVE = "active", "Active"
+        PENDING_REVIEW = "pending_review", "Pending review"
+        REJECTED = "rejected", "Rejected"
         EXPIRED = "expired", "Expired"
         CANCELED = "canceled", "Canceled"
 
@@ -130,6 +132,15 @@ class Subscription(models.Model):
             if existing.exists():
                 raise ValidationError(
                     {"status": "User can only have one active subscription at a time."}
+                )
+        if self.status == self.Status.PENDING_REVIEW:
+            existing = Subscription.objects.filter(
+                user=self.user,
+                status=self.Status.PENDING_REVIEW,
+            ).exclude(pk=self.pk)
+            if existing.exists():
+                raise ValidationError(
+                    {"status": "User can only have one subscription pending review at a time."}
                 )
 
     def is_active(self) -> bool:

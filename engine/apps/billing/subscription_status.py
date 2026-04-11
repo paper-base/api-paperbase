@@ -13,11 +13,16 @@ from .models import Subscription
 
 def get_subscription_status(subscription: Subscription) -> str:
     """
-    Return ACTIVE, GRACE, or EXPIRED from calendar + DB status.
+    Return PENDING_REVIEW, REJECTED, ACTIVE, GRACE, or EXPIRED.
 
+    DB statuses pending_review / rejected short-circuit before calendar logic.
     Uses timezone.now() via bd_calendar_date for comparison with end_date.
     DB status EXPIRED wins immediately (no grace).
     """
+    if subscription.status == Subscription.Status.PENDING_REVIEW:
+        return "PENDING_REVIEW"
+    if subscription.status == Subscription.Status.REJECTED:
+        return "REJECTED"
     if subscription.status == Subscription.Status.EXPIRED:
         return "EXPIRED"
     today = bd_calendar_date(timezone.now())
@@ -41,8 +46,12 @@ def storefront_blocks_at(subscription: Subscription) -> datetime:
 
 def get_candidate_subscription_row(user) -> Subscription | None:
     """
-    Row used for status and feature access: current ACTIVE lifecycle row, or
-    latest non-canceled row when no ACTIVE (e.g. superseded EXPIRED rows).
+    Row used for status and feature access.
+
+    Precedence:
+    1) DB ACTIVE — calendar-derived ACTIVE/GRACE/EXPIRED for paid period.
+    2) PENDING_REVIEW — payment submitted, awaiting admin approval.
+    3) Latest non-canceled row (e.g. EXPIRED, REJECTED) by end_date.
     """
     sub = (
         Subscription.objects.filter(user=user, status=Subscription.Status.ACTIVE)
@@ -52,6 +61,14 @@ def get_candidate_subscription_row(user) -> Subscription | None:
     )
     if sub:
         return sub
+    pending = (
+        Subscription.objects.filter(user=user, status=Subscription.Status.PENDING_REVIEW)
+        .select_related("plan")
+        .order_by("-created_at")
+        .first()
+    )
+    if pending:
+        return pending
     return (
         Subscription.objects.filter(user=user)
         .exclude(status=Subscription.Status.CANCELED)
@@ -62,7 +79,7 @@ def get_candidate_subscription_row(user) -> Subscription | None:
 
 
 def get_user_subscription_status(user) -> str:
-    """NONE, ACTIVE, GRACE, or EXPIRED."""
+    """NONE, PENDING_REVIEW, REJECTED, ACTIVE, GRACE, or EXPIRED."""
     sub = get_candidate_subscription_row(user)
     if not sub:
         return "NONE"
@@ -87,15 +104,25 @@ SUBSCRIPTION_EXPIRED_DETAIL = {
     ),
 }
 
+STOREFRONT_UNAVAILABLE_DETAIL = {
+    "error": "storefront_unavailable",
+    "message": (
+        "The storefront is not available yet. Please complete setup or wait for approval."
+    ),
+}
+
 
 def dashboard_subscription_access_ok(user) -> bool:
     """
-    Dashboard JWT access: NONE → deny; EXPIRED → allow (read UI, renew); ACTIVE/GRACE → need paid row.
-    Storefront uses IsStorefrontAPIKey + owner EXPIRED block instead.
+    Dashboard JWT access: NONE/REJECTED → deny; PENDING_REVIEW → allow;
+    EXPIRED → allow (read UI, renew); ACTIVE/GRACE → need paid row.
+    Storefront uses IsStorefrontAPIKey + owner checks instead.
     """
     uss = get_user_subscription_status(user)
-    if uss == "NONE":
+    if uss in ("NONE", "REJECTED"):
         return False
+    if uss == "PENDING_REVIEW":
+        return True
     if uss == "EXPIRED":
         return True
     return get_subscription_for_api_access(user) is not None

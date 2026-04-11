@@ -104,6 +104,7 @@ class IsStorefrontAPIKey(BasePermission):
         from rest_framework.exceptions import PermissionDenied
 
         from engine.apps.billing.subscription_status import (
+            STOREFRONT_UNAVAILABLE_DETAIL,
             SUBSCRIPTION_EXPIRED_DETAIL,
             get_user_subscription_status,
         )
@@ -115,8 +116,12 @@ class IsStorefrontAPIKey(BasePermission):
         if getattr(api_key, "key_type", None) != api_key.KeyType.PUBLIC:
             return False
         owner = getattr(store, "owner", None)
-        if owner is not None and get_user_subscription_status(owner) == "EXPIRED":
-            raise PermissionDenied(detail=SUBSCRIPTION_EXPIRED_DETAIL)
+        if owner is not None:
+            uss = get_user_subscription_status(owner)
+            if uss == "EXPIRED":
+                raise PermissionDenied(detail=SUBSCRIPTION_EXPIRED_DETAIL)
+            if uss in ("PENDING_REVIEW", "REJECTED"):
+                raise PermissionDenied(detail=STOREFRONT_UNAVAILABLE_DETAIL)
         return True
 
 

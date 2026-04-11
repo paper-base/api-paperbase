@@ -179,13 +179,17 @@ class MeSerializer(SafeModelSerializer):
                 "storefront_blocks_at": None,
             }
 
+        blocks_at = None
+        if st not in ("PENDING_REVIEW", "REJECTED") and sub:
+            blocks_at = storefront_blocks_at(sub).isoformat()
+
         return {
             "subscription_status": st,
             "plan": sub.plan.name if sub else None,
             "plan_public_id": sub.plan.public_id if sub else None,
             "end_date": sub.end_date.isoformat() if sub else None,
             "days_remaining": sub.days_remaining() if sub else 0,
-            "storefront_blocks_at": storefront_blocks_at(sub).isoformat() if sub else None,
+            "storefront_blocks_at": blocks_at,
         }
 
     def get_store(self, obj):

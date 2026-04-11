@@ -15,13 +15,19 @@ from engine.apps.billing.feature_gate import (
     require_feature,
 )
 from engine.apps.billing.models import Payment, Plan, Subscription
-from engine.apps.billing.services import activate_subscription, extend_subscription, get_active_subscription
+from engine.apps.billing.services import (
+    activate_subscription,
+    extend_subscription,
+    get_active_subscription,
+    reject_pending_review_for_payment,
+)
 from engine.apps.billing.subscription_status import (
+    dashboard_subscription_access_ok,
     get_subscription_status,
     get_user_subscription_status,
     storefront_blocks_at,
 )
-from engine.utils.time import BD_TZ
+from engine.utils.time import BD_TZ, bd_today
 from engine.apps.billing.pricing import plan_charge_amount
 from engine.apps.stores.models import Store, StoreApiKey, StoreMembership, StoreSettings
 from engine.apps.stores.services import allocate_unique_store_code
@@ -168,6 +174,108 @@ class BillingServicesTests(TestCase):
         sub.status = Subscription.Status.EXPIRED
         sub.save(update_fields=["status"])
         self.assertEqual(get_subscription_status(sub), "EXPIRED")
+
+    def test_pending_review_status_short_circuits_calendar(self):
+        today = bd_today()
+        sub = Subscription.objects.create(
+            user=self.user,
+            plan=self.plan_basic,
+            status=Subscription.Status.PENDING_REVIEW,
+            billing_cycle="monthly",
+            start_date=today,
+            end_date=today,
+            auto_renew=False,
+            source=Subscription.Source.PAYMENT,
+        )
+        self.assertEqual(get_subscription_status(sub), "PENDING_REVIEW")
+        self.assertEqual(get_user_subscription_status(self.user), "PENDING_REVIEW")
+        self.assertTrue(dashboard_subscription_access_ok(self.user))
+
+    def test_rejected_subscription_denies_dashboard_access(self):
+        today = bd_today()
+        Subscription.objects.create(
+            user=self.user,
+            plan=self.plan_basic,
+            status=Subscription.Status.REJECTED,
+            billing_cycle="monthly",
+            start_date=today,
+            end_date=today,
+            auto_renew=False,
+            source=Subscription.Source.PAYMENT,
+        )
+        self.assertEqual(get_user_subscription_status(self.user), "REJECTED")
+        self.assertFalse(dashboard_subscription_access_ok(self.user))
+
+    def test_activate_subscription_upgrades_pending_review_linked_payment(self):
+        pending = Payment.objects.create(
+            user=self.user,
+            plan=self.plan_premium,
+            subscription=None,
+            amount=self.plan_premium.price,
+            currency="BDT",
+            status=Payment.Status.PENDING,
+            provider=Payment.Provider.MANUAL,
+            transaction_id=None,
+            metadata={},
+        )
+        today = bd_today()
+        pr_sub = Subscription.objects.create(
+            user=self.user,
+            plan=self.plan_premium,
+            status=Subscription.Status.PENDING_REVIEW,
+            billing_cycle="monthly",
+            start_date=today,
+            end_date=today,
+            auto_renew=False,
+            source=Subscription.Source.PAYMENT,
+        )
+        pending.subscription = pr_sub
+        pending.transaction_id = "TXN-UPGRADE-001"
+        pending.save(update_fields=["subscription", "transaction_id"])
+
+        sub = activate_subscription(
+            self.user,
+            self.plan_premium,
+            source="payment",
+            amount=pending.amount,
+            provider=pending.provider,
+            existing_pending_payment=pending,
+        )
+        self.assertEqual(sub.id, pr_sub.id)
+        sub.refresh_from_db()
+        pending.refresh_from_db()
+        self.assertEqual(sub.status, Subscription.Status.ACTIVE)
+        self.assertEqual(pending.status, Payment.Status.SUCCESS)
+        self.assertEqual(Subscription.objects.filter(user=self.user).count(), 1)
+
+    def test_reject_pending_review_marks_payment_failed(self):
+        today = bd_today()
+        pr_sub = Subscription.objects.create(
+            user=self.user,
+            plan=self.plan_premium,
+            status=Subscription.Status.PENDING_REVIEW,
+            billing_cycle="monthly",
+            start_date=today,
+            end_date=today,
+            auto_renew=False,
+            source=Subscription.Source.PAYMENT,
+        )
+        pending = Payment.objects.create(
+            user=self.user,
+            plan=self.plan_premium,
+            subscription=pr_sub,
+            amount=self.plan_premium.price,
+            currency="BDT",
+            status=Payment.Status.PENDING,
+            provider=Payment.Provider.MANUAL,
+            transaction_id="TXN-REJ-001",
+            metadata={},
+        )
+        reject_pending_review_for_payment(pending)
+        pending.refresh_from_db()
+        pr_sub.refresh_from_db()
+        self.assertEqual(pending.status, Payment.Status.FAILED)
+        self.assertEqual(pr_sub.status, Subscription.Status.REJECTED)
 
     def test_storefront_blocks_at_bd_midnight_end_plus_two(self):
         sub = activate_subscription(
@@ -427,6 +535,99 @@ class InitiatePaymentApiTests(TestCase):
         self.assertIn("non_field_errors", r.data)
 
 
+class PendingReviewCheckoutApiTests(TestCase):
+    """Payment submit creates PENDING_REVIEW; dashboard and storefront behavior."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.plan_paid = Plan.objects.create(
+            name="paid_checkout",
+            price=Decimal("100.00"),
+            billing_cycle="monthly",
+            features=_plan_features(limits={"max_products": 50}),
+            is_active=True,
+        )
+        self.user = User.objects.create_user(
+            username="prcheckout",
+            email="prcheckout@example.com",
+            password="pass",
+            is_verified=True,
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def test_submit_creates_pending_review_subscription(self):
+        self.client.post(
+            "/api/v1/billing/payment/initiate/",
+            {"plan_public_id": self.plan_paid.public_id},
+            format="json",
+        )
+        r = self.client.post(
+            "/api/v1/billing/payment/submit/",
+            {"transaction_id": "TXN-PR-CHECKOUT-001", "sender_number": ""},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 200)
+        pay = Payment.objects.get(user=self.user, status=Payment.Status.PENDING)
+        self.assertIsNotNone(pay.subscription_id)
+        self.assertEqual(pay.subscription.status, Subscription.Status.PENDING_REVIEW)
+
+    def test_store_creation_succeeds_while_pending_review(self):
+        self.client.post(
+            "/api/v1/billing/payment/initiate/",
+            {"plan_public_id": self.plan_paid.public_id},
+            format="json",
+        )
+        self.client.post(
+            "/api/v1/billing/payment/submit/",
+            {"transaction_id": "TXN-PR-CHECKOUT-002", "sender_number": ""},
+            format="json",
+        )
+        resp = self.client.post(
+            "/api/v1/store/",
+            {
+                "name": "PR Store",
+                "owner_first_name": "A",
+                "owner_last_name": "B",
+                "owner_email": "a@example.com",
+            },
+            format="json",
+            HTTP_HOST="localhost",
+        )
+        self.assertEqual(resp.status_code, 201)
+
+    def test_features_endpoint_returns_plan_while_pending_review(self):
+        self.client.post(
+            "/api/v1/billing/payment/initiate/",
+            {"plan_public_id": self.plan_paid.public_id},
+            format="json",
+        )
+        self.client.post(
+            "/api/v1/billing/payment/submit/",
+            {"transaction_id": "TXN-PR-CHECKOUT-003", "sender_number": ""},
+            format="json",
+        )
+        resp = self.client.get("/api/v1/auth/features/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["limits"].get("max_products"), 50)
+
+    def test_me_subscription_pending_review_no_storefront_blocks_at(self):
+        self.client.post(
+            "/api/v1/billing/payment/initiate/",
+            {"plan_public_id": self.plan_paid.public_id},
+            format="json",
+        )
+        self.client.post(
+            "/api/v1/billing/payment/submit/",
+            {"transaction_id": "TXN-PR-CHECKOUT-004", "sender_number": ""},
+            format="json",
+        )
+        resp = self.client.get("/api/v1/auth/me/")
+        self.assertEqual(resp.status_code, 200)
+        sub = resp.data["subscription"]
+        self.assertEqual(sub["subscription_status"], "PENDING_REVIEW")
+        self.assertIsNone(sub["storefront_blocks_at"])
+
+
 class FeaturesEndpointTests(TestCase):
     def setUp(self):
         self.client = APIClient()
@@ -515,6 +716,35 @@ class StorefrontBlocksWhenOwnerExpiredTests(TestCase):
         nested = body.get("detail", body) if isinstance(body, dict) else {}
         if isinstance(nested, dict):
             self.assertEqual(nested.get("error"), "subscription_expired")
+
+    def test_store_public_403_when_owner_subscription_pending_review(self):
+        from engine.apps.stores.services import create_store_api_key
+        from tests.apps.stores.test_api_keys import make_store
+
+        store = make_store("PendingSF")
+        self.client_api = APIClient()
+        self.client_api.force_authenticate(user=store.owner)
+        self.client_api.post(
+            "/api/v1/billing/payment/initiate/",
+            {
+                "plan_public_id": self.plan_basic.public_id,
+            },
+            format="json",
+        )
+        self.client_api.post(
+            "/api/v1/billing/payment/submit/",
+            {"transaction_id": "TXN-PENDING-SF-001", "sender_number": ""},
+            format="json",
+        )
+        _row, raw_key = create_store_api_key(store, name="fe")
+        anon = APIClient()
+        anon.credentials(HTTP_AUTHORIZATION=f"Bearer {raw_key}")
+        resp = anon.get("/api/v1/store/public/")
+        self.assertEqual(resp.status_code, 403)
+        body = resp.data if hasattr(resp, "data") else None
+        nested = body.get("detail", body) if isinstance(body, dict) else {}
+        if isinstance(nested, dict):
+            self.assertEqual(nested.get("error"), "storefront_unavailable")
 
 
 class MeSubscriptionPayloadTests(TestCase):

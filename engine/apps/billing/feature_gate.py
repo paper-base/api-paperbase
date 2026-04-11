@@ -27,6 +27,10 @@ def _get_effective_plan(user):
     subscription = get_active_subscription(user)
     if subscription:
         return subscription.plan
+    if get_user_subscription_status(user) == "PENDING_REVIEW":
+        sub = get_candidate_subscription_row(user)
+        if sub:
+            return sub.plan
     if get_user_subscription_status(user) == "EXPIRED":
         sub = get_candidate_subscription_row(user)
         if sub:

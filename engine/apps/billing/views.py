@@ -12,6 +12,7 @@ from engine.core.authz import IsVerifiedUser
 
 from .models import Payment, Plan
 from .pricing import plan_charge_amount
+from .services import submit_pending_payment_transaction
 from .serializers import (
     InitiatePaymentSerializer,
     PendingPaymentSerializer,
@@ -91,25 +92,17 @@ class SubmitTransactionView(APIView):
     permission_classes = [IsVerifiedUser]
 
     def post(self, request):
-        pending = (
-            Payment.objects.filter(user=request.user, status=Payment.Status.PENDING)
-            .select_related("plan")
-            .first()
-        )
-        if not pending:
-            return Response(
-                {"detail": "No pending payment found. Please select a plan first."},
-                status=400,
-            )
-
         serializer = SubmitTransactionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        pending.transaction_id = serializer.validated_data["transaction_id"]
-        sender = serializer.validated_data.get("sender_number", "").strip()
-        if sender:
-            pending.metadata = {**pending.metadata, "sender_number": sender}
-        pending.save(update_fields=["transaction_id", "metadata"])
+        try:
+            pending = submit_pending_payment_transaction(
+                request.user,
+                serializer.validated_data["transaction_id"],
+                serializer.validated_data.get("sender_number", "") or "",
+            )
+        except ValueError as e:
+            return Response({"detail": str(e)}, status=400)
 
         return Response(PendingPaymentSerializer(pending).data)
 

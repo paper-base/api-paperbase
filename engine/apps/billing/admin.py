@@ -6,7 +6,11 @@ from django.contrib import messages
 from django.utils.html import format_html
 
 from .models import Payment, Plan, Subscription
-from .services import activate_subscription, extend_subscription
+from .services import (
+    activate_subscription,
+    extend_subscription,
+    reject_pending_review_for_payment,
+)
 from engine.apps.stores.services import sync_order_email_notification_settings_for_user
 
 User = get_user_model()
@@ -143,6 +147,34 @@ def approve_pending_payment_action(modeladmin, request, queryset):
         modeladmin.message_user(request, f"{skipped} payment(s) skipped.", messages.WARNING)
 
 
+@admin.action(description="Reject pending payment (mark subscription review as rejected)")
+def reject_pending_payment_action(modeladmin, request, queryset):
+    success, skipped = 0, 0
+    for payment in queryset.select_related("user", "plan"):
+        if payment.status != Payment.Status.PENDING:
+            modeladmin.message_user(
+                request,
+                f"Payment #{payment.id} ({payment.user}) is not pending — skipped.",
+                messages.WARNING,
+            )
+            skipped += 1
+            continue
+        try:
+            reject_pending_review_for_payment(payment)
+            success += 1
+        except ValueError as e:
+            modeladmin.message_user(request, f"Failed for {payment.user}: {e}", messages.ERROR)
+            skipped += 1
+    if success:
+        modeladmin.message_user(
+            request,
+            f"Rejected {success} pending payment(s).",
+            messages.SUCCESS,
+        )
+    if skipped and not success:
+        modeladmin.message_user(request, f"{skipped} payment(s) skipped.", messages.WARNING)
+
+
 @admin.register(Payment)
 class PaymentAdmin(admin.ModelAdmin):
     list_display = (
@@ -163,7 +195,7 @@ class PaymentAdmin(admin.ModelAdmin):
     readonly_fields = ("created_at",)
     list_select_related = ("user", "subscription", "plan")
     raw_id_fields = ("user", "subscription", "plan")
-    actions = [approve_pending_payment_action]
+    actions = [approve_pending_payment_action, reject_pending_payment_action]
 
 
 # ---------------------------------------------------------------------------
