@@ -119,6 +119,7 @@ def reject_pending_review_for_payment(payment: Payment) -> None:
     sub = payment.subscription
     if sub and sub.status == Subscription.Status.PENDING_REVIEW:
         sub.status = Subscription.Status.REJECTED
+        sub.updated_at = timezone.now()
         sub.save(update_fields=["status", "updated_at"])
 
     payment.status = Payment.Status.FAILED

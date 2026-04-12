@@ -13,7 +13,6 @@ from config.permissions import (
     IsStoreStaff,
     IsVerifiedUser,
 )
-from engine.apps.billing.feature_gate import get_feature_config
 from engine.core.tenancy import get_active_store
 from engine.core.tenant_drf import ProvenTenantContextMixin
 
@@ -156,12 +155,8 @@ class StoreViewSet(ProvenTenantContextMixin, viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        config = get_feature_config(request.user)
-        if not config["limits"] and not config["features"]:
-            return Response(
-                {"detail": "No active subscription. Please contact support to activate a plan."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+        # Store creation is allowed before plan selection; dashboard/features stay limited
+        # via get_feature_config until subscription is active (storefront APIs gated separately).
 
         name = (request.data.get("name") or "").strip()
         if not name:

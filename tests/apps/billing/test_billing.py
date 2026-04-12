@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from engine.apps.billing.feature_gate import (
@@ -23,6 +24,7 @@ from engine.apps.billing.services import (
 )
 from engine.apps.billing.subscription_status import (
     dashboard_subscription_access_ok,
+    get_candidate_subscription_row,
     get_subscription_status,
     get_user_subscription_status,
     storefront_blocks_at,
@@ -191,7 +193,7 @@ class BillingServicesTests(TestCase):
         self.assertEqual(get_user_subscription_status(self.user), "PENDING_REVIEW")
         self.assertTrue(dashboard_subscription_access_ok(self.user))
 
-    def test_rejected_subscription_denies_dashboard_access(self):
+    def test_rejected_subscription_allows_dashboard_access(self):
         today = bd_today()
         Subscription.objects.create(
             user=self.user,
@@ -204,7 +206,184 @@ class BillingServicesTests(TestCase):
             source=Subscription.Source.PAYMENT,
         )
         self.assertEqual(get_user_subscription_status(self.user), "REJECTED")
-        self.assertFalse(dashboard_subscription_access_ok(self.user))
+        self.assertTrue(dashboard_subscription_access_ok(self.user))
+
+    def test_none_subscription_allows_dashboard_access(self):
+        u = User.objects.create_user(
+            username="nonesub",
+            email="nonesub@example.com",
+            password="pass",
+            is_verified=True,
+        )
+        self.assertEqual(get_user_subscription_status(u), "NONE")
+        self.assertTrue(dashboard_subscription_access_ok(u))
+
+    def test_expired_row_precedes_rejected_for_status(self):
+        """
+        Stale rejection + newer expired paid record: show renew/expired, not payment-rejected.
+        (Rejected row must have older updated_at than the expired row.)
+        """
+        today = bd_today()
+        now = timezone.now()
+        u = User.objects.create_user(
+            username="exprej",
+            email="exprej@example.com",
+            password="pass",
+            is_verified=True,
+        )
+        expired_row = Subscription.objects.create(
+            user=u,
+            plan=self.plan_basic,
+            status=Subscription.Status.EXPIRED,
+            billing_cycle="monthly",
+            start_date=today - timedelta(days=60),
+            end_date=today - timedelta(days=10),
+            auto_renew=False,
+            source=Subscription.Source.MANUAL,
+        )
+        rejected_row = Subscription.objects.create(
+            user=u,
+            plan=self.plan_basic,
+            status=Subscription.Status.REJECTED,
+            billing_cycle="monthly",
+            start_date=today,
+            end_date=today + timedelta(days=30),
+            auto_renew=False,
+            source=Subscription.Source.PAYMENT,
+        )
+        Subscription.objects.filter(pk=rejected_row.pk).update(
+            created_at=now - timedelta(days=200),
+            updated_at=now - timedelta(days=200),
+        )
+        Subscription.objects.filter(pk=expired_row.pk).update(
+            updated_at=now - timedelta(days=5),
+        )
+        cand = get_candidate_subscription_row(u)
+        self.assertIsNotNone(cand)
+        self.assertEqual(cand.pk, expired_row.pk)
+        self.assertEqual(get_user_subscription_status(u), "EXPIRED")
+
+    def test_db_expired_row_precedes_rejected_in_merge(self):
+        """Lapsed paid period (DB EXPIRED) must show renew/expired, not a newer REJECTED row."""
+        today = bd_today()
+        now = timezone.now()
+        u = User.objects.create_user(
+            username="rejev",
+            email="rejev@example.com",
+            password="pass",
+            is_verified=True,
+        )
+        expired_row = Subscription.objects.create(
+            user=u,
+            plan=self.plan_basic,
+            status=Subscription.Status.EXPIRED,
+            billing_cycle="monthly",
+            start_date=today - timedelta(days=400),
+            end_date=today - timedelta(days=300),
+            auto_renew=False,
+            source=Subscription.Source.MANUAL,
+        )
+        Subscription.objects.create(
+            user=u,
+            plan=self.plan_basic,
+            status=Subscription.Status.REJECTED,
+            billing_cycle="monthly",
+            start_date=today,
+            end_date=today + timedelta(days=30),
+            auto_renew=False,
+            source=Subscription.Source.PAYMENT,
+        )
+        Subscription.objects.filter(pk=expired_row.pk).update(
+            created_at=now - timedelta(days=400),
+            updated_at=now - timedelta(days=90),
+        )
+        cand = get_candidate_subscription_row(u)
+        self.assertIsNotNone(cand)
+        self.assertEqual(cand.pk, expired_row.pk)
+        self.assertEqual(get_user_subscription_status(u), "EXPIRED")
+
+    def test_calendar_expired_active_row_not_overridden_by_newer_rejected(self):
+        """Past grace on ACTIVE row: show calendar EXPIRED, not a newer rejected renewal row."""
+        today = bd_today()
+        now = timezone.now()
+        u = User.objects.create_user(
+            username="calex",
+            email="calex@example.com",
+            password="pass",
+            is_verified=True,
+        )
+        active_row = Subscription.objects.create(
+            user=u,
+            plan=self.plan_basic,
+            status=Subscription.Status.ACTIVE,
+            billing_cycle="monthly",
+            start_date=today - timedelta(days=40),
+            end_date=today - timedelta(days=10),
+            auto_renew=False,
+            source=Subscription.Source.MANUAL,
+        )
+        rejected_row = Subscription.objects.create(
+            user=u,
+            plan=self.plan_basic,
+            status=Subscription.Status.REJECTED,
+            billing_cycle="monthly",
+            start_date=today,
+            end_date=today + timedelta(days=30),
+            auto_renew=False,
+            source=Subscription.Source.PAYMENT,
+        )
+        Subscription.objects.filter(pk=active_row.pk).update(
+            updated_at=now - timedelta(days=20),
+        )
+        Subscription.objects.filter(pk=rejected_row.pk).update(
+            updated_at=now - timedelta(hours=1),
+        )
+        cand = get_candidate_subscription_row(u)
+        self.assertEqual(cand.pk, active_row.pk)
+        self.assertEqual(get_user_subscription_status(u), "EXPIRED")
+
+    def test_rejected_renewal_during_grace_overrides_active_row(self):
+        """
+        User still has DB ACTIVE (calendar may be GRACE); a newer REJECTED renewal
+        attempt must surface REJECTED messaging, not grace/expired copy.
+        """
+        today = bd_today()
+        now = timezone.now()
+        u = User.objects.create_user(
+            username="grrej",
+            email="grrej@example.com",
+            password="pass",
+            is_verified=True,
+        )
+        active_row = Subscription.objects.create(
+            user=u,
+            plan=self.plan_basic,
+            status=Subscription.Status.ACTIVE,
+            billing_cycle="monthly",
+            start_date=today - timedelta(days=30),
+            end_date=today - timedelta(days=1),
+            auto_renew=False,
+            source=Subscription.Source.MANUAL,
+        )
+        rejected_row = Subscription.objects.create(
+            user=u,
+            plan=self.plan_basic,
+            status=Subscription.Status.REJECTED,
+            billing_cycle="monthly",
+            start_date=today,
+            end_date=today + timedelta(days=30),
+            auto_renew=False,
+            source=Subscription.Source.PAYMENT,
+        )
+        Subscription.objects.filter(pk=active_row.pk).update(
+            updated_at=now - timedelta(days=5),
+        )
+        Subscription.objects.filter(pk=rejected_row.pk).update(
+            updated_at=now - timedelta(hours=1),
+        )
+        cand = get_candidate_subscription_row(u)
+        self.assertEqual(cand.pk, rejected_row.pk)
+        self.assertEqual(get_user_subscription_status(u), "REJECTED")
 
     def test_activate_subscription_upgrades_pending_review_linked_payment(self):
         pending = Payment.objects.create(
@@ -384,7 +563,7 @@ class FeatureGateTests(TestCase):
 
 
 class StoreCreationEnforcementTests(TestCase):
-    """Verify store creation API enforces subscription and one store per owner."""
+    """Verify store creation allows onboarding before plan; one store per owner."""
 
     def setUp(self):
         self.client = APIClient()
@@ -433,19 +612,29 @@ class StoreCreationEnforcementTests(TestCase):
             HTTP_HOST="localhost",
         )
 
-    def test_store_creation_blocked_when_no_plan(self):
+    def test_store_creation_allowed_when_no_default_plan_row(self):
         Plan.objects.filter(is_default=True).update(is_default=False)
         try:
             resp = self._create_store_via_api()
-            self.assertEqual(resp.status_code, 403)
-            self.assertIn("No active subscription", resp.data.get("detail", ""))
+            self.assertEqual(resp.status_code, 201)
+            self.assertEqual(
+                Store.objects.filter(
+                    memberships__user=self.user, memberships__role="owner"
+                ).count(),
+                1,
+            )
         finally:
             Plan.objects.filter(name="basic").update(is_default=True)
 
-    def test_store_creation_blocked_without_subscription_even_with_default_plan(self):
+    def test_store_creation_allowed_without_subscription(self):
         resp = self._create_store_via_api()
-        self.assertEqual(resp.status_code, 403)
-        self.assertIn("No active subscription", resp.data.get("detail", ""))
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(
+            Store.objects.filter(
+                memberships__user=self.user, memberships__role="owner"
+            ).count(),
+            1,
+        )
 
     def test_store_creation_allowed_with_subscription(self):
         activate_subscription(self.user, self.plan_basic, source="manual", amount=0, provider="manual")
@@ -746,6 +935,41 @@ class StorefrontBlocksWhenOwnerExpiredTests(TestCase):
         if isinstance(nested, dict):
             self.assertEqual(nested.get("error"), "storefront_unavailable")
 
+    def test_store_public_403_when_owner_has_no_subscription(self):
+        from engine.apps.stores.services import create_store_api_key
+        from tests.apps.stores.test_api_keys import make_store
+
+        store = make_store("NoSubSF")
+        _row, raw_key = create_store_api_key(store, name="fe")
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {raw_key}")
+        resp = client.get("/api/v1/store/public/")
+        self.assertEqual(resp.status_code, 403)
+        body = resp.data if hasattr(resp, "data") else None
+        nested = body.get("detail", body) if isinstance(body, dict) else {}
+        if isinstance(nested, dict):
+            self.assertEqual(nested.get("error"), "STORE_INACTIVE")
+
+
+@override_settings(TENANT_API_KEY_ENFORCE=True)
+class DashboardJwtWithoutSubscriptionTests(TestCase):
+    """Dashboard JWT can call admin APIs when the owner has never subscribed."""
+
+    def test_admin_products_list_ok_when_owner_has_no_subscription(self):
+        from tests.apps.stores.test_api_keys import make_store
+
+        store = make_store("DashNoSub")
+        client = APIClient()
+        tok = client.post(
+            "/api/v1/auth/token/",
+            {"email": store.owner.email, "password": "pass1234"},
+            format="json",
+        )
+        self.assertEqual(tok.status_code, 200, tok.data)
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {tok.data['access']}")
+        resp = client.get("/api/v1/admin/products/")
+        self.assertEqual(resp.status_code, 200, getattr(resp, "data", None))
+
 
 class MeSubscriptionPayloadTests(TestCase):
     """Verify /auth/me subscription payload includes expiration fields."""
@@ -780,6 +1004,7 @@ class MeSubscriptionPayloadTests(TestCase):
         self.assertIsNone(sub["plan_public_id"])
         self.assertIsNone(sub["end_date"])
         self.assertIsNone(sub["storefront_blocks_at"])
+        self.assertIsNone(resp.data.get("latest_payment_status"))
 
     def test_active_subscription_returns_days_remaining(self):
         activate_subscription(
@@ -797,6 +1022,73 @@ class MeSubscriptionPayloadTests(TestCase):
         self.assertEqual(sub["plan_public_id"], self.plan.public_id)
         expected = storefront_blocks_at(sub_row).isoformat()
         self.assertEqual(sub["storefront_blocks_at"], expected)
+        self.assertIsNone(resp.data.get("latest_payment_status"))
+
+    def test_latest_payment_status_rejected_while_subscription_status_expired(self):
+        """Latest row by updated_at is REJECTED; candidate status remains EXPIRED."""
+        today = bd_today()
+        now = timezone.now()
+        u = User.objects.create_user(
+            username="melps_rej",
+            email="melps_rej@example.com",
+            password="pass",
+            is_verified=True,
+        )
+        active_row = Subscription.objects.create(
+            user=u,
+            plan=self.plan,
+            status=Subscription.Status.ACTIVE,
+            billing_cycle="monthly",
+            start_date=today - timedelta(days=40),
+            end_date=today - timedelta(days=10),
+            auto_renew=False,
+            source=Subscription.Source.MANUAL,
+        )
+        rejected_row = Subscription.objects.create(
+            user=u,
+            plan=self.plan,
+            status=Subscription.Status.REJECTED,
+            billing_cycle="monthly",
+            start_date=today,
+            end_date=today + timedelta(days=30),
+            auto_renew=False,
+            source=Subscription.Source.PAYMENT,
+        )
+        Subscription.objects.filter(pk=active_row.pk).update(
+            updated_at=now - timedelta(days=20),
+        )
+        Subscription.objects.filter(pk=rejected_row.pk).update(
+            updated_at=now - timedelta(hours=1),
+        )
+        self.client.force_authenticate(user=u)
+        resp = self.client.get("/api/v1/auth/me/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["subscription"]["subscription_status"], "EXPIRED")
+        self.assertEqual(resp.data["latest_payment_status"], "REJECTED")
+
+    def test_latest_payment_status_pending_review(self):
+        today = bd_today()
+        u = User.objects.create_user(
+            username="melps_pend",
+            email="melps_pend@example.com",
+            password="pass",
+            is_verified=True,
+        )
+        Subscription.objects.create(
+            user=u,
+            plan=self.plan,
+            status=Subscription.Status.PENDING_REVIEW,
+            billing_cycle="monthly",
+            start_date=today,
+            end_date=today,
+            auto_renew=False,
+            source=Subscription.Source.PAYMENT,
+        )
+        self.client.force_authenticate(user=u)
+        resp = self.client.get("/api/v1/auth/me/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["subscription"]["subscription_status"], "PENDING_REVIEW")
+        self.assertEqual(resp.data["latest_payment_status"], "PENDING_REVIEW")
 
 
 class YearlyPricingAndValidationTests(TestCase):

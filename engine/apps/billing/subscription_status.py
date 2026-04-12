@@ -48,34 +48,64 @@ def get_candidate_subscription_row(user) -> Subscription | None:
     """
     Row used for status and feature access.
 
-    Precedence:
-    1) DB ACTIVE — calendar-derived ACTIVE/GRACE/EXPIRED for paid period.
-    2) PENDING_REVIEW — payment submitted, awaiting admin approval.
-    3) Latest non-canceled row (e.g. EXPIRED, REJECTED) by end_date.
+    1) If a DB ACTIVE row exists, a newer PENDING_REVIEW or REJECTED row can override **only
+       while the active row is still calendar ACTIVE or GRACE**. Once the paid period is
+       past grace (calendar EXPIRED), keep the ACTIVE row so the UI shows renew/expired,
+       not a stale rejected renewal attempt.
+    2) No ACTIVE → latest PENDING_REVIEW (if any).
+    3) Else: a DB **EXPIRED** subscription row (lapsed paid period) wins over **REJECTED**
+       for messaging. Otherwise compare non-rejected vs REJECTED by ``updated_at``.
     """
-    sub = (
+    active = (
         Subscription.objects.filter(user=user, status=Subscription.Status.ACTIVE)
         .select_related("plan")
         .order_by("-end_date")
         .first()
     )
-    if sub:
-        return sub
     pending = (
         Subscription.objects.filter(user=user, status=Subscription.Status.PENDING_REVIEW)
         .select_related("plan")
         .order_by("-created_at")
         .first()
     )
+    rejected = (
+        Subscription.objects.filter(user=user, status=Subscription.Status.REJECTED)
+        .select_related("plan")
+        .order_by("-updated_at", "-created_at")
+        .first()
+    )
+
+    if active:
+        cal = get_subscription_status(active)
+        if cal in ("ACTIVE", "GRACE"):
+            newer = [
+                s
+                for s in (pending, rejected)
+                if s is not None and s.updated_at > active.updated_at
+            ]
+            if newer:
+                return max(newer, key=lambda s: s.updated_at)
+        return active
+
     if pending:
         return pending
-    return (
+    non_rejected = (
         Subscription.objects.filter(user=user)
         .exclude(status=Subscription.Status.CANCELED)
+        .exclude(status=Subscription.Status.REJECTED)
         .select_related("plan")
         .order_by("-end_date")
         .first()
     )
+    if non_rejected and non_rejected.status == Subscription.Status.EXPIRED:
+        return non_rejected
+    if rejected and non_rejected:
+        if rejected.updated_at > non_rejected.updated_at:
+            return rejected
+        return non_rejected
+    if non_rejected:
+        return non_rejected
+    return rejected
 
 
 def get_user_subscription_status(user) -> str:
@@ -111,18 +141,37 @@ STOREFRONT_UNAVAILABLE_DETAIL = {
     ),
 }
 
+STORE_INACTIVE_DETAIL = {
+    "error": "STORE_INACTIVE",
+    "message": "Store is unavailable.",
+}
+
+
+def assert_storefront_subscription_allows_for_owner(owner) -> None:
+    """
+    Central check for customer-facing (API key) traffic: raise PermissionDenied
+    when the owner's subscription does not allow a live storefront.
+    """
+    from rest_framework.exceptions import PermissionDenied
+
+    if owner is None:
+        return
+    uss = get_user_subscription_status(owner)
+    if uss == "NONE":
+        raise PermissionDenied(detail=STORE_INACTIVE_DETAIL)
+    if uss == "EXPIRED":
+        raise PermissionDenied(detail=SUBSCRIPTION_EXPIRED_DETAIL)
+    if uss in ("PENDING_REVIEW", "REJECTED"):
+        raise PermissionDenied(detail=STOREFRONT_UNAVAILABLE_DETAIL)
+
 
 def dashboard_subscription_access_ok(user) -> bool:
     """
-    Dashboard JWT access: NONE/REJECTED → deny; PENDING_REVIEW → allow;
-    EXPIRED → allow (read UI, renew); ACTIVE/GRACE → need paid row.
-    Storefront uses IsStorefrontAPIKey + owner checks instead.
+    Dashboard JWT access: NONE/REJECTED/EXPIRED → allow (manage store, renew);
+    PENDING_REVIEW → allow; ACTIVE/GRACE → calendar-paid period required.
+    Storefront gating uses assert_storefront_subscription_allows_for_owner.
     """
     uss = get_user_subscription_status(user)
-    if uss in ("NONE", "REJECTED"):
-        return False
-    if uss == "PENDING_REVIEW":
-        return True
-    if uss == "EXPIRED":
+    if uss in ("NONE", "REJECTED", "PENDING_REVIEW", "EXPIRED"):
         return True
     return get_subscription_for_api_access(user) is not None

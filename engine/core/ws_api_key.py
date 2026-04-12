@@ -20,7 +20,7 @@ def _storefront_ws_blocked(store) -> bool:
     from engine.apps.billing.subscription_status import get_user_subscription_status
 
     uss = get_user_subscription_status(owner)
-    return uss in ("EXPIRED", "PENDING_REVIEW", "REJECTED")
+    return uss in ("NONE", "EXPIRED", "PENDING_REVIEW", "REJECTED")
 
 
 def _extract_ws_api_key(scope) -> str | None:

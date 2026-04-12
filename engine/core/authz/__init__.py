@@ -101,12 +101,8 @@ class IsStorefrontAPIKey(BasePermission):
     message = "A valid storefront API key is required."
 
     def has_permission(self, request, view):
-        from rest_framework.exceptions import PermissionDenied
-
         from engine.apps.billing.subscription_status import (
-            STOREFRONT_UNAVAILABLE_DETAIL,
-            SUBSCRIPTION_EXPIRED_DETAIL,
-            get_user_subscription_status,
+            assert_storefront_subscription_allows_for_owner,
         )
 
         api_key = getattr(request, "api_key", None)
@@ -115,13 +111,7 @@ class IsStorefrontAPIKey(BasePermission):
             return False
         if getattr(api_key, "key_type", None) != api_key.KeyType.PUBLIC:
             return False
-        owner = getattr(store, "owner", None)
-        if owner is not None:
-            uss = get_user_subscription_status(owner)
-            if uss == "EXPIRED":
-                raise PermissionDenied(detail=SUBSCRIPTION_EXPIRED_DETAIL)
-            if uss in ("PENDING_REVIEW", "REJECTED"):
-                raise PermissionDenied(detail=STOREFRONT_UNAVAILABLE_DETAIL)
+        assert_storefront_subscription_allows_for_owner(getattr(store, "owner", None))
         return True
 
 

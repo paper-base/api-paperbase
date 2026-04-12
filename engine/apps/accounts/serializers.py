@@ -8,6 +8,7 @@ from rest_framework import serializers
 from engine.core.serializers import SafeModelSerializer
 
 from engine.apps.emails.tasks import send_email_task  # Backwards-compatible test patch target.
+from engine.apps.billing.models import Subscription
 from engine.apps.stores.models import Store, StoreMembership
 from .avatar_url import dicebear_avatar_url
 from .services import (
@@ -114,6 +115,7 @@ class MeSerializer(SafeModelSerializer):
     active_store_public_id = serializers.SerializerMethodField()
     has_recoverable_stores = serializers.SerializerMethodField()
     subscription = serializers.SerializerMethodField()
+    latest_payment_status = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -133,6 +135,7 @@ class MeSerializer(SafeModelSerializer):
             "active_store_public_id",
             "has_recoverable_stores",
             "subscription",
+            "latest_payment_status",
             "store",
         ]
         read_only_fields = [
@@ -191,6 +194,21 @@ class MeSerializer(SafeModelSerializer):
             "days_remaining": sub.days_remaining() if sub else 0,
             "storefront_blocks_at": blocks_at,
         }
+
+    def get_latest_payment_status(self, obj):
+        """Latest subscription row by updated_at; surfaces REJECTED / PENDING_REVIEW for UI vs candidate subscription_status."""
+        latest = (
+            Subscription.objects.filter(user=obj)
+            .order_by("-updated_at")
+            .first()
+        )
+        if not latest:
+            return None
+        if latest.status == Subscription.Status.REJECTED:
+            return "REJECTED"
+        if latest.status == Subscription.Status.PENDING_REVIEW:
+            return "PENDING_REVIEW"
+        return None
 
     def get_store(self, obj):
         owned = getattr(obj, "owned_store", None)
