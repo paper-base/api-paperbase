@@ -6,6 +6,11 @@ from urllib.parse import parse_qs
 
 from asgiref.sync import sync_to_async
 
+from rest_framework.exceptions import PermissionDenied
+
+from engine.apps.billing.subscription_status import (
+    assert_storefront_subscription_allows_for_owner,
+)
 from engine.apps.stores.services import (
     resolve_active_store_api_key,
     touch_store_api_key_last_used,
@@ -17,10 +22,11 @@ def _storefront_ws_blocked(store) -> bool:
     owner = getattr(store, "owner", None)
     if owner is None:
         return False
-    from engine.apps.billing.subscription_status import get_user_subscription_status
-
-    uss = get_user_subscription_status(owner)
-    return uss in ("NONE", "EXPIRED", "PENDING_REVIEW", "REJECTED")
+    try:
+        assert_storefront_subscription_allows_for_owner(owner)
+    except PermissionDenied:
+        return True
+    return False
 
 
 def _extract_ws_api_key(scope) -> str | None:

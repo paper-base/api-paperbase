@@ -935,6 +935,74 @@ class StorefrontBlocksWhenOwnerExpiredTests(TestCase):
         if isinstance(nested, dict):
             self.assertEqual(nested.get("error"), "storefront_unavailable")
 
+    def test_store_public_200_grace_period_with_pending_review_renewal(self):
+        """
+        Renewal submit creates a newer PENDING_REVIEW row while DB ACTIVE is calendar GRACE;
+        storefront must stay open until the paid period lapses.
+        """
+        from engine.apps.stores.services import (
+            allocate_unique_store_code,
+            create_store_api_key,
+            normalize_store_code_base_from_name,
+        )
+
+        today = bd_today()
+        now = timezone.now()
+        owner = User.objects.create_user(
+            username="gracepend_sf",
+            email="gracepend_sf@example.com",
+            password="pass",
+            is_verified=True,
+        )
+        base = normalize_store_code_base_from_name("GracePendSF") or "T"
+        store = Store.objects.create(
+            owner=owner,
+            name="GracePendSF",
+            code=allocate_unique_store_code(base),
+            owner_name="Grace Owner",
+            owner_email="gracepend_sf@example.com",
+        )
+        StoreMembership.objects.create(
+            user=owner,
+            store=store,
+            role=StoreMembership.Role.OWNER,
+            is_active=True,
+        )
+        active_row = Subscription.objects.create(
+            user=owner,
+            plan=self.plan_basic,
+            status=Subscription.Status.ACTIVE,
+            billing_cycle="monthly",
+            start_date=today - timedelta(days=30),
+            end_date=today - timedelta(days=1),
+            auto_renew=False,
+            source=Subscription.Source.MANUAL,
+        )
+        pending_row = Subscription.objects.create(
+            user=owner,
+            plan=self.plan_basic,
+            status=Subscription.Status.PENDING_REVIEW,
+            billing_cycle="monthly",
+            start_date=today,
+            end_date=today,
+            auto_renew=False,
+            source=Subscription.Source.PAYMENT,
+        )
+        Subscription.objects.filter(pk=active_row.pk).update(
+            updated_at=now - timedelta(days=5),
+        )
+        Subscription.objects.filter(pk=pending_row.pk).update(
+            updated_at=now - timedelta(hours=1),
+        )
+        self.assertEqual(get_subscription_status(active_row), "GRACE")
+        self.assertEqual(get_user_subscription_status(owner), "PENDING_REVIEW")
+
+        _row, raw_key = create_store_api_key(store, name="fe")
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {raw_key}")
+        resp = client.get("/api/v1/store/public/")
+        self.assertEqual(resp.status_code, 200)
+
     def test_store_public_403_when_owner_has_no_subscription(self):
         from engine.apps.stores.services import create_store_api_key
         from tests.apps.stores.test_api_keys import make_store
@@ -1004,6 +1072,7 @@ class MeSubscriptionPayloadTests(TestCase):
         self.assertIsNone(sub["plan_public_id"])
         self.assertIsNone(sub["end_date"])
         self.assertIsNone(sub["storefront_blocks_at"])
+        self.assertIsNone(sub.get("active_row_calendar_status"))
         self.assertIsNone(resp.data.get("latest_payment_status"))
 
     def test_active_subscription_returns_days_remaining(self):
@@ -1022,7 +1091,57 @@ class MeSubscriptionPayloadTests(TestCase):
         self.assertEqual(sub["plan_public_id"], self.plan.public_id)
         expected = storefront_blocks_at(sub_row).isoformat()
         self.assertEqual(sub["storefront_blocks_at"], expected)
+        self.assertEqual(sub["active_row_calendar_status"], "ACTIVE")
         self.assertIsNone(resp.data.get("latest_payment_status"))
+
+    def test_pending_review_with_active_row_in_grace_includes_calendar_and_blocks_at(self):
+        """auth/me exposes ACTIVE row calendar for dashboard when candidate is PENDING_REVIEW."""
+        today = bd_today()
+        now = timezone.now()
+        u = User.objects.create_user(
+            username="me_grace_pend",
+            email="me_grace_pend@example.com",
+            password="pass",
+            is_verified=True,
+        )
+        active_row = Subscription.objects.create(
+            user=u,
+            plan=self.plan,
+            status=Subscription.Status.ACTIVE,
+            billing_cycle="monthly",
+            start_date=today - timedelta(days=30),
+            end_date=today - timedelta(days=1),
+            auto_renew=False,
+            source=Subscription.Source.MANUAL,
+        )
+        pending_row = Subscription.objects.create(
+            user=u,
+            plan=self.plan,
+            status=Subscription.Status.PENDING_REVIEW,
+            billing_cycle="monthly",
+            start_date=today,
+            end_date=today,
+            auto_renew=False,
+            source=Subscription.Source.PAYMENT,
+        )
+        Subscription.objects.filter(pk=active_row.pk).update(
+            updated_at=now - timedelta(days=5),
+        )
+        Subscription.objects.filter(pk=pending_row.pk).update(
+            updated_at=now - timedelta(hours=1),
+        )
+        self.assertEqual(get_subscription_status(active_row), "GRACE")
+        self.client.force_authenticate(user=u)
+        resp = self.client.get("/api/v1/auth/me/")
+        self.assertEqual(resp.status_code, 200)
+        sub = resp.data["subscription"]
+        self.assertEqual(sub["subscription_status"], "PENDING_REVIEW")
+        self.assertEqual(sub["active_row_calendar_status"], "GRACE")
+        self.assertEqual(
+            sub["storefront_blocks_at"],
+            storefront_blocks_at(active_row).isoformat(),
+        )
+        self.assertEqual(sub["end_date"], active_row.end_date.isoformat())
 
     def test_latest_payment_status_rejected_while_subscription_status_expired(self):
         """Latest row by updated_at is REJECTED; candidate status remains EXPIRED."""

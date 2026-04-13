@@ -25,7 +25,7 @@ from engine.apps.stores.services import (
     revoke_store_api_key,
 )
 from django.contrib.auth import get_user_model
-from tests.core.test_core import _ensure_default_plan
+from tests.core.test_core import _ensure_default_plan, _ensure_subscription
 
 User = get_user_model()
 
@@ -174,6 +174,7 @@ class APIKeyTenantEnforcementTests(TestCase):
 class APIKeyWebSocketTests(TransactionTestCase):
     def setUp(self):
         self.store = make_store("Websocket Store")
+        _ensure_subscription(self.store.owner)
         _row, self.api_key = create_store_api_key(self.store, name="Realtime")
 
     def test_ws_requires_api_key(self):

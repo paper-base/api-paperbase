@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, time, timedelta
 
 from django.utils import timezone
@@ -9,6 +10,8 @@ from django.utils import timezone
 from engine.utils.time import BD_TZ, bd_calendar_date
 
 from .models import Subscription
+
+logger = logging.getLogger(__name__)
 
 
 def get_subscription_status(subscription: Subscription) -> str:
@@ -151,6 +154,10 @@ def assert_storefront_subscription_allows_for_owner(owner) -> None:
     """
     Central check for customer-facing (API key) traffic: raise PermissionDenied
     when the owner's subscription does not allow a live storefront.
+
+    When ``get_user_subscription_status`` is PENDING_REVIEW or REJECTED because a
+    newer renewal row overrides the candidate, storefront access still applies if
+    any DB ACTIVE row remains in calendar ACTIVE or GRACE (paid period not lapsed).
     """
     from rest_framework.exceptions import PermissionDenied
 
@@ -162,6 +169,18 @@ def assert_storefront_subscription_allows_for_owner(owner) -> None:
     if uss == "EXPIRED":
         raise PermissionDenied(detail=SUBSCRIPTION_EXPIRED_DETAIL)
     if uss in ("PENDING_REVIEW", "REJECTED"):
+        active_sub = (
+            Subscription.objects.filter(user=owner, status=Subscription.Status.ACTIVE)
+            .order_by("-end_date")
+            .first()
+        )
+        if active_sub is not None:
+            cal_status = get_subscription_status(active_sub)
+            if cal_status in ("ACTIVE", "GRACE"):
+                logger.info(
+                    "Bypassed PENDING_REVIEW block due to active/grace subscription"
+                )
+                return
         raise PermissionDenied(detail=STOREFRONT_UNAVAILABLE_DETAIL)
 
 

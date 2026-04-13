@@ -166,12 +166,25 @@ class MeSerializer(SafeModelSerializer):
     def get_subscription(self, obj):
         from engine.apps.billing.subscription_status import (
             get_candidate_subscription_row,
+            get_subscription_status,
             get_user_subscription_status,
             storefront_blocks_at,
         )
 
         st = get_user_subscription_status(obj)
         sub = get_candidate_subscription_row(obj)
+        active_sub = (
+            Subscription.objects.filter(user=obj, status=Subscription.Status.ACTIVE)
+            .order_by("-end_date")
+            .first()
+        )
+        active_calendar = (
+            get_subscription_status(active_sub) if active_sub else None
+        )
+        paid_window = active_calendar in ("ACTIVE", "GRACE")
+        use_active_for_dates = paid_window and st in ("PENDING_REVIEW", "REJECTED")
+        date_sub = active_sub if use_active_for_dates and active_sub else sub
+
         if st == "NONE":
             return {
                 "subscription_status": "NONE",
@@ -180,19 +193,23 @@ class MeSerializer(SafeModelSerializer):
                 "end_date": None,
                 "days_remaining": 0,
                 "storefront_blocks_at": None,
+                "active_row_calendar_status": active_calendar,
             }
 
         blocks_at = None
-        if st not in ("PENDING_REVIEW", "REJECTED") and sub:
+        if use_active_for_dates and date_sub:
+            blocks_at = storefront_blocks_at(date_sub).isoformat()
+        elif st not in ("PENDING_REVIEW", "REJECTED") and sub:
             blocks_at = storefront_blocks_at(sub).isoformat()
 
         return {
             "subscription_status": st,
             "plan": sub.plan.name if sub else None,
             "plan_public_id": sub.plan.public_id if sub else None,
-            "end_date": sub.end_date.isoformat() if sub else None,
-            "days_remaining": sub.days_remaining() if sub else 0,
+            "end_date": date_sub.end_date.isoformat() if date_sub else None,
+            "days_remaining": date_sub.days_remaining() if date_sub else 0,
             "storefront_blocks_at": blocks_at,
+            "active_row_calendar_status": active_calendar,
         }
 
     def get_latest_payment_status(self, obj):
