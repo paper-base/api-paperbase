@@ -48,6 +48,9 @@ def _extract_user_data(request) -> dict[str, Any]:
         email = getattr(user, "email", "") or ""
         if email:
             user_data["em"] = [_hash_value(email)]
+        external_id = getattr(user, "public_id", "") or ""
+        if external_id:
+            user_data["external_id"] = [_hash_value(external_id)]
 
     return user_data
 
@@ -93,7 +96,7 @@ def _send_event(
         logger.exception("Failed to send Facebook event '%s' for pixel %s.", event_name, integration.pixel_id)
 
 
-def track_purchase(request, order, integration) -> None:
+def track_order_created(request, order, integration) -> None:
     user_data = _extract_user_data(request)
 
     email = getattr(order, "email", "") or ""
@@ -119,15 +122,17 @@ def track_purchase(request, order, integration) -> None:
         ]
         event_data["num_items"] = sum(i.quantity for i in items if i.product)
 
-    _send_event(integration, "Purchase", event_data, user_data)
+    # Avoid guessing "Purchase" (paid conversion). The Order model has no "paid" state.
+    # Send a custom event that reflects the real backend action: an order row was created.
+    _send_event(integration, "OrderCreated", event_data, user_data)
 
 
-def track_initiate_checkout(request, integration) -> None:
+def track_checkout_started(request, integration) -> None:
     user_data = _extract_user_data(request)
     _send_event(integration, "InitiateCheckout", {}, user_data)
 
 
-def track_view_content(request, product, integration) -> None:
+def track_product_detail_view(request, product, integration) -> None:
     user_data = _extract_user_data(request)
     event_data = {
         "currency": "BDT",
@@ -139,7 +144,7 @@ def track_view_content(request, product, integration) -> None:
     _send_event(integration, "ViewContent", event_data, user_data)
 
 
-def track_support_ticket_submission(request, integration) -> None:
+def track_support_ticket_submitted(request, integration) -> None:
     user_data = _extract_user_data(request)
     _send_event(integration, "Contact", {}, user_data)
 

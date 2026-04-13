@@ -137,7 +137,7 @@ def test_dispatcher_cannot_infer_tenant_from_objects(settings):
 
     request = RequestFactory().get("/api/v1/products/")
     with pytest.raises(TenantViolationError):
-        dispatcher.track_view_content(request, product)
+        dispatcher.track_product_detail_view(request, product)
 
     with system_scope(reason="dispatcher_system_scope_check"):
         # Explicit system scope allows execution context, but no dispatch without integrations.

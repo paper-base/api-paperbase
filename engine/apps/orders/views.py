@@ -277,12 +277,7 @@ class OrderCreateView(CreateAPIView):
         )
         append_ledger_lines_for_order(order=order)
 
-        meta_conversions.track_add_payment_info(request, {
-            'email': order.email,
-            'phone': order.phone,
-            'shipping_name': order.shipping_name,
-        })
-        meta_conversions.track_purchase(request, order)
+        meta_conversions.track_order_created(request, order)
 
         _notify_order_created(order)
 
@@ -341,5 +336,5 @@ class InitiateCheckoutView(APIView):
     allow_api_key = True
 
     def post(self, request):
-        meta_conversions.track_initiate_checkout(request)
+        meta_conversions.track_checkout_started(request)
         return Response({'status': 'ok'})

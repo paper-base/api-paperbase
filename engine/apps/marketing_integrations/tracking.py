@@ -11,23 +11,20 @@ from engine.apps.marketing_integrations.services import dispatcher
 class AnalyticsService:
     """Thin proxy that forwards every call to the marketing dispatcher."""
 
-    def track_view_content(self, request, product):
-        dispatcher.track_view_content(request, product)
+    def track_product_detail_view(self, request, product):
+        dispatcher.track_product_detail_view(request, product)
 
     def track_search(self, request, query: str):
         dispatcher.track_search(request, query)
 
-    def track_initiate_checkout(self, request) -> None:
-        dispatcher.track_initiate_checkout(request)
+    def track_checkout_started(self, request) -> None:
+        dispatcher.track_checkout_started(request)
 
-    def track_add_payment_info(self, request, order_data: dict | None = None) -> None:
-        dispatcher.track_add_payment_info(request, order_data)
+    def track_order_created(self, request, order) -> None:
+        dispatcher.track_order_created(request, order)
 
-    def track_purchase(self, request, order) -> None:
-        dispatcher.track_purchase(request, order)
-
-    def track_support_ticket_submission(self, request) -> None:
-        dispatcher.track_support_ticket_submission(request)
+    def track_support_ticket_submitted(self, request) -> None:
+        dispatcher.track_support_ticket_submitted(request)
 
 
 # Module-level singleton — import as meta_conversions across the codebase.

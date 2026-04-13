@@ -79,7 +79,7 @@ class ProductDetailView(StorefrontTenantMixin, RetrieveAPIView):
             name=data.get("name"),
             price=data.get("price"),
         )
-        meta_conversions.track_view_content(request, product_proxy)
+        meta_conversions.track_product_detail_view(request, product_proxy)
         return Response(data)
 
 

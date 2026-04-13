@@ -3,7 +3,7 @@ Marketing event dispatcher.
 
 Resolves the active store from explicit context, looks up enabled marketing
 integrations, checks per-event toggles, and delegates to provider-specific
-service modules.  All exceptions are caught so callers are never broken.
+service modules. All exceptions are caught so callers are never broken.
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ def _dispatch(request, event_flag: str, handler_name: str, *args: Any, store=Non
 
     Args:
         request: The incoming HTTP request.
-        event_flag: Attribute name on IntegrationEventSettings (e.g. "track_purchase").
+        event_flag: Attribute name on IntegrationEventSettings (e.g. "track_order_created").
         handler_name: Function name in the provider service module.
         *args: Extra args forwarded to the handler after (request, ..., integration).
     """
@@ -78,25 +78,21 @@ def _dispatch(request, event_flag: str, handler_name: str, *args: Any, store=Non
             )
 
 
-def track_purchase(request, order) -> None:
-    _dispatch(request, "track_purchase", "track_purchase", order)
+def track_order_created(request, order) -> None:
+    _dispatch(request, "track_order_created", "track_order_created", order)
 
 
-def track_initiate_checkout(request) -> None:
-    _dispatch(request, "track_initiate_checkout", "track_initiate_checkout")
+def track_checkout_started(request) -> None:
+    _dispatch(request, "track_checkout_started", "track_checkout_started")
 
 
-def track_view_content(request, product) -> None:
-    _dispatch(request, "track_view_content", "track_view_content", product)
+def track_product_detail_view(request, product) -> None:
+    _dispatch(request, "track_product_detail_view", "track_product_detail_view", product)
 
 
 def track_search(request, query: str) -> None:
-    _dispatch(request, "track_view_content", "track_search", query)
+    _dispatch(request, "track_search", "track_search", query)
 
 
-def track_support_ticket_submission(request) -> None:
-    _dispatch(request, "track_purchase", "track_support_ticket_submission")
-
-
-def track_add_payment_info(request, order_data: dict | None = None) -> None:
-    pass
+def track_support_ticket_submitted(request) -> None:
+    _dispatch(request, "track_support_ticket", "track_support_ticket_submitted")
