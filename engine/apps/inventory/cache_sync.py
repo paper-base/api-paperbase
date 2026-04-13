@@ -39,8 +39,8 @@ def refresh_product_stock_cache(*, store_id: int, product_id) -> None:
     """
     Product.objects.select_for_update().get(id=product_id, store_id=store_id)
     inv_rows = list(
-        Inventory.objects.select_related("variant")
-        .select_for_update()
+        Inventory.objects.select_for_update()
+        .prefetch_related("variant")
         .filter(product_id=product_id, product__store_id=store_id)
         .order_by("pk")
     )
@@ -57,7 +57,7 @@ def sync_product_stock_cache(store_id: int) -> None:
     with transaction.atomic():
         inventories = list(
             Inventory.objects.select_for_update()
-            .select_related("variant")
+            .prefetch_related("variant")
             .filter(product__store_id=store_id)
         )
         products = list(Product.objects.select_for_update().filter(store_id=store_id))
