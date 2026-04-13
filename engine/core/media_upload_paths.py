@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 
 # Default when upload has no usable extension (ImageField uploads; stable path keys).
@@ -47,7 +48,8 @@ def tenant_product_main_upload_to(instance, filename: str) -> str:
     store_pub = _non_empty_public_id(getattr(store, "public_id", None), label="store.public_id")
     product_pub = _non_empty_public_id(getattr(instance, "public_id", None), label="product.public_id")
     ext = media_file_extension(filename)
-    return f"tenants/{store_pub}/products/{product_pub}/main.{ext}"
+    unique = uuid.uuid4().hex[:16]
+    return f"tenants/{store_pub}/products/{product_pub}/main_{unique}.{ext}"
 
 
 def tenant_product_gallery_upload_to(instance, filename: str) -> str:

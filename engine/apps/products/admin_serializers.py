@@ -84,6 +84,7 @@ class AdminProductListSerializer(SafeModelSerializer):
         fields = [
             'public_id', 'name', 'brand', 'slug', 'price', 'original_price',
             'image_url', 'category_public_id', 'category_name',
+            'display_order',
             'variant_count', 'total_stock', 'available_quantity', 'stock_source',
             'is_active', 'extra_data', 'created_at',
         ]
@@ -146,11 +147,13 @@ class AdminProductSerializer(SafeModelSerializer):
             'description',
             'variant_count', 'total_stock', 'available_quantity', 'stock_source',
             'is_active', 'extra_data', 'images',
+            'display_order',
             'created_at', 'updated_at',
         ]
         read_only_fields = [
             'public_id', 'slug', 'created_at', 'updated_at',
             'variant_count', 'total_stock', 'available_quantity', 'stock_source',
+            'display_order',
         ]
 
     def __init__(self, *args, **kwargs):
@@ -225,7 +228,19 @@ class AdminProductSerializer(SafeModelSerializer):
         elif image_provided and incoming_image is not None and old_main_key:
             schedule_media_deletion_from_keys([old_main_key])
 
-        return super().update(instance, validated_data)
+        old_category_id = instance.category_id
+        instance = super().update(instance, validated_data)
+        if instance.category_id != old_category_id:
+            from django.db.models import Max
+
+            mx = (
+                Product.objects.filter(store=instance.store, category=instance.category)
+                .exclude(pk=instance.pk)
+                .aggregate(m=Max("display_order"))["m"]
+            )
+            instance.display_order = 0 if mx is None else int(mx) + 1
+            instance.save(update_fields=["display_order"])
+        return instance
 
 
 class AdminCategorySerializer(SafeModelSerializer):

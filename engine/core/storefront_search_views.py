@@ -75,7 +75,7 @@ class StorefrontSearchView(APIView):
                 .select_related("category")
                 .prefetch_related("images")
             )
-            .order_by("name", "id")[:10]
+            .order_by("name", "display_order")[:10]
         )
         product_rows = list(prod_qs)
         products = StorefrontProductListSerializer(

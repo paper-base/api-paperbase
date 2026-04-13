@@ -99,3 +99,30 @@ class AdminProductRemoveImageTests(TestCase):
         self.assertTrue(patch_new.data.get("image") or patch_new.data.get("image_url"))
         product = Product.objects.get(public_id=pid)
         self.assertTrue(product.image and getattr(product.image, "name", ""))
+
+    def test_sequential_main_image_uploads_use_distinct_storage_keys(self):
+        png = _tiny_png()
+        pr = self.client.post(
+            "/api/v1/admin/products/",
+            {
+                "name": "Key Uniq",
+                "price": "13.00",
+                "category": self.category.public_id,
+                "is_active": "true",
+                "description": "",
+                "image": SimpleUploadedFile("a.png", png, content_type="image/png"),
+            },
+            format="multipart",
+        )
+        self.assertEqual(pr.status_code, status.HTTP_201_CREATED, pr.data)
+        pid = pr.data["public_id"]
+        first_key = Product.objects.get(public_id=pid).image.name
+
+        patch = self.client.patch(
+            f"/api/v1/admin/products/{pid}/",
+            {"image": SimpleUploadedFile("b.png", png, content_type="image/png")},
+            format="multipart",
+        )
+        self.assertEqual(patch.status_code, status.HTTP_200_OK, patch.data)
+        second_key = Product.objects.get(public_id=pid).image.name
+        self.assertNotEqual(first_key, second_key)

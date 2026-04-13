@@ -1,7 +1,7 @@
 from decimal import Decimal, InvalidOperation
 
 from django.db import transaction
-from django.db.models import Count, Sum
+from django.db.models import Count, Max, Sum
 from django.db.models import Q
 from django.utils.text import slugify
 from rest_framework import viewsets
@@ -67,7 +67,7 @@ class AdminProductViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
         ctx = get_active_store(self.request)
         if not ctx.store:
             return qs.none()
-        qs = qs.filter(store=ctx.store).order_by("-created_at", "id")
+        qs = qs.filter(store=ctx.store).order_by("display_order", "name")
 
         status_value = (self.request.query_params.get("status") or "").strip().lower()
         if status_value == "active":
@@ -131,12 +131,14 @@ class AdminProductViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
 
         ordering = (self.request.query_params.get("ordering") or "newest").strip().lower()
         if ordering == "price_asc":
-            return qs.order_by("price", "id")
+            return qs.order_by("price", "display_order", "name")
         if ordering == "price_desc":
-            return qs.order_by("-price", "id")
+            return qs.order_by("-price", "display_order", "name")
         if ordering == "popularity":
-            return qs.annotate(_order_count=Count("orderitem")).order_by("-_order_count", "-created_at", "id")
-        return qs.order_by("-created_at", "id")
+            return qs.annotate(_order_count=Count("orderitem")).order_by(
+                "-_order_count", "display_order", "name"
+            )
+        return qs.order_by("display_order", "name")
 
     def get_serializer_class(self):
         if self.action == 'list':
@@ -169,6 +171,13 @@ class AdminProductViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
             )
         assert_product_creation_allowed(self.request.user, store)
         instance = serializer.save(store=store)
+        mx = (
+            Product.objects.filter(store=store, category=instance.category)
+            .exclude(pk=instance.pk)
+            .aggregate(m=Max("display_order"))["m"]
+        )
+        instance.display_order = 0 if mx is None else int(mx) + 1
+        instance.save(update_fields=["display_order"])
         Inventory.objects.get_or_create(
             product=instance,
             variant=None,
@@ -247,6 +256,68 @@ class AdminProductViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
             qs = qs.exclude(public_id=exclude_public_id)
         exists = qs.filter(slug=normalized).exists()
         return Response({'available': not exists})
+
+    @action(detail=False, methods=["post"], url_path="reorder")
+    def reorder(self, request):
+        """Set ``display_order`` for all products in a category; body must list every product ID once."""
+        ctx = get_active_store(request)
+        store = ctx.store
+        if not store:
+            raise ValidationError(
+                {
+                    "detail": (
+                        "No active store resolved. Re-login, switch store, or send the "
+                        "X-Store-ID header."
+                    )
+                }
+            )
+        cat_pid = (request.data.get("category_public_id") or "").strip()
+        ids = request.data.get("product_public_ids")
+        if not cat_pid:
+            raise ValidationError({"category_public_id": "This field is required."})
+        if not isinstance(ids, list):
+            raise ValidationError({"product_public_ids": "Expected a list of public IDs."})
+        category = Category.objects.filter(store=store, public_id=cat_pid).first()
+        if not category:
+            raise ValidationError(
+                {"category_public_id": "Category not found for this store."}
+            )
+        expected_qs = Product.objects.filter(store=store, category=category)
+        n = expected_qs.count()
+        if len(ids) != n or len(set(ids)) != n:
+            raise ValidationError(
+                {
+                    "product_public_ids": (
+                        "Must list each product in this category exactly once, with no duplicates."
+                    )
+                }
+            )
+        if n == 0:
+            return Response({"detail": "ok", "updated": 0})
+        existing = set(expected_qs.values_list("public_id", flat=True))
+        if set(ids) != existing:
+            raise ValidationError(
+                {
+                    "product_public_ids": (
+                        "Product set does not match all products in this category."
+                    )
+                }
+            )
+        with transaction.atomic():
+            locked = list(
+                Product.objects.select_for_update()
+                .filter(store=store, category=category, public_id__in=ids)
+            )
+            if len(locked) != n:
+                raise ValidationError(
+                    {"product_public_ids": "Could not resolve products for reorder."}
+                )
+            order_map = {pid: i for i, pid in enumerate(ids)}
+            for p in locked:
+                p.display_order = order_map[p.public_id]
+            Product.objects.bulk_update(locked, ["display_order"])
+        invalidate_product_cache(store.public_id)
+        return Response({"detail": "ok", "updated": n})
 
 
 class AdminProductImageViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):

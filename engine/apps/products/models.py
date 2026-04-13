@@ -181,11 +181,16 @@ class Product(models.Model):
         default=dict,
         help_text="Dynamic extra fields per extra_field_schema (e.g. color, warranty).",
     )
+    display_order = models.PositiveIntegerField(
+        default=0,
+        db_index=True,
+        help_text="Sort order within this product's category (scoped per store).",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ['-created_at']
+        ordering = ["display_order", "name"]
         constraints = [
             models.UniqueConstraint(
                 fields=["store", "slug"],
@@ -257,8 +262,8 @@ class Product(models.Model):
         self.full_clean()
         from django.core.files.storage import default_storage
 
-        # Stable path main.{ext} + default storage file_overwrite=False: remove prior object so
-        # the new upload can reuse the canonical key without leaving orphans.
+        # Unique path per upload (see tenant_product_main_upload_to) + default storage
+        # file_overwrite=False: remove prior object when replacing so storage stays consistent.
         if self.pk and self.image and not getattr(self.image, "_committed", True):
             old_image = (
                 Product.objects.filter(pk=self.pk).values_list("image", flat=True).first()

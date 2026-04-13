@@ -192,12 +192,14 @@ def build_product_list_queryset(store, query_params):
     if not ordering:
         ordering = (query_params.get("sort") or "").strip().lower() or "newest"
     if ordering == "price_asc":
-        return qs.order_by("price", "id")
+        return qs.order_by("price", "display_order", "name")
     if ordering == "price_desc":
-        return qs.order_by("-price", "id")
+        return qs.order_by("-price", "display_order", "name")
     if ordering == "popularity":
-        return qs.annotate(_order_count=Count("orderitem")).order_by("-_order_count", "-created_at", "id")
-    return qs.order_by("-created_at", "id")
+        return qs.annotate(_order_count=Count("orderitem")).order_by(
+            "-_order_count", "display_order", "name"
+        )
+    return qs.order_by("display_order", "name")
 
 
 # ---------------------------------------------------------------------------
@@ -217,7 +219,7 @@ def _serialize_related_products(store, product, request):
         .exclude(id=product.id)
         .select_related("category")
         .prefetch_related("images")
-    ).order_by("-created_at", "id")[:4]
+    ).order_by("display_order", "name")[:4]
     return StorefrontProductListSerializer(
         qs,
         many=True,
