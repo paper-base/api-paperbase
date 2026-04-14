@@ -63,6 +63,7 @@ INSTALLED_APPS = [
     "engine.apps.banners",
     "engine.apps.basic_analytics",
     "engine.apps.couriers",
+    "engine.apps.fraud_check",
     "engine.apps.marketing_integrations",
     "engine.apps.emails",
 ]
@@ -101,6 +102,14 @@ TRUSTED_IP_HEADER = (os.getenv("TRUSTED_IP_HEADER", "HTTP_X_FORWARDED_FOR") or "
 TURNSTILE_SECRET_KEY = os.getenv("TURNSTILE_SECRET_KEY", "").strip()
 # When true, skip siteverify even if TURNSTILE_SECRET_KEY is set (local dev only; never enable in production).
 TURNSTILE_SKIP_VERIFICATION = env_bool("TURNSTILE_SKIP_VERIFICATION", False)
+
+# Fraud check (BDCourier courier-check)
+FRAUD_API_KEY = os.getenv("FRAUD_API_KEY", "").strip()
+STORE_DAILY_LIMIT = int(os.getenv("STORE_DAILY_LIMIT", "0"))
+STORE_MONTHLY_LIMIT = int(os.getenv("STORE_MONTHLY_LIMIT", "0"))
+GLOBAL_DAILY_LIMIT = int(os.getenv("GLOBAL_DAILY_LIMIT", "0"))
+GLOBAL_MONTHLY_LIMIT = int(os.getenv("GLOBAL_MONTHLY_LIMIT", "0"))
+FRAUD_CACHE_TTL_DAYS = int(os.getenv("FRAUD_CACHE_TTL_DAYS", "3"))
 
 # Storefront rate limits (per minute, fixed window) — see engine.core.rate_limit
 TENANT_STOREFRONT_RATE_LIMIT_PER_IP_PER_MIN = int(

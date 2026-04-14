@@ -72,14 +72,11 @@ class IntegrationEventSettings(models.Model):
         on_delete=models.CASCADE,
         related_name="event_settings",
     )
-    # Storefront customer actions (backend-driven).
-    #
-    # IMPORTANT: These flags correspond to real backend flows that exist today.
-    track_order_created = models.BooleanField(default=True)
-    track_checkout_started = models.BooleanField(default=True)
-    track_product_detail_view = models.BooleanField(default=False)
+    # Meta standard events only (no legacy/custom event names).
+    track_purchase = models.BooleanField(default=True)
+    track_initiate_checkout = models.BooleanField(default=True)
+    track_view_content = models.BooleanField(default=False)
     track_search = models.BooleanField(default=False)
-    track_support_ticket = models.BooleanField(default=True)
 
     class Meta:
         verbose_name_plural = "Integration event settings"

@@ -4,7 +4,6 @@ from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 
 from config.permissions import IsStorefrontAPIKey
-from engine.apps.marketing_integrations.tracking import meta_conversions
 from engine.core.tenancy import require_api_key_store
 
 from .models import SupportTicket
@@ -25,7 +24,6 @@ class SupportTicketCreateView(APIView):
         ser = SupportTicketCreateSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
         ticket: SupportTicket = ser.save(store=store)
-        meta_conversions.track_support_ticket_submitted(request)
         return Response(
             SupportTicketPublicResponseSerializer(ticket).data,
             status=status.HTTP_201_CREATED,

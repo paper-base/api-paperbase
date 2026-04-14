@@ -10,11 +10,10 @@ class IntegrationEventSettingsSerializer(SafeModelSerializer):
     class Meta:
         model = IntegrationEventSettings
         fields = [
-            "track_order_created",
-            "track_checkout_started",
-            "track_product_detail_view",
+            "track_purchase",
+            "track_initiate_checkout",
+            "track_view_content",
             "track_search",
-            "track_support_ticket",
         ]
 
 

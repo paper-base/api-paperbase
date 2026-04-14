@@ -26,6 +26,8 @@ API_KEY_EXEMPT_PATHS = (
     "/api/v1/customers/",
     "/api/v1/system-notifications/",
     "/api/v1/settings/network/",
+    # Dashboard JWT (owner) fraud check; not a storefront API-key route.
+    "/api/v1/fraud-check/",
 )
 API_KEY_EXACT_EXEMPT_PATHS = (
     "/api/v1/health",

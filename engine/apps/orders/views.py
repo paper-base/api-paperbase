@@ -277,8 +277,6 @@ class OrderCreateView(CreateAPIView):
         )
         append_ledger_lines_for_order(order=order)
 
-        meta_conversions.track_order_created(request, order)
-
         _notify_order_created(order)
 
         order_for_receipt = (
@@ -336,5 +334,6 @@ class InitiateCheckoutView(APIView):
     allow_api_key = True
 
     def post(self, request):
-        meta_conversions.track_checkout_started(request)
+        event_id = (request.data.get("event_id") or "").strip() if isinstance(request.data, dict) else ""
+        meta_conversions.track_checkout_started(request, event_id=event_id or None)
         return Response({'status': 'ok'})

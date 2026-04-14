@@ -23,6 +23,7 @@ api_v1_patterns = [
     path('admin/', include('config.admin_urls')),
     path('settings/network/', include('engine.apps.stores.network_urls')),
     path('store/', include('engine.apps.stores.urls')),
+    path('fraud-check/', include('engine.apps.fraud_check.urls')),
     path('products/', include('engine.apps.products.urls')),
     path('catalog/', include('engine.apps.products.catalog_urls')),
     path('categories/', include(category_urlpatterns)),

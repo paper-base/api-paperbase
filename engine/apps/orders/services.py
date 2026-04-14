@@ -248,6 +248,7 @@ def apply_order_status_change(
     *,
     order: Order,
     to_status: str,
+    request=None,
 ) -> Order:
     """
     Set order status to pending, confirmed, or cancelled.
@@ -392,4 +393,20 @@ def apply_order_status_change(
         locked.status = to_status
         locked.save(update_fields=["status", "updated_at"])
         invalidate_notifications_and_dashboard_caches(locked.store.public_id)
+
+        # Meta standard event: Purchase only on confirmed transition.
+        if (
+            request is not None
+            and to_status == Order.Status.CONFIRMED
+            and from_status != Order.Status.CONFIRMED
+        ):
+            try:
+                from engine.apps.marketing_integrations.tracking import meta_conversions
+
+                purchase_event_id = f"purchase_{locked.public_id}"
+                meta_conversions.track_purchase(request, locked, event_id=purchase_event_id)
+            except Exception:
+                # Tracking must never break the business flow.
+                pass
+
         return locked

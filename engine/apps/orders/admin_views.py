@@ -320,7 +320,7 @@ class AdminOrderViewSet(
         note = (request.data.get("note") or "").strip()
         if not next_status:
             raise ValidationError({"status": "This field is required."})
-        order = apply_order_status_change(order=order, to_status=next_status)
+        order = apply_order_status_change(order=order, to_status=next_status, request=request)
         order.refresh_from_db()
         log_activity(
             request=request,
@@ -384,7 +384,7 @@ class AdminOrderViewSet(
                 if not order.shipping_address:
                     raise ValidationError({"detail": "Shipping address is required for courier dispatch."})
 
-                order = apply_order_status_change(order=order, to_status=Order.Status.CONFIRMED)
+                order = apply_order_status_change(order=order, to_status=Order.Status.CONFIRMED, request=request)
                 order.refresh_from_db()
 
                 if not (order.email or "").strip() and should_send_customer_confirmation_order_email(order):

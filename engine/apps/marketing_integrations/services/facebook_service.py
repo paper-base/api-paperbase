@@ -60,6 +60,8 @@ def _send_event(
     event_name: str,
     event_data: dict[str, Any],
     user_data: dict[str, Any],
+    *,
+    event_id: str | None = None,
 ) -> None:
     """Post a single event to the Facebook Conversions API."""
     access_token = decrypt_value(integration.access_token_encrypted)
@@ -72,7 +74,7 @@ def _send_event(
     event_payload: dict[str, Any] = {
         "event_name": event_name,
         "event_time": int(time.time()),
-        "event_id": uuid.uuid4().hex,
+        "event_id": (event_id or uuid.uuid4().hex),
         "action_source": "website",
         "user_data": user_data,
     }
@@ -96,7 +98,7 @@ def _send_event(
         logger.exception("Failed to send Facebook event '%s' for pixel %s.", event_name, integration.pixel_id)
 
 
-def track_order_created(request, order, integration) -> None:
+def track_purchase(request, order, event_id: str | None, integration) -> None:
     user_data = _extract_user_data(request)
 
     email = getattr(order, "email", "") or ""
@@ -107,10 +109,21 @@ def track_order_created(request, order, integration) -> None:
     if phone:
         user_data["ph"] = [_hash_value(phone)]
 
-    event_data = {
+    # Safety: only send Purchase on real conversion success (confirmed order).
+    status_value = (getattr(order, "status", "") or "").strip().lower()
+    if status_value != "confirmed":
+        logger.info(
+            "Skipping Purchase for order %s (status=%s).",
+            getattr(order, "public_id", "—"),
+            status_value or "—",
+        )
+        return
+
+    event_data: dict[str, Any] = {
         "currency": "BDT",
         "value": float(order.total),
         "content_type": "product",
+        "order_id": getattr(order, "public_id", "") or "",
     }
 
     items = list(order.items.select_related("product").all())
@@ -122,17 +135,15 @@ def track_order_created(request, order, integration) -> None:
         ]
         event_data["num_items"] = sum(i.quantity for i in items if i.product)
 
-    # Avoid guessing "Purchase" (paid conversion). The Order model has no "paid" state.
-    # Send a custom event that reflects the real backend action: an order row was created.
-    _send_event(integration, "OrderCreated", event_data, user_data)
+    _send_event(integration, "Purchase", event_data, user_data, event_id=event_id)
 
 
-def track_checkout_started(request, integration) -> None:
+def track_initiate_checkout(request, event_id: str | None, integration) -> None:
     user_data = _extract_user_data(request)
-    _send_event(integration, "InitiateCheckout", {}, user_data)
+    _send_event(integration, "InitiateCheckout", {}, user_data, event_id=event_id)
 
 
-def track_product_detail_view(request, product, integration) -> None:
+def track_view_content(request, product, event_id: str | None, integration) -> None:
     user_data = _extract_user_data(request)
     event_data = {
         "currency": "BDT",
@@ -141,15 +152,10 @@ def track_product_detail_view(request, product, integration) -> None:
         "contents": [{"id": product.public_id, "quantity": 1}],
         "content_name": product.name,
     }
-    _send_event(integration, "ViewContent", event_data, user_data)
+    _send_event(integration, "ViewContent", event_data, user_data, event_id=event_id)
 
 
-def track_support_ticket_submitted(request, integration) -> None:
-    user_data = _extract_user_data(request)
-    _send_event(integration, "Contact", {}, user_data)
-
-
-def track_search(request, query: str, integration) -> None:
+def track_search(request, query: str, event_id: str | None, integration) -> None:
     user_data = _extract_user_data(request)
     event_data = {"search_string": query}
-    _send_event(integration, "Search", event_data, user_data)
+    _send_event(integration, "Search", event_data, user_data, event_id=event_id)

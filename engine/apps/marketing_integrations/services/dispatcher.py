@@ -39,7 +39,7 @@ def _dispatch(request, event_flag: str, handler_name: str, *args: Any, store=Non
 
     Args:
         request: The incoming HTTP request.
-        event_flag: Attribute name on IntegrationEventSettings (e.g. "track_order_created").
+        event_flag: Attribute name on IntegrationEventSettings (e.g. "track_purchase").
         handler_name: Function name in the provider service module.
         *args: Extra args forwarded to the handler after (request, ..., integration).
     """
@@ -78,21 +78,17 @@ def _dispatch(request, event_flag: str, handler_name: str, *args: Any, store=Non
             )
 
 
-def track_order_created(request, order) -> None:
-    _dispatch(request, "track_order_created", "track_order_created", order)
+def track_purchase(request, order, *, event_id: str | None = None) -> None:
+    _dispatch(request, "track_purchase", "track_purchase", order, event_id)
 
 
-def track_checkout_started(request) -> None:
-    _dispatch(request, "track_checkout_started", "track_checkout_started")
+def track_initiate_checkout(request, *, event_id: str | None = None) -> None:
+    _dispatch(request, "track_initiate_checkout", "track_initiate_checkout", event_id)
 
 
-def track_product_detail_view(request, product) -> None:
-    _dispatch(request, "track_product_detail_view", "track_product_detail_view", product)
+def track_view_content(request, product, *, event_id: str | None = None) -> None:
+    _dispatch(request, "track_view_content", "track_view_content", product, event_id)
 
 
-def track_search(request, query: str) -> None:
-    _dispatch(request, "track_search", "track_search", query)
-
-
-def track_support_ticket_submitted(request) -> None:
-    _dispatch(request, "track_support_ticket", "track_support_ticket_submitted")
+def track_search(request, query: str, *, event_id: str | None = None) -> None:
+    _dispatch(request, "track_search", "track_search", query, event_id)
