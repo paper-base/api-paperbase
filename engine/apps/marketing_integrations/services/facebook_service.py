@@ -109,15 +109,8 @@ def track_purchase(request, order, event_id: str | None, integration) -> None:
     if phone:
         user_data["ph"] = [_hash_value(phone)]
 
-    # Safety: only send Purchase on real conversion success (confirmed order).
-    status_value = (getattr(order, "status", "") or "").strip().lower()
-    if status_value != "confirmed":
-        logger.warning(
-            "Skipping Meta Purchase for order %s (status=%s, expected confirmed).",
-            getattr(order, "public_id", "—"),
-            status_value or "—",
-        )
-        return
+    # Purchase fires when the storefront successfully creates an order (typically pending).
+    # Do not gate on merchant confirmation — that would duplicate if we also sent on status change.
 
     event_data: dict[str, Any] = {
         "currency": "BDT",

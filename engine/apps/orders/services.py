@@ -8,11 +8,7 @@ from django.db.models import Max, Min
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
-import logging
-
 from engine.apps.customers.models import Customer
-
-logger = logging.getLogger(__name__)
 from engine.apps.orders.models import Order, OrderItem, StockRestoreLog
 from engine.apps.orders.order_financials import (
     compute_line_financials,
@@ -397,35 +393,5 @@ def apply_order_status_change(
         locked.status = to_status
         locked.save(update_fields=["status", "updated_at"])
         invalidate_notifications_and_dashboard_caches(locked.store.public_id)
-
-        # Meta standard event: Purchase only on confirmed transition.
-        if (
-            request is not None
-            and to_status == Order.Status.CONFIRMED
-            and from_status != Order.Status.CONFIRMED
-        ):
-            try:
-                from engine.apps.marketing_integrations.tracking import meta_conversions
-
-                purchase_event_id = f"purchase_{locked.public_id}"
-                order_for_meta = (
-                    Order.objects.select_related("store")
-                    .prefetch_related("items__product")
-                    .get(pk=locked.pk)
-                )
-                logger.info(
-                    "Meta CAPI Purchase dispatch: order=%s status=%s event_id=%s store=%s",
-                    order_for_meta.public_id,
-                    order_for_meta.status,
-                    purchase_event_id,
-                    getattr(order_for_meta.store, "public_id", "—"),
-                )
-                meta_conversions.track_purchase(request, order_for_meta, event_id=purchase_event_id)
-            except Exception:
-                # Tracking must never break the business flow.
-                logger.exception(
-                    "Meta Purchase tracking failed for order %s",
-                    getattr(locked, "public_id", locked.pk),
-                )
 
         return locked

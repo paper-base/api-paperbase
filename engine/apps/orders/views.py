@@ -1,3 +1,5 @@
+import logging
+
 from django.db import transaction
 from django.db.models import Prefetch
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -33,6 +35,8 @@ from .stock import adjust_stock
 from .throttles import DirectOrderRateThrottle
 from engine.apps.emails.triggers import notify_store_new_order
 from engine.core.realtime import emit_store_event
+
+logger = logging.getLogger(__name__)
 
 
 def _notify_order_created(order: Order) -> None:
@@ -276,6 +280,26 @@ class OrderCreateView(CreateAPIView):
             address=order.shipping_address,
         )
         append_ledger_lines_for_order(order=order)
+
+        try:
+            purchase_event_id = f"purchase_{order.public_id}"
+            order_for_meta = (
+                Order.objects.select_related("store")
+                .prefetch_related("items__product")
+                .get(pk=order.pk)
+            )
+            logger.info(
+                "Meta CAPI Purchase (order placed): order=%s event_id=%s store=%s",
+                order_for_meta.public_id,
+                purchase_event_id,
+                getattr(order_for_meta.store, "public_id", "—"),
+            )
+            meta_conversions.track_purchase(request, order_for_meta, event_id=purchase_event_id)
+        except Exception:
+            logger.exception(
+                "Meta Purchase tracking failed on storefront order create for %s",
+                getattr(order, "public_id", order.pk),
+            )
 
         _notify_order_created(order)
 
