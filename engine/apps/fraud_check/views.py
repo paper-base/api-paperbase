@@ -5,6 +5,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from config.permissions import DenyAPIKeyAccess, IsDashboardUser
+from engine.apps.billing.feature_gate import require_feature_with_message
 from engine.apps.stores.models import StoreMembership
 from engine.core.tenancy import get_active_store
 from engine.core.tenant_drf import ProvenTenantContextMixin
@@ -17,6 +18,11 @@ class FraudCheckView(ProvenTenantContextMixin, APIView):
     permission_classes = [DenyAPIKeyAccess, IsDashboardUser]
 
     def post(self, request):
+        require_feature_with_message(
+            request.user,
+            "fraud_check",
+            message="Fraud Check is available in Premium plan only.",
+        )
         serializer = FraudCheckRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 

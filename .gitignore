@@ -47,8 +47,10 @@ media_local/
 
 # Env
 .env
-.env.example
 .env.railway
+
+# Keep example env committed
+!.env.example
 
 # Other
 db.sh

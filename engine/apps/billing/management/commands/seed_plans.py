@@ -48,6 +48,7 @@ PLAN_SEED_DATA = (
             "features": {
                 "basic_analytics": True,
                 "order_email_notifications": True,
+                "fraud_check": True,
             },
         },
     },
@@ -63,6 +64,7 @@ PLAN_SEED_DATA = (
             "features": {
                 "basic_analytics": True,
                 "order_email_notifications": True,
+                "fraud_check": True,
             },
         },
     },

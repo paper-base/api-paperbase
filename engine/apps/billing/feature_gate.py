@@ -104,6 +104,14 @@ def require_feature(user, feature_key):
         )
 
 
+def require_feature_with_message(user, feature_key: str, *, message: str) -> None:
+    """
+    Raise PermissionDenied with a caller-provided message if the feature is missing/false.
+    """
+    if not has_feature(user, feature_key):
+        raise PermissionDenied(detail=message)
+
+
 def invalidate_feature_config_cache(user) -> None:
     """Clear cached feature config for a user (call on subscription changes)."""
     public_id = getattr(user, "public_id", None)
