@@ -83,3 +83,38 @@ class IntegrationEventSettings(models.Model):
 
     def __str__(self):
         return f"Event settings for {self.integration}"
+
+
+class StoreEventLog(models.Model):
+    """
+    Tenant-scoped structured event log for low-volume, high-signal integrations.
+
+    Designed for operational debugging and auditability; NOT a full analytics stream.
+    """
+
+    class Status(models.TextChoices):
+        SUCCESS = "success", "Success"
+        FAILED = "failed", "Failed"
+        SKIPPED = "skipped", "Skipped"
+
+    store = models.ForeignKey(
+        Store,
+        on_delete=models.CASCADE,
+        related_name="event_logs",
+    )
+    app = models.CharField(max_length=50, db_index=True)
+    event_type = models.CharField(max_length=80, db_index=True)
+    status = models.CharField(max_length=20, choices=Status.choices, db_index=True)
+    message = models.CharField(max_length=500, blank=True, default="")
+    metadata = models.JSONField(blank=True, default=dict)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["store", "created_at"]),
+            models.Index(fields=["store", "event_type", "status"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.store_id} {self.event_type} {self.status}"

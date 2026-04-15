@@ -277,6 +277,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "engine.core.purge_expired_trash",
         "schedule": crontab(minute=15, hour=3),
     },
+    "marketing-integrations-cleanup-old-event-logs-daily": {
+        "task": "engine.apps.marketing_integrations.cleanup_old_event_logs",
+        "schedule": crontab(minute=30, hour=4),
+    },
     "store-lifecycle-every-15-min": {
         "task": "engine.apps.stores.process_store_lifecycle",
         "schedule": crontab(minute="*/15"),

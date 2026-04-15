@@ -16,7 +16,6 @@ import logging
 from typing import Any
 
 from engine.apps.marketing_integrations import meta_event_ids
-from engine.core.tenant_context import get_current_store
 from engine.core.tenant_guard import TenantViolationError
 
 logger = logging.getLogger(__name__)
@@ -40,9 +39,49 @@ def _should_skip_event_for_settings(settings, event_flag: str) -> bool:
     return not enabled
 
 
-def _resolve_store(*, store=None):
-    """Return explicitly provided store or current request-scoped store."""
-    return store or get_current_store()
+def _resolve_store_for_request(request):
+    """
+    Resolve store explicitly from the request.
+
+    STRICT: no implicit ContextVar store resolution is allowed for Meta CAPI.
+    """
+    from rest_framework.exceptions import AuthenticationFailed
+
+    from engine.core.tenancy import require_api_key_store
+
+    try:
+        return require_api_key_store(request)
+    except AuthenticationFailed as exc:
+        raise TenantViolationError("Dispatcher requires explicit store context.") from exc
+
+
+def _meta_capi_allowed(store) -> bool:
+    """
+    Feature gate: key 'meta_capi', default ALLOW.
+
+    - Missing key => allow
+    - Explicit False => block
+    """
+    try:
+        from engine.apps.billing import feature_gate
+    except Exception:
+        # Fail open: feature gating must never break tracking flow.
+        return True
+
+    owner = getattr(store, "owner", None)
+    if owner is None:
+        return True
+
+    try:
+        cfg = feature_gate.get_feature_config(owner) or {}
+        features = cfg.get("features") if isinstance(cfg, dict) else {}
+        if not isinstance(features, dict):
+            return True
+        if "meta_capi" not in features:
+            return True
+        return features.get("meta_capi") is not False
+    except Exception:
+        return True
 
 
 def _get_integrations(store):
@@ -56,49 +95,61 @@ def _get_integrations(store):
     )
 
 
-def _dispatch(request, event_flag: str, handler_name: str, *args: Any, store=None) -> None:
+def _dispatch(request, event_flag: str, event_name: str, payload: dict[str, Any], *, store=None) -> None:
     """
     Core dispatch loop.
 
     Args:
         request: The incoming HTTP request.
         event_flag: Attribute name on IntegrationEventSettings (e.g. "track_purchase").
-        handler_name: Function name in the provider service module.
-        *args: Extra args forwarded to the handler after (request, ..., integration).
+        event_name: Meta standard event name (e.g. "Purchase").
+        payload: JSON-serializable payload including user_data/custom_data/metadata.
     """
-    from engine.apps.marketing_integrations.services import facebook_service
+    from engine.apps.marketing_integrations.tasks import send_capi_event
 
-    store = _resolve_store(store=store)
+    if store is None:
+        store = _resolve_store_for_request(request)
     if not store:
         raise TenantViolationError("Dispatcher requires explicit tenant context.")
 
-    integrations = _get_integrations(store)
+    if not _meta_capi_allowed(store):
+        return
 
-    provider_modules = {
-        "facebook": facebook_service,
-    }
+    try:
+        integrations = list(_get_integrations(store))
+    except Exception:
+        integrations = []
+    if not integrations:
+        return
 
+    # Preserve existing per-event integration settings semantics: skip enqueue if
+    # no active integration has the event enabled.
+    any_enabled = False
     for integration in integrations:
         try:
             settings = getattr(integration, "event_settings", None)
             if _should_skip_event_for_settings(settings, event_flag):
                 continue
-
-            module = provider_modules.get(integration.provider)
-            if module is None:
-                continue
-
-            fn = getattr(module, handler_name, None)
-            if fn is None:
-                continue
-
-            fn(request, *args, integration)
+            any_enabled = True
+            break
         except Exception:
-            logger.exception(
-                "Marketing event '%s' failed for integration %s.",
-                handler_name,
-                integration.public_id,
-            )
+            continue
+    if not any_enabled:
+        return
+
+    event_id = (payload or {}).get("event_id") or ""
+    if not isinstance(event_id, str) or not event_id.strip():
+        return
+
+    try:
+        send_capi_event.delay(
+            store.public_id,
+            event_name,
+            event_id,
+            payload or {},
+        )
+    except Exception:
+        logger.exception("Failed to enqueue Meta CAPI event '%s'.", event_name)
 
 
 def track_purchase(request, order) -> None:
@@ -111,7 +162,12 @@ def track_purchase(request, order) -> None:
         logger.error("Meta CAPI skip (purchase): %s", e)
         return
     store = getattr(order, "store", None)
-    _dispatch(request, "track_purchase", "track_purchase", order, eid, store=store)
+    if store is None:
+        raise TenantViolationError("Purchase tracking requires order.store.")
+    from engine.apps.marketing_integrations.services import facebook_service
+
+    payload = facebook_service.build_capi_payload_purchase(request=request, order=order, event_id=eid)
+    _dispatch(request, "track_purchase", "Purchase", payload, store=store)
 
 
 def track_initiate_checkout(request) -> None:
@@ -121,7 +177,11 @@ def track_initiate_checkout(request) -> None:
             "Meta CAPI skip (initiate_checkout): no Django session key; cannot build deterministic event_id",
         )
         return
-    _dispatch(request, "track_initiate_checkout", "track_initiate_checkout", eid)
+    from engine.apps.marketing_integrations.services import facebook_service
+
+    store = _resolve_store_for_request(request)
+    payload = facebook_service.build_capi_payload_initiate_checkout(request=request, event_id=eid)
+    _dispatch(request, "track_initiate_checkout", "InitiateCheckout", payload, store=store)
 
 
 def track_view_content(request, product) -> None:
@@ -131,7 +191,16 @@ def track_view_content(request, product) -> None:
             "Meta CAPI skip (view_content): missing product.public_id",
         )
         return
-    _dispatch(request, "track_view_content", "track_view_content", product, eid)
+    from engine.apps.marketing_integrations.services import facebook_service
+
+    store = _resolve_store_for_request(request)
+    payload = facebook_service.build_capi_payload_view_content(
+        request=request,
+        product=product,
+        store=store,
+        event_id=eid,
+    )
+    _dispatch(request, "track_view_content", "ViewContent", payload, store=store)
 
 
 def track_search(request, query: str) -> None:
@@ -141,4 +210,8 @@ def track_search(request, query: str) -> None:
             "Meta CAPI skip (search): no Django session key; cannot build deterministic event_id",
         )
         return
-    _dispatch(request, "track_search", "track_search", query, eid)
+    from engine.apps.marketing_integrations.services import facebook_service
+
+    store = _resolve_store_for_request(request)
+    payload = facebook_service.build_capi_payload_search(request=request, query=query, event_id=eid)
+    _dispatch(request, "track_search", "Search", payload, store=store)
