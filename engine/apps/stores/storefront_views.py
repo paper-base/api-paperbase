@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from django.conf import settings
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -77,6 +78,13 @@ class StorePublicView(APIView):
             "address": store.address or "",
             "extra_field_schema": extra_schema,
             "modules_enabled": modules,
+            # Tracking script versioning (global, deploy-scoped; not per tenant)
+            "tracker_build_id": getattr(settings, "TRACKER_BUILD_ID", ""),
+            "tracker_script_src": (
+                "https://storage.paperbase.me/static/tracker.js"
+                f"?v={getattr(settings, 'TRACKER_BUILD_ID', '')}"
+            ),
+            "tracking_ingest_endpoint": "https://api.paperbase.me/tracking/event",
             "theme_settings": {
                 "primary_color": theme.get("primary_color") or "",
             },

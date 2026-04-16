@@ -2,6 +2,7 @@ from datetime import timedelta
 from pathlib import Path
 import os
 import sys
+import datetime
 from celery.schedules import crontab
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -189,6 +190,22 @@ STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
+
+# ---------------------------------------------------------------------------
+# tracker.js build/version id (global, deploy-scoped)
+# ---------------------------------------------------------------------------
+def _default_tracker_build_id() -> str:
+    # Use UTC timestamp at process start; override via env in production for determinism.
+    return datetime.datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+
+
+TRACKER_BUILD_ID = (
+    os.getenv("TRACKER_BUILD_ID")
+    or os.getenv("GIT_SHA")
+    or os.getenv("RAILWAY_GIT_COMMIT_SHA")
+    or os.getenv("COMMIT_SHA")
+    or _default_tracker_build_id()
+).strip()
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
