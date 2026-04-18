@@ -1,12 +1,7 @@
 import logging
-from datetime import timedelta
 
-from django.db.models import Count, Q
-from django.utils import timezone
+from django.db.models import Count
 from rest_framework import serializers, viewsets, mixins, status
-
-from engine.utils.bd_query import filter_by_bd_date
-from engine.utils.time import bd_today
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
@@ -27,6 +22,7 @@ from engine.apps.products.variant_utils import resolve_storefront_variant, unit_
 from engine.apps.shipping.models import ShippingMethod, ShippingZone
 
 from .courier_dispatch import persist_dispatch, resolve_courier, run_courier_api
+from .export_queryset import apply_order_admin_filters
 from .models import Order
 from .order_financials import money, preview_lines_to_accounting
 from .services import apply_order_status_change, apply_payment_verification
@@ -38,28 +34,6 @@ from .admin_serializers import (
 )
 
 logger = logging.getLogger(__name__)
-
-ALLOWED_ORDER_STATUSES = {
-    Order.Status.PENDING,
-    Order.Status.PAYMENT_PENDING,
-    Order.Status.CONFIRMED,
-    Order.Status.CANCELLED,
-}
-
-ALLOWED_ORDER_FLAGS = {
-    Order.Flag.NO_RESPONSE,
-    Order.Flag.CALL_LATER,
-    Order.Flag.WRONG_NUMBER,
-    Order.Flag.BUSY,
-    Order.Flag.HIGH_PRIORITY,
-}
-
-ALLOWED_ORDER_PAYMENT_STATUSES = {
-    Order.PaymentStatus.NONE,
-    Order.PaymentStatus.SUBMITTED,
-    Order.PaymentStatus.VERIFIED,
-    Order.PaymentStatus.FAILED,
-}
 
 
 class AdminOrderViewSet(
@@ -195,49 +169,7 @@ class AdminOrderViewSet(
         if not ctx.store:
             return qs.none()
         qs = qs.filter(store=ctx.store)
-
-        customer_public_id = (
-            (self.request.query_params.get("customer") or "").strip()
-            or (self.request.query_params.get("customer_public_id") or "").strip()
-        )
-        if customer_public_id:
-            qs = qs.filter(customer__public_id=customer_public_id)
-
-        status_value = (self.request.query_params.get("status") or "").strip().lower()
-        if status_value in ALLOWED_ORDER_STATUSES:
-            qs = qs.filter(status=status_value)
-
-        flag_value = (self.request.query_params.get("flag") or "").strip().lower()
-        if flag_value in ALLOWED_ORDER_FLAGS:
-            qs = qs.filter(flag=flag_value)
-
-        date_range = (self.request.query_params.get("date_range") or "").strip().lower()
-        if date_range == "today":
-            qs = filter_by_bd_date(qs, "created_at", bd_today())
-        elif date_range == "last_7_days":
-            qs = qs.filter(created_at__gte=timezone.now() - timedelta(days=7))
-        elif date_range == "last_30_days":
-            qs = qs.filter(created_at__gte=timezone.now() - timedelta(days=30))
-
-        payment_status = (
-            (self.request.query_params.get("payment_status") or "").strip().lower()
-        )
-        if payment_status in ALLOWED_ORDER_PAYMENT_STATUSES:
-            qs = qs.filter(payment_status=payment_status)
-
-        search = (self.request.query_params.get("search") or "").strip()
-        if search:
-            qs = qs.filter(
-                Q(order_number__icontains=search)
-                | Q(public_id__icontains=search)
-                | Q(courier_consignment_id__icontains=search)
-                | Q(transaction_id__icontains=search)
-                | Q(shipping_name__icontains=search)
-                | Q(phone__icontains=search)
-                | Q(email__icontains=search)
-                | Q(customer__name__icontains=search)
-            )
-
+        qs = apply_order_admin_filters(qs, query_params=self.request.query_params)
         # Explicit stable ordering for paginator (avoids UnorderedObjectListWarning;
         # ties on created_at are broken by primary key).
         return qs.annotate(items_count=Count("items")).order_by("-created_at", "id")

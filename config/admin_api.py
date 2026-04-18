@@ -24,6 +24,7 @@ from engine.apps.stores.social_links import (
     default_social_links,
     normalize_social_links_from_storefront_public,
 )
+from engine.apps.customers.services.purchase_service import get_confirmed_orders_for_store
 from engine.apps.orders.models import Order
 from engine.apps.orders.admin_serializers import AdminOrderListSerializer
 from engine.apps.products.models import Product, Category
@@ -58,9 +59,8 @@ class DashboardStatsView(ProvenTenantContextMixin, APIView):
             confirmed_count=Count('id', filter=Q(status=Order.Status.CONFIRMED)),
             cancelled_count=Count('id', filter=Q(status=Order.Status.CANCELLED)),
         )
-        revenue_agg = order_qs.exclude(
-            status=Order.Status.CANCELLED,
-        ).aggregate(revenue=Sum('total'))
+        # Realized revenue: confirmed orders only; queryset from purchase service.
+        revenue_agg = get_confirmed_orders_for_store(store).aggregate(revenue=Sum("total"))
 
         product_stats = product_qs.aggregate(
             total_count=Count('id'),

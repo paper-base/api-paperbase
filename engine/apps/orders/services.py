@@ -9,6 +9,7 @@ from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
 from engine.apps.customers.models import Customer
+from engine.apps.customers.services.purchase_service import get_confirmed_orders
 from engine.apps.orders.models import Order, OrderItem, StockRestoreLog
 from engine.apps.orders.order_financials import (
     compute_line_financials,
@@ -325,7 +326,11 @@ def _apply_customer_rollup_on_status_change(
     to_status: str,
 ) -> None:
     """
-    Update customer aggregate rollups on status transitions.
+    **Single writer** for ``Customer`` purchase rollups: ``total_orders``,
+    ``total_spent``, and related fields. No other code path may update these
+    fields.
+
+    Recompute of first/last after cancel uses ``get_confirmed_orders`` only.
 
     Idempotent: increments on any-other -> confirmed, decrements on confirmed ->
     cancelled. No-op for other transitions. Customer row is locked for update
@@ -389,11 +394,7 @@ def _apply_customer_rollup_on_status_change(
         # Recompute first/last from remaining CONFIRMED orders only, excluding
         # the current order because it is being cancelled.
         agg = (
-            Order.objects.filter(
-                store_id=locked.store_id,
-                customer_id=locked.customer_id,
-                status=Order.Status.CONFIRMED,
-            )
+            get_confirmed_orders(customer)
             .exclude(pk=locked.pk)
             .aggregate(first=Min("updated_at"), last=Max("updated_at"))
         )

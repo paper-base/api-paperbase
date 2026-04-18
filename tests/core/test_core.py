@@ -32,7 +32,7 @@ from engine.apps.products.models import (
     ProductVariant,
     ProductVariantAttribute,
 )
-from engine.apps.orders.models import Order, OrderItem, PurchaseLedgerEntry
+from engine.apps.orders.models import Order, OrderItem
 from engine.apps.shipping.models import ShippingZone
 from engine.apps.orders.services import resolve_and_attach_customer
 from engine.apps.customers.models import Customer
@@ -1427,59 +1427,32 @@ class CrossTenantAdminIsolationTests(TestCase):
         self.assertIn(resp.status_code, [401, 403, 404])
 
     def test_admin_customer_details_endpoint_returns_analytics(self):
-        """Customer details endpoint must return store-scoped analytics and include email key."""
+        """Customer details endpoint must return store-scoped analytics; totals follow confirmed rollups only."""
+        from engine.apps.orders.services import apply_order_status_change
+
         order_1 = _make_order(self.store_a, email="cust-a@example.com")
         order_1.customer = self.customer_a
+        order_1.subtotal_after_discount = Decimal("100.00")
         order_1.total = "100.00"
-        order_1.district = "Dhaka"
-        order_1.save(update_fields=["customer", "total", "district"])
+        order_1.save(update_fields=["customer", "subtotal_after_discount", "total"])
 
         order_2 = _make_order(self.store_a, email="cust-a@example.com")
         order_2.customer = self.customer_a
+        order_2.subtotal_after_discount = Decimal("300.00")
         order_2.total = "300.00"
-        order_2.district = "Khulna"
-        order_2.save(update_fields=["customer", "total", "district"])
+        order_2.save(update_fields=["customer", "subtotal_after_discount", "total"])
 
-        PurchaseLedgerEntry.objects.create(
-            store=self.store_a,
-            customer=self.customer_a,
-            order=order_1,
-            order_public_id=order_1.public_id,
-            order_number=order_1.order_number,
-            order_uuid=order_1.pk,
-            order_item_public_id=generate_public_id("orderitem"),
-            product_name="Line A",
-            quantity=1,
-            unit_price="100.00",
-            line_total="100.00",
-            order_status_snapshot=Order.Status.PENDING,
-        )
-        PurchaseLedgerEntry.objects.create(
-            store=self.store_a,
-            customer=self.customer_a,
-            order=order_2,
-            order_public_id=order_2.public_id,
-            order_number=order_2.order_number,
-            order_uuid=order_2.pk,
-            order_item_public_id=generate_public_id("orderitem"),
-            product_name="Line B",
-            quantity=1,
-            unit_price="300.00",
-            line_total="300.00",
-            order_status_snapshot=Order.Status.PENDING,
-        )
+        apply_order_status_change(order=order_1, to_status=Order.Status.CONFIRMED)
+        apply_order_status_change(order=order_2, to_status=Order.Status.CONFIRMED)
 
         self._auth_as(self.admin_a, self.store_a)
         resp = self.client.get(f"/api/v1/admin/customers/{self.customer_a.public_id}/details/")
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.data["customer"]["public_id"], self.customer_a.public_id)
         self.assertIn("email", resp.data["customer"])
-        self.assertIn("district", resp.data["customer"])
         self.assertEqual(resp.data["analytics"]["total_orders"], 2)
         self.assertEqual(Decimal(str(resp.data["analytics"]["total_spent"])), Decimal("400"))
-        self.assertEqual(Decimal(str(resp.data["analytics"]["average_order_value"])), Decimal("200"))
-        self.assertEqual(resp.data["customer"]["district"], "Khulna")
-        self.assertEqual(len(resp.data.get("ordered_products", [])), 2)
+        self.assertTrue(resp.data["analytics"]["is_repeat_customer"])
 
     def test_admin_customer_details_cross_store_denied(self):
         """Store A admin must not access store B customer details endpoint."""

@@ -16,6 +16,7 @@ from engine.apps.orders.models import (
 from engine.apps.stores.services import create_store_api_key
 from engine.core.tenant_execution import tenant_scope_from_store
 from engine.core.trash_service import soft_delete_order
+from engine.apps.orders.services import apply_order_status_change
 
 from tests.apps.orders.test_order_item_snapshots import (
     _api_key_client,
@@ -89,6 +90,10 @@ def test_ledger_survives_order_soft_delete():
         oit_pid = item.public_id
         assert PurchaseLedgerEntry.objects.filter(order_public_id=opid).count() == 1
 
+    with tenant_scope_from_store(store=store, reason="confirm for customer metrics"):
+        order = Order.objects.get(public_id=opid)
+        apply_order_status_change(order=order, to_status=Order.Status.CONFIRMED)
+
     deleter = make_user("deleter@example.com")
     _make_membership(deleter, store)
     with tenant_scope_from_store(store=store, reason="soft delete order"):
@@ -113,7 +118,6 @@ def test_ledger_survives_order_soft_delete():
     assert detail_resp.status_code == 200
     assert detail_resp.data["analytics"]["total_orders"] == 1
     assert Decimal(str(detail_resp.data["analytics"]["total_spent"])) == Decimal("50.00")
-    assert len(detail_resp.data["ordered_products"]) == 1
 
 
 @pytest.mark.django_db
@@ -141,6 +145,12 @@ def test_admin_patch_quantity_creates_adjustment():
         item = OrderItem.objects.get(order__public_id=opid)
         oit_pid = item.public_id
         assert item.quantity == 2
+
+    with tenant_scope_from_store(store=store, reason="confirm for customer metrics"):
+        apply_order_status_change(
+            order=Order.objects.get(public_id=opid),
+            to_status=Order.Status.CONFIRMED,
+        )
 
     admin = make_user("ledger-admin@example.com")
     _make_membership(admin, store)
@@ -174,7 +184,7 @@ def test_admin_patch_quantity_creates_adjustment():
 
 
 @pytest.mark.django_db
-def test_customer_list_exposes_ledger_order_count():
+def test_customer_list_exposes_rollup_order_totals():
     _ensure_default_plan()
     store = _make_store("Ledger List Count")
     product = _make_product(store, name="List Product", price=40, stock=10)
@@ -194,6 +204,11 @@ def test_customer_list_exposes_ledger_order_count():
         format="json",
     )
     assert response.status_code == 201
+    with tenant_scope_from_store(store=store, reason="confirm for customer metrics"):
+        apply_order_status_change(
+            order=Order.objects.get(public_id=response.data["public_id"]),
+            to_status=Order.Status.CONFIRMED,
+        )
     customer = Customer.objects.get(store=store, phone="01755556666")
     admin = make_user("ledger-list@example.com")
     _make_membership(admin, store)
@@ -203,9 +218,8 @@ def test_customer_list_exposes_ledger_order_count():
     assert list_resp.status_code == 200
     results = list_resp.data.get("results", list_resp.data)
     row = next(r for r in results if r["public_id"] == customer.public_id)
-    assert row["ledger_order_count"] == 1
-    assert Decimal(str(row["ledger_total_spent"])) == Decimal("40.00")
-    assert "total_orders" in row
+    assert row["total_orders"] == 1
+    assert Decimal(str(row["total_spent"])) == Decimal("40.00")
 
 
 @pytest.mark.django_db
@@ -217,6 +231,7 @@ def test_two_orders_ledger_analytics_on_customer_details():
     _key_row, api_key = create_store_api_key(store, name="frontend")
     client = _api_key_client(api_key)
     phone = "01777778888"
+    pids: list[str] = []
     for _ in range(2):
         r = client.post(
             "/api/v1/orders/",
@@ -231,6 +246,13 @@ def test_two_orders_ledger_analytics_on_customer_details():
             format="json",
         )
         assert r.status_code == 201
+        pids.append(r.data["public_id"])
+    with tenant_scope_from_store(store=store, reason="confirm for customer metrics"):
+        for pid in pids:
+            apply_order_status_change(
+                order=Order.objects.get(public_id=pid),
+                to_status=Order.Status.CONFIRMED,
+            )
     customer = Customer.objects.get(store=store, phone=phone)
     admin = make_user("ledger-two@example.com")
     _make_membership(admin, store)
@@ -240,7 +262,6 @@ def test_two_orders_ledger_analytics_on_customer_details():
     assert detail_resp.status_code == 200
     assert detail_resp.data["analytics"]["total_orders"] == 2
     assert Decimal(str(detail_resp.data["analytics"]["total_spent"])) == Decimal("20.00")
-    assert Decimal(str(detail_resp.data["analytics"]["average_order_value"])) == Decimal("10.00")
 
 
 @pytest.mark.django_db
@@ -273,11 +294,19 @@ def test_customer_details_shows_ledger_product_name_not_live_catalog():
     admin_client = APIClient()
     login_dashboard_jwt(admin_client, admin.email)
 
+    with tenant_scope_from_store(store=store, reason="confirm for customer metrics"):
+        apply_order_status_change(
+            order=Order.objects.get(phone=customer.phone, store=store),
+            to_status=Order.Status.CONFIRMED,
+        )
+
     detail_resp = admin_client.get(
         f"/api/v1/admin/customers/{customer.public_id}/details/",
     )
     assert detail_resp.status_code == 200
-    rows = detail_resp.data["ordered_products"]
-    assert len(rows) == 1
-    assert rows[0]["product_name"] == "Original Name"
-    assert rows[0]["order_status_at_purchase"] == Order.Status.PENDING
+    assert detail_resp.data["analytics"]["total_orders"] == 1
+    assert Decimal(str(detail_resp.data["analytics"]["total_spent"])) == Decimal("80.00")
+    entry = PurchaseLedgerEntry.objects.get(customer=customer)
+    assert entry.product_name == "Original Name"
+    assert entry.order_status_snapshot == Order.Status.PENDING
+

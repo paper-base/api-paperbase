@@ -12,6 +12,7 @@ from config.permissions import DenyAPIKeyAccess, IsAdminUser
 from engine.core.tenant_drf import ProvenTenantContextMixin
 from engine.apps.basic_analytics.models import StoreDashboardStatsSnapshot
 from engine.apps.customers.models import Customer
+from engine.apps.customers.services.purchase_service import get_confirmed_orders_for_store
 from engine.apps.orders.models import Order
 from engine.apps.products.models import Product
 from engine.apps.stores.models import Store
@@ -80,8 +81,12 @@ class BasicAnalyticsOverviewView(ProvenTenantContextMixin, APIView):
         bucket_norm = (bucket or "day").lower()
         period_expr = trunc_created_bd("created_at", bucket_norm)
 
+        # Business "orders" in this overview are confirmed (realized) only; keys unchanged.
         order_qs = filter_by_bd_date_range(
-            Order.objects.filter(store=store), "created_at", start_date, end_date
+            get_confirmed_orders_for_store(store),
+            "created_at",
+            start_date,
+            end_date,
         )
         product_qs = filter_by_bd_date_range(
             Product.objects.filter(store=store), "created_at", start_date, end_date

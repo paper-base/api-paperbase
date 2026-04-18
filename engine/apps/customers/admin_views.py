@@ -20,6 +20,10 @@ from .admin_serializers import (
     AdminCustomerSerializer,
     AdminCustomerListSerializer,
 )
+from .services.purchase_service import (
+    get_customer_purchase_metrics,
+    annotate_queryset_list_purchase_metrics,
+)
 
 
 class AdminCustomerViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
@@ -54,6 +58,8 @@ class AdminCustomerViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
                 | Q(phone__icontains=search)
             )
 
+        if self.action == "list":
+            qs = annotate_queryset_list_purchase_metrics(qs)
         return qs
 
     def perform_create(self, serializer):
@@ -101,6 +107,7 @@ class AdminCustomerViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
     @action(detail=True, methods=["get"], url_path="details")
     def details(self, request, public_id=None):
         customer = self.get_object()
+        metrics = get_customer_purchase_metrics(customer)
         payload = {
             "customer": {
                 "public_id": customer.public_id,
@@ -110,10 +117,10 @@ class AdminCustomerViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
                 "address": customer.address,
             },
             "analytics": {
-                "total_orders": int(customer.total_orders or 0),
-                "total_spent": customer.total_spent,
-                "first_order_at": customer.first_order_at,
-                "last_order_at": customer.last_order_at,
+                "total_orders": int(metrics.total_orders or 0),
+                "total_spent": metrics.total_spent,
+                "first_order_at": metrics.first_order_at,
+                "last_order_at": metrics.last_order_at,
                 "is_repeat_customer": bool(customer.is_repeat_customer),
                 "avg_order_interval_days": customer.avg_order_interval_days,
             },

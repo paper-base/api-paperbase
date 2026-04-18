@@ -2,6 +2,11 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 
 from engine.apps.orders.admin_views import AdminOrderViewSet
+from engine.apps.orders.order_export_views import (
+    OrderExportCreateView,
+    OrderExportDownloadView,
+    OrderExportStatusView,
+)
 from engine.apps.products.admin_views import (
     AdminProductViewSet,
     AdminProductImageViewSet,
@@ -62,6 +67,17 @@ router.register(r'couriers', AdminCourierViewSet, basename='admin-couriers')
 router.register(r'marketing-integrations', AdminMarketingIntegrationViewSet, basename='admin-marketing-integrations')
 
 urlpatterns = [
+    path("orders/export/", OrderExportCreateView.as_view(), name="admin-order-export-create"),
+    path(
+        "orders/export/<uuid:job_id>/",
+        OrderExportStatusView.as_view(),
+        name="admin-order-export-status",
+    ),
+    path(
+        "orders/export/<uuid:job_id>/download/",
+        OrderExportDownloadView.as_view(),
+        name="admin-order-export-download",
+    ),
     path(
         "search/",
         UnifiedSearchView.as_view(),

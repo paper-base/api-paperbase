@@ -345,7 +345,10 @@ class _ImmutableAuditModel(models.Model):
 
 class PurchaseLedgerEntry(_ImmutableAuditModel):
     """
-    Immutable per-line purchase record for customer history.
+    Append-only audit and line history; not for business revenue or order counts
+    in reporting (use ``Order`` CONFIRMED and ``purchase_service``).
+
+    Immutable per-line record for customer / compliance history.
     Survives order and order-item row deletion via denormalized public IDs and SET_NULL FKs.
     """
 
@@ -483,3 +486,52 @@ class PurchaseLedgerAdjustment(_ImmutableAuditModel):
 
     def __str__(self):
         return f"{self.field_key} {self.order_public_id or '—'}"
+
+
+class OrderExportJob(models.Model):
+    """Async CSV export job; scoped by store and validated in Celery."""
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        PROCESSING = "processing", "Processing"
+        COMPLETED = "completed", "Completed"
+        FAILED = "failed", "Failed"
+        EXPIRED = "expired", "Expired"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    store = models.ForeignKey(
+        Store,
+        on_delete=models.CASCADE,
+        related_name="order_export_jobs",
+        db_index=True,
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="order_export_jobs",
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING,
+        db_index=True,
+    )
+    select_all = models.BooleanField(default=False)
+    filters = models.JSONField(default=dict)
+    selected_order_ids = models.JSONField(null=True, blank=True)
+    file_path = models.CharField(max_length=512, blank=True, default="")
+    progress = models.PositiveSmallIntegerField(default=0)
+    error_message = models.TextField(blank=True, default="")
+    expires_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["store", "status"]),
+            models.Index(fields=["expires_at"]),
+        ]
+
+    def __str__(self):
+        return f"OrderExportJob {self.id} ({self.status})"

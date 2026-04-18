@@ -7,7 +7,16 @@ from engine.core.ids import generate_public_id
 
 
 class Customer(models.Model):
-    """Per-store customer identity + aggregate rollups (no product-level data)."""
+    """
+    Per-store customer identity. Denormalized purchase fields (``total_orders``,
+    ``total_spent``, ``first_order_at``, ``last_order_at``) are **write-through
+    caches** updated **only** in ``_apply_customer_rollup_on_status_change``;
+    do not use them as the source of truth for new business logic.
+
+    Canonical order-based metrics: ``get_customer_purchase_metrics`` in
+    ``engine.apps.customers.services.purchase_service`` (and list reads may
+    show these caches for performance; see that module).
+    """
     public_id = models.CharField(
         max_length=32, unique=True, db_index=True, editable=False,
         help_text="Non-sequential public identifier (e.g. cus_xxx).",

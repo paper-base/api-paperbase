@@ -1,5 +1,8 @@
 """
-Immutable purchase ledger writes. All mutations are append-only via model constraints.
+Append-only **audit** ledger for line-level order history. Not a source of truth
+for revenue, order counts, or customer LTV; use
+``engine.apps.customers.services.purchase_service`` for business metrics.
+All mutations are append-only via model constraints.
 """
 
 from __future__ import annotations
