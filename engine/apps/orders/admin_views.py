@@ -29,7 +29,7 @@ from engine.apps.shipping.models import ShippingMethod, ShippingZone
 from .courier_dispatch import persist_dispatch, resolve_courier, run_courier_api
 from .models import Order
 from .order_financials import money, preview_lines_to_accounting
-from .services import apply_order_status_change
+from .services import apply_order_status_change, apply_payment_verification
 from .admin_serializers import (
     AdminOrderListSerializer,
     AdminOrderSerializer,
@@ -41,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 ALLOWED_ORDER_STATUSES = {
     Order.Status.PENDING,
+    Order.Status.PAYMENT_PENDING,
     Order.Status.CONFIRMED,
     Order.Status.CANCELLED,
 }
@@ -51,6 +52,13 @@ ALLOWED_ORDER_FLAGS = {
     Order.Flag.WRONG_NUMBER,
     Order.Flag.BUSY,
     Order.Flag.HIGH_PRIORITY,
+}
+
+ALLOWED_ORDER_PAYMENT_STATUSES = {
+    Order.PaymentStatus.NONE,
+    Order.PaymentStatus.SUBMITTED,
+    Order.PaymentStatus.VERIFIED,
+    Order.PaymentStatus.FAILED,
 }
 
 
@@ -211,12 +219,19 @@ class AdminOrderViewSet(
         elif date_range == "last_30_days":
             qs = qs.filter(created_at__gte=timezone.now() - timedelta(days=30))
 
+        payment_status = (
+            (self.request.query_params.get("payment_status") or "").strip().lower()
+        )
+        if payment_status in ALLOWED_ORDER_PAYMENT_STATUSES:
+            qs = qs.filter(payment_status=payment_status)
+
         search = (self.request.query_params.get("search") or "").strip()
         if search:
             qs = qs.filter(
                 Q(order_number__icontains=search)
                 | Q(public_id__icontains=search)
                 | Q(courier_consignment_id__icontains=search)
+                | Q(transaction_id__icontains=search)
                 | Q(shipping_name__icontains=search)
                 | Q(phone__icontains=search)
                 | Q(email__icontains=search)
@@ -331,6 +346,45 @@ class AdminOrderViewSet(
             metadata={
                 "status": order.status,
                 "note": note,
+            },
+        )
+        return Response(
+            {"order": AdminOrderSerializer(order).data},
+            status=status.HTTP_200_OK,
+        )
+
+    @action(detail=True, methods=["post"], url_path="verify-payment")
+    def verify_payment(self, request, public_id=None):
+        """
+        Admin verification of a submitted prepayment. Body: {"valid": true|false}.
+
+        Valid -> status=confirmed, payment_status=verified.
+        Invalid -> status=cancelled, payment_status=failed (stock restored).
+        """
+        order = self.get_object()
+        raw = request.data.get("valid")
+        if isinstance(raw, bool):
+            valid = raw
+        elif isinstance(raw, str):
+            valid = raw.strip().lower() in ("true", "1", "yes")
+        else:
+            raise ValidationError({"valid": "Expected a boolean."})
+
+        order = apply_payment_verification(order=order, valid=valid, request=request)
+        order.refresh_from_db()
+        log_activity(
+            request=request,
+            action=ActivityLog.Action.CUSTOM,
+            entity_type="order",
+            entity_id=order.public_id,
+            summary=(
+                f"Order {order.order_number} payment "
+                f"{'verified' if valid else 'rejected'}"
+            ),
+            metadata={
+                "status": order.status,
+                "payment_status": order.payment_status,
+                "transaction_id": order.transaction_id,
             },
         )
         return Response(

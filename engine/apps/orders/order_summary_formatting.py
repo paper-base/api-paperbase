@@ -79,8 +79,18 @@ def build_structured_order_summary(order: Order) -> str:
 
 def build_order_email_context(order: Order) -> dict:
     """Context keys for ORDER_RECEIVED / ORDER_CONFIRMED; merge with existing dicts."""
+    from engine.apps.orders.services import resolve_order_prepayment_type
+
     store = order.store
     summary = build_structured_order_summary(order)
+    try:
+        prepayment_type = resolve_order_prepayment_type(order)
+    except Exception:
+        prepayment_type = "none"
+    payment_status = (order.payment_status or "none")
+    transaction_id = (order.transaction_id or "").strip()
+    payer_number = (order.payer_number or "").strip()
+    has_prepayment = prepayment_type != "none" or payment_status != "none"
     return {
         "order_summary": summary,
         "shipping_address": (order.shipping_address or "").strip(),
@@ -91,4 +101,9 @@ def build_order_email_context(order: Order) -> dict:
         "currency": getattr(store, "currency", "") or "",
         "currency_symbol": (getattr(store, "currency_symbol", None) or "").strip(),
         "items_lines": format_item_lines(order),
+        "prepayment_type": prepayment_type,
+        "payment_status": payment_status,
+        "transaction_id": transaction_id,
+        "payer_number": payer_number,
+        "has_prepayment": has_prepayment,
     }

@@ -244,6 +244,176 @@ def restore_order_item_stock(*, store_id: int, product_id, variant_id, quantity:
     )
 
 
+_PREPAYMENT_RANK = {
+    Product.PrepaymentType.NONE: 0,
+    Product.PrepaymentType.DELIVERY_ONLY: 1,
+    Product.PrepaymentType.FULL: 2,
+}
+
+
+def resolve_cart_prepayment_type(products) -> str:
+    """
+    Strongest-wins resolver for an ordered cart's effective prepayment type.
+
+    Given an iterable of Product instances (or anything with a `prepayment_type`
+    string attribute), returns the highest-ranked value among:
+    `full` > `delivery_only` > `none`. Empty or missing values default to `none`.
+    """
+    best = Product.PrepaymentType.NONE
+    for product in products:
+        value = getattr(product, "prepayment_type", None) or Product.PrepaymentType.NONE
+        if _PREPAYMENT_RANK.get(value, 0) > _PREPAYMENT_RANK[best]:
+            best = value
+    return best
+
+
+def resolve_order_prepayment_type(order: Order) -> str:
+    """
+    Derive an order's effective prepayment type from its persisted line items.
+
+    Returns `none` when the order has no items with linked products (e.g. all
+    products unavailable) so downstream email/serializer code never crashes.
+    """
+    items = list(
+        OrderItem.objects.filter(order_id=order.pk).select_related("product")
+    )
+    products = [item.product for item in items if item.product is not None]
+    if not products:
+        return Product.PrepaymentType.NONE
+    return resolve_cart_prepayment_type(products)
+
+
+def _restore_stock_for_cancellation(locked: Order) -> None:
+    """
+    Restore stock for every line item idempotently when an order enters cancelled.
+
+    Extracted so both `apply_order_status_change` and `apply_payment_verification`
+    can share the exact same restore semantics (single-shot per item via
+    `StockRestoreLog`).
+    """
+    reason = StockRestoreLog.Reason.CANCELLED
+    for item in locked.items.all():
+        try:
+            restore_log, created = StockRestoreLog.objects.get_or_create(
+                order=locked,
+                order_item=item,
+                reason=reason,
+                defaults={
+                    "store_id": locked.store_id,
+                    "quantity": int(item.quantity),
+                },
+            )
+        except IntegrityError:
+            continue
+        if not created:
+            continue
+        restore_order_item_stock(
+            store_id=locked.store_id,
+            product_id=item.product_id,
+            variant_id=item.variant_id,
+            quantity=item.quantity,
+        )
+        if restore_log.quantity != int(item.quantity):
+            restore_log.quantity = int(item.quantity)
+            restore_log.save(update_fields=["quantity"])
+
+
+def _apply_customer_rollup_on_status_change(
+    locked: Order,
+    *,
+    from_status: str,
+    to_status: str,
+) -> None:
+    """
+    Update customer aggregate rollups on status transitions.
+
+    Idempotent: increments on any-other -> confirmed, decrements on confirmed ->
+    cancelled. No-op for other transitions. Customer row is locked for update
+    inside the caller's atomic block.
+    """
+    if not locked.customer_id:
+        return
+    customer = (
+        Customer.objects.select_for_update()
+        .filter(pk=locked.customer_id, store_id=locked.store_id)
+        .first()
+    )
+    if not customer:
+        return
+
+    now = timezone.now()
+
+    def _recompute_derived_fields() -> None:
+        customer.is_repeat_customer = bool((customer.total_orders or 0) > 1)
+        if (customer.total_orders or 0) <= 1:
+            customer.avg_order_interval_days = None
+            return
+        if not customer.first_order_at or not customer.last_order_at:
+            customer.avg_order_interval_days = None
+            return
+        span = customer.last_order_at - customer.first_order_at
+        days = Decimal(str(span.total_seconds())) / Decimal("86400")
+        denom = Decimal(int(customer.total_orders) - 1)
+        customer.avg_order_interval_days = (days / denom).quantize(
+            Decimal("0.01"),
+            rounding=ROUND_HALF_UP,
+        )
+
+    if to_status == Order.Status.CONFIRMED and from_status != Order.Status.CONFIRMED:
+        items_total = locked.subtotal_after_discount
+        customer.total_orders = int(customer.total_orders or 0) + 1
+        customer.total_spent = (customer.total_spent or Decimal("0.00")) + items_total
+        customer.last_order_at = now
+        if customer.first_order_at is None:
+            customer.first_order_at = now
+        _recompute_derived_fields()
+        customer.save(
+            update_fields=[
+                "total_orders",
+                "total_spent",
+                "first_order_at",
+                "last_order_at",
+                "is_repeat_customer",
+                "avg_order_interval_days",
+                "updated_at",
+            ]
+        )
+    elif from_status == Order.Status.CONFIRMED and to_status == Order.Status.CANCELLED:
+        items_total = locked.subtotal_after_discount
+        customer.total_orders = max(int(customer.total_orders or 0) - 1, 0)
+        customer.total_spent = max(
+            (customer.total_spent or Decimal("0.00")) - items_total,
+            Decimal("0.00"),
+        )
+
+        # Recompute first/last from remaining CONFIRMED orders only, excluding
+        # the current order because it is being cancelled.
+        agg = (
+            Order.objects.filter(
+                store_id=locked.store_id,
+                customer_id=locked.customer_id,
+                status=Order.Status.CONFIRMED,
+            )
+            .exclude(pk=locked.pk)
+            .aggregate(first=Min("updated_at"), last=Max("updated_at"))
+        )
+        customer.first_order_at = agg["first"]
+        customer.last_order_at = agg["last"]
+
+        _recompute_derived_fields()
+        customer.save(
+            update_fields=[
+                "total_orders",
+                "total_spent",
+                "first_order_at",
+                "last_order_at",
+                "is_repeat_customer",
+                "avg_order_interval_days",
+                "updated_at",
+            ]
+        )
+
+
 def apply_order_status_change(
     *,
     order: Order,
@@ -251,14 +421,23 @@ def apply_order_status_change(
     request=None,
 ) -> Order:
     """
-    Set order status to pending, confirmed, or cancelled.
+    Set order status to pending, payment_pending, confirmed, or cancelled.
 
     Stock is restored (once per line item, idempotent) only when entering cancelled
     from a non-cancelled state.
 
     Cancelled orders cannot be moved to another status without manual inventory fixes.
+
+    Prepayment guard: a payment_pending order can only move to confirmed once its
+    `payment_status` has been set to verified (admins should use the dedicated
+    verify-payment action to perform that transition).
     """
-    valid = {Order.Status.PENDING, Order.Status.CONFIRMED, Order.Status.CANCELLED}
+    valid = {
+        Order.Status.PENDING,
+        Order.Status.PAYMENT_PENDING,
+        Order.Status.CONFIRMED,
+        Order.Status.CANCELLED,
+    }
     if to_status not in valid:
         raise ValidationError({"status": "Invalid order status."})
 
@@ -280,118 +459,160 @@ def apply_order_status_change(
         if from_status == to_status:
             return locked
 
-        if to_status == Order.Status.CANCELLED and from_status != Order.Status.CANCELLED:
-            reason = StockRestoreLog.Reason.CANCELLED
-            for item in locked.items.all():
-                try:
-                    restore_log, created = StockRestoreLog.objects.get_or_create(
-                        order=locked,
-                        order_item=item,
-                        reason=reason,
-                        defaults={
-                            "store_id": locked.store_id,
-                            "quantity": int(item.quantity),
-                        },
+        if (
+            from_status == Order.Status.PAYMENT_PENDING
+            and to_status == Order.Status.CONFIRMED
+            and locked.payment_status != Order.PaymentStatus.VERIFIED
+        ):
+            raise ValidationError(
+                {
+                    "status": (
+                        "Payment must be verified before confirming this order. "
+                        "Use the verify-payment action."
                     )
-                except IntegrityError:
-                    continue
-                if not created:
-                    continue
-                restore_order_item_stock(
-                    store_id=locked.store_id,
-                    product_id=item.product_id,
-                    variant_id=item.variant_id,
-                    quantity=item.quantity,
-                )
-                if restore_log.quantity != int(item.quantity):
-                    restore_log.quantity = int(item.quantity)
-                    restore_log.save(update_fields=["quantity"])
-
-        # Customer aggregate rollups are updated *only* on status transitions to keep the
-        # customer row lightweight, avoid duplication, and ensure idempotency.
-        if locked.customer_id:
-            customer = (
-                Customer.objects.select_for_update()
-                .filter(pk=locked.customer_id, store_id=locked.store_id)
-                .first()
+                }
             )
-            if customer:
-                now = timezone.now()
 
-                def _recompute_derived_fields() -> None:
-                    customer.is_repeat_customer = bool((customer.total_orders or 0) > 1)
-                    if (customer.total_orders or 0) <= 1:
-                        customer.avg_order_interval_days = None
-                        return
-                    if not customer.first_order_at or not customer.last_order_at:
-                        customer.avg_order_interval_days = None
-                        return
-                    span = customer.last_order_at - customer.first_order_at
-                    days = Decimal(str(span.total_seconds())) / Decimal("86400")
-                    denom = Decimal(int(customer.total_orders) - 1)
-                    customer.avg_order_interval_days = (days / denom).quantize(
-                        Decimal("0.01"),
-                        rounding=ROUND_HALF_UP,
-                    )
+        payment_update_fields: list[str] = []
+        if (
+            to_status == Order.Status.CANCELLED
+            and from_status == Order.Status.PAYMENT_PENDING
+            and locked.payment_status != Order.PaymentStatus.VERIFIED
+        ):
+            locked.payment_status = Order.PaymentStatus.FAILED
+            payment_update_fields.append("payment_status")
 
-                # pending/other -> confirmed: increment once
-                if to_status == Order.Status.CONFIRMED and from_status != Order.Status.CONFIRMED:
-                    items_total = locked.subtotal_after_discount
-                    customer.total_orders = int(customer.total_orders or 0) + 1
-                    customer.total_spent = (customer.total_spent or Decimal("0.00")) + items_total
-                    customer.last_order_at = now
-                    if customer.first_order_at is None:
-                        customer.first_order_at = now
-                    _recompute_derived_fields()
-                    customer.save(
-                        update_fields=[
-                            "total_orders",
-                            "total_spent",
-                            "first_order_at",
-                            "last_order_at",
-                            "is_repeat_customer",
-                            "avg_order_interval_days",
-                            "updated_at",
-                        ]
-                    )
-                # confirmed -> cancelled: rollback once (bounded at 0) and recompute timestamps
-                elif from_status == Order.Status.CONFIRMED and to_status == Order.Status.CANCELLED:
-                    items_total = locked.subtotal_after_discount
-                    customer.total_orders = max(int(customer.total_orders or 0) - 1, 0)
-                    customer.total_spent = max(
-                        (customer.total_spent or Decimal("0.00")) - items_total,
-                        Decimal("0.00"),
-                    )
+        if to_status == Order.Status.CANCELLED and from_status != Order.Status.CANCELLED:
+            _restore_stock_for_cancellation(locked)
 
-                    # Recompute first/last from remaining CONFIRMED orders only.
-                    # We exclude the current order because it is being cancelled.
-                    agg = (
-                        Order.objects.filter(
-                            store_id=locked.store_id,
-                            customer_id=locked.customer_id,
-                            status=Order.Status.CONFIRMED,
-                        )
-                        .exclude(pk=locked.pk)
-                        .aggregate(first=Min("updated_at"), last=Max("updated_at"))
-                    )
-                    customer.first_order_at = agg["first"]
-                    customer.last_order_at = agg["last"]
-
-                    _recompute_derived_fields()
-                    customer.save(
-                        update_fields=[
-                            "total_orders",
-                            "total_spent",
-                            "first_order_at",
-                            "last_order_at",
-                            "is_repeat_customer",
-                            "avg_order_interval_days",
-                            "updated_at",
-                        ]
-                    )
+        _apply_customer_rollup_on_status_change(
+            locked, from_status=from_status, to_status=to_status
+        )
 
         locked.status = to_status
-        locked.save(update_fields=["status", "updated_at"])
+        locked.save(update_fields=["status", *payment_update_fields, "updated_at"])
         invalidate_notifications_and_dashboard_caches(locked.store.public_id)
 
+        return locked
+
+
+def submit_order_payment(
+    *,
+    order: Order,
+    transaction_id: str,
+    payer_number: str,
+) -> Order:
+    """
+    Customer-facing payment submission for a payment-pending order.
+
+    Allowed when the order is still payment_pending and payment_status is either
+    `none` (first submission) or `failed` (re-submission after a prior rejection).
+    """
+    tx = (transaction_id or "").strip()
+    payer = (payer_number or "").strip()
+    if not tx:
+        raise ValidationError({"transaction_id": "This field is required."})
+    if not payer:
+        raise ValidationError({"payer_number": "This field is required."})
+
+    with transaction.atomic():
+        locked = Order.objects.select_for_update().get(pk=order.pk)
+        if locked.status != Order.Status.PAYMENT_PENDING:
+            raise ValidationError(
+                {"detail": "Order is not awaiting payment submission."}
+            )
+        if locked.payment_status not in {
+            Order.PaymentStatus.NONE,
+            Order.PaymentStatus.FAILED,
+        }:
+            raise ValidationError(
+                {"detail": "Payment has already been submitted for this order."}
+            )
+
+        locked.payment_status = Order.PaymentStatus.SUBMITTED
+        locked.transaction_id = tx
+        locked.payer_number = payer
+        locked.save(
+            update_fields=[
+                "payment_status",
+                "transaction_id",
+                "payer_number",
+                "updated_at",
+            ]
+        )
+        invalidate_notifications_and_dashboard_caches(locked.store.public_id)
+
+        # Queue the store-facing payment-submitted email only after the tx commits,
+        # so a rollback cannot produce a phantom notification. The state-machine
+        # guards above (status + payment_status) make this call idempotent per order.
+        from engine.apps.emails.triggers import notify_store_payment_submitted
+
+        transaction.on_commit(lambda: notify_store_payment_submitted(locked))
+        return locked
+
+
+def apply_payment_verification(
+    *,
+    order: Order,
+    valid: bool,
+    request=None,
+) -> Order:
+    """
+    Admin-side verification of a submitted payment.
+
+    If `valid`: transitions to (status=confirmed, payment_status=verified) and
+    runs the standard confirmed customer rollup. If invalid: transitions to
+    (status=cancelled, payment_status=failed) and restores stock idempotently.
+
+    No email is sent from this flow by design. Verification is handled in the
+    dashboard; the customer-facing dispatch email (ORDER_CONFIRMED) is the next
+    email touchpoint and fires only when the order is sent to a courier.
+    """
+    with transaction.atomic():
+        locked = (
+            Order.objects.select_for_update()
+            .prefetch_related("items")
+            .get(pk=order.pk)
+        )
+        if locked.status != Order.Status.PAYMENT_PENDING:
+            raise ValidationError(
+                {"detail": "Order is not awaiting payment verification."}
+            )
+        if locked.payment_status != Order.PaymentStatus.SUBMITTED:
+            raise ValidationError(
+                {"detail": "No submitted payment to verify for this order."}
+            )
+
+        from_status = locked.status
+        if valid:
+            has_unavailable_products = any(
+                item.product_id is None for item in locked.items.all()
+            )
+            if has_unavailable_products:
+                raise ValidationError(
+                    {
+                        "detail": (
+                            "Remove unavailable products before confirming this order."
+                        )
+                    }
+                )
+            _apply_customer_rollup_on_status_change(
+                locked,
+                from_status=from_status,
+                to_status=Order.Status.CONFIRMED,
+            )
+            locked.status = Order.Status.CONFIRMED
+            locked.payment_status = Order.PaymentStatus.VERIFIED
+        else:
+            _restore_stock_for_cancellation(locked)
+            _apply_customer_rollup_on_status_change(
+                locked,
+                from_status=from_status,
+                to_status=Order.Status.CANCELLED,
+            )
+            locked.status = Order.Status.CANCELLED
+            locked.payment_status = Order.PaymentStatus.FAILED
+
+        locked.save(update_fields=["status", "payment_status", "updated_at"])
+        invalidate_notifications_and_dashboard_caches(locked.store.public_id)
         return locked

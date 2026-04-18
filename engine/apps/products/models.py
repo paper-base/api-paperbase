@@ -136,6 +136,11 @@ class Product(models.Model):
         ACTIVE = 'active', 'Active'
         ARCHIVED = 'archived', 'Archived'
 
+    class PrepaymentType(models.TextChoices):
+        NONE = 'none', 'No prepayment'
+        DELIVERY_ONLY = 'delivery_only', 'Delivery fee only'
+        FULL = 'full', 'Full amount'
+
     store = models.ForeignKey(
         Store,
         on_delete=models.CASCADE,
@@ -185,6 +190,13 @@ class Product(models.Model):
         default=0,
         db_index=True,
         help_text="Sort order within this product's category (scoped per store).",
+    )
+    prepayment_type = models.CharField(
+        max_length=20,
+        choices=PrepaymentType.choices,
+        default=PrepaymentType.NONE,
+        db_index=True,
+        help_text="Whether this product requires prepayment at checkout. Applies to all variants.",
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

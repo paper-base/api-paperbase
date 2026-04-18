@@ -25,12 +25,19 @@ class OrderNumberCounter(models.Model):
 
 
 class Order(models.Model):
-    """Store order. Status: pending (default), confirmed, or cancelled."""
+    """Store order. Status: pending (default), payment_pending, confirmed, or cancelled."""
 
     class Status(models.TextChoices):
         PENDING = 'pending', 'Pending'
+        PAYMENT_PENDING = 'payment_pending', 'Payment pending'
         CONFIRMED = 'confirmed', 'Confirmed'
         CANCELLED = 'cancelled', 'Cancelled'
+
+    class PaymentStatus(models.TextChoices):
+        NONE = 'none', 'None'
+        SUBMITTED = 'submitted', 'Submitted'
+        VERIFIED = 'verified', 'Verified'
+        FAILED = 'failed', 'Failed'
 
     class Flag(models.TextChoices):
         NO_RESPONSE = "no_response", "No Response"
@@ -69,6 +76,25 @@ class Order(models.Model):
     email = models.EmailField(blank=True, default='')
     status = models.CharField(
         max_length=20, choices=Status.choices, default=Status.PENDING, db_index=True
+    )
+    payment_status = models.CharField(
+        max_length=20,
+        choices=PaymentStatus.choices,
+        default=PaymentStatus.NONE,
+        db_index=True,
+        help_text="Prepayment submission state for orders that require prepayment.",
+    )
+    transaction_id = models.CharField(
+        max_length=100,
+        blank=True,
+        default="",
+        help_text="Customer-submitted transaction reference for prepayment verification.",
+    )
+    payer_number = models.CharField(
+        max_length=32,
+        blank=True,
+        default="",
+        help_text="Customer-submitted payer phone/account number for prepayment verification.",
     )
     flag = models.CharField(
         max_length=32,

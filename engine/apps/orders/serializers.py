@@ -170,12 +170,20 @@ class StorefrontOrderReceiptSerializer(serializers.BaseSerializer):
     """Minimal storefront checkout receipt (POST /api/v1/orders/ only)."""
 
     def to_representation(self, order: Order) -> dict:
+        from .services import resolve_order_prepayment_type
+
         line_ser = StorefrontOrderLineReceiptSerializer()
         items_out = [line_ser.to_representation(line) for line in order.items.all()]
+        prepayment_type = resolve_order_prepayment_type(order)
         return {
             "public_id": order.public_id,
             "order_number": order.order_number,
             "status": order.status,
+            "payment_status": order.payment_status,
+            "prepayment_type": prepayment_type,
+            "requires_payment": prepayment_type != "none",
+            "transaction_id": order.transaction_id or None,
+            "payer_number": order.payer_number or None,
             "customer_name": order.shipping_name,
             "phone": order.phone,
             "shipping_address": order.shipping_address,
@@ -184,6 +192,25 @@ class StorefrontOrderReceiptSerializer(serializers.BaseSerializer):
             "shipping_cost": str(order.shipping_cost),
             "total": str(order.total),
         }
+
+
+class OrderPaymentSubmitSerializer(serializers.Serializer):
+    """Customer input for POST /api/v1/orders/{public_id}/payment/."""
+
+    transaction_id = serializers.CharField(max_length=100)
+    payer_number = serializers.CharField(max_length=32)
+
+    def validate_transaction_id(self, value):
+        stripped = (value or "").strip()
+        if not stripped:
+            raise serializers.ValidationError("Required.")
+        return stripped
+
+    def validate_payer_number(self, value):
+        raw = (value or "").strip()
+        if not raw:
+            raise serializers.ValidationError("Required.")
+        return raw
 
 
 class OrderCreateSerializer(serializers.Serializer):

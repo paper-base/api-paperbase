@@ -8,6 +8,7 @@ from .constants import (
     ORDER_CONFIRMED,
     ORDER_RECEIVED,
     PASSWORD_RESET,
+    PAYMENT_SUBMITTED,
     PLATFORM_NEW_SUBSCRIPTION,
     STORE_DELETE_CANCELLED,
     STORE_DELETE_SCHEDULED,
@@ -87,6 +88,14 @@ DEFAULT_EMAIL_TEMPLATES: dict[str, dict[str, str]] = {
             "Phone: {{ phone|default:'—' }}<br />"
             "District: {{ district|default:'—' }}<br />"
             "Address: {{ shipping_address|default:'—' }}</p>"
+            "{% if has_prepayment %}"
+            "<p><strong>Prepayment</strong><br />"
+            "Type: {{ prepayment_type }}<br />"
+            "Status: {{ payment_status }}"
+            "{% if transaction_id %}<br />Transaction ID: {{ transaction_id }}{% endif %}"
+            "{% if payer_number %}<br />Payer number: {{ payer_number }}{% endif %}"
+            "</p>"
+            "{% endif %}"
             "<p><strong>Store contact for this order</strong><br />"
             "{{ store_contact_email|default:'—' }}</p>"
             "<p>Next steps: review the line items below, prepare or pack the order, and update fulfillment "
@@ -108,6 +117,13 @@ DEFAULT_EMAIL_TEMPLATES: dict[str, dict[str, str]] = {
             "Phone: {{ phone|default:'—' }}\n"
             "District: {{ district|default:'—' }}\n"
             "Address: {{ shipping_address|default:'—' }}\n\n"
+            "{% if has_prepayment %}"
+            "Prepayment: {{ prepayment_type }}\n"
+            "Payment status: {{ payment_status }}\n"
+            "{% if transaction_id %}Transaction ID: {{ transaction_id }}\n{% endif %}"
+            "{% if payer_number %}Payer number: {{ payer_number }}\n{% endif %}"
+            "\n"
+            "{% endif %}"
             "Store contact: {{ store_contact_email|default:'—' }}\n\n"
             "Review the summary below, then update fulfillment in your dashboard.\n\n"
             "{{ order_summary }}\n"
@@ -155,6 +171,41 @@ DEFAULT_EMAIL_TEMPLATES: dict[str, dict[str, str]] = {
             "Thank you for your purchase.\n\n"
             "---\n"
             "{{ order_summary }}\n"
+        ),
+    },
+    PAYMENT_SUBMITTED: {
+        "subject": "Payment submitted for order {{ order_number }}",
+        "html_body": (
+            "<p>A customer has submitted payment details for an order. Review and verify it in your dashboard.</p>"
+            "<p><strong>Order</strong> {{ order_number }}<br />"
+            "<strong>Store</strong> {{ store_name }}<br />"
+            "<strong>Order total</strong> {{ total }} {{ currency }}</p>"
+            "<p><strong>Customer</strong><br />"
+            "{{ customer_name|default:'—' }}<br />"
+            "{{ customer_email|default:'—' }}</p>"
+            "<p><strong>Payment details</strong><br />"
+            "Prepayment type: {{ prepayment_type }}<br />"
+            "Status: {{ payment_status }}<br />"
+            "Transaction ID: {{ transaction_id|default:'—' }}<br />"
+            "Payer number: {{ payer_number|default:'—' }}</p>"
+            "<p><strong>Store contact for this order</strong><br />"
+            "{{ store_contact_email|default:'—' }}</p>"
+            "<p>Open the order in your dashboard to verify the transaction and move it to confirmed, "
+            "or reject it if the details do not match.</p>"
+        ),
+        "text_body": (
+            "PAYMENT SUBMITTED — please verify\n\n"
+            "Order: {{ order_number }}\n"
+            "Store: {{ store_name }}\n"
+            "Total: {{ total }} {{ currency }}\n\n"
+            "Customer: {{ customer_name|default:'—' }}\n"
+            "Email: {{ customer_email|default:'—' }}\n\n"
+            "Prepayment type: {{ prepayment_type }}\n"
+            "Payment status: {{ payment_status }}\n"
+            "Transaction ID: {{ transaction_id|default:'—' }}\n"
+            "Payer number: {{ payer_number|default:'—' }}\n\n"
+            "Store contact: {{ store_contact_email|default:'—' }}\n\n"
+            "Verify the transaction in your dashboard to confirm or reject the order.\n"
         ),
     },
     SUBSCRIPTION_PAYMENT: {

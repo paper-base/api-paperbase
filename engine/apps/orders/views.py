@@ -20,6 +20,7 @@ from .models import Order, OrderItem
 from .order_financials import compute_line_financials
 from .serializers import (
     OrderCreateSerializer,
+    OrderPaymentSubmitSerializer,
     OrderSerializer,
     StorefrontOrderReceiptSerializer,
 )
@@ -28,6 +29,8 @@ from .services import (
     build_variant_snapshot_text,
     recalculate_order_totals,
     resolve_and_attach_customer,
+    resolve_cart_prepayment_type,
+    submit_order_payment,
 )
 from .utils import get_next_order_number
 from .stock import adjust_stock
@@ -219,10 +222,17 @@ class OrderCreateView(CreateAPIView):
 
         district = (ser.validated_data.get('district') or '').strip()
 
+        effective_prepayment = resolve_cart_prepayment_type(locked_products.values())
+        initial_status = (
+            Order.Status.PAYMENT_PENDING
+            if effective_prepayment != "none"
+            else Order.Status.PENDING
+        )
+
         order = Order.objects.create(
             store=order_store,
             order_number=get_next_order_number(order_store),
-            status=Order.Status.PENDING,
+            status=initial_status,
             user=request.user if request.user.is_authenticated else None,
             email=email,
             shipping_name=ser.validated_data['shipping_name'],
@@ -324,3 +334,59 @@ class OrderDetailView(ProvenTenantContextMixin, RetrieveAPIView):
         if not order:
             raise NotFound()
         return order
+
+
+class OrderPaymentSubmitView(APIView):
+    """
+    Customer-facing endpoint to submit transaction details for a prepayment order.
+
+    Scoped strictly to the storefront API key's store so a key for store A can
+    never mutate an order belonging to store B.
+    """
+    authentication_classes = []
+    permission_classes = [IsStorefrontAPIKey]
+    throttle_classes = [DirectOrderRateThrottle, UserRateThrottle]
+    allow_api_key = True
+
+    def post(self, request, public_id: str):
+        store = require_api_key_store(request)
+        order = (
+            Order.objects.filter(public_id=public_id, store=store)
+            .prefetch_related(
+                Prefetch(
+                    "items",
+                    queryset=OrderItem.objects.select_related("product", "variant").prefetch_related(
+                        "variant__attribute_values__attribute_value__attribute",
+                    ),
+                )
+            )
+            .first()
+        )
+        if not order:
+            raise NotFound()
+
+        ser = OrderPaymentSubmitSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+
+        submit_order_payment(
+            order=order,
+            transaction_id=ser.validated_data["transaction_id"],
+            payer_number=ser.validated_data["payer_number"],
+        )
+
+        order_for_receipt = (
+            Order.objects.filter(pk=order.pk)
+            .prefetch_related(
+                Prefetch(
+                    "items",
+                    queryset=OrderItem.objects.select_related("product", "variant").prefetch_related(
+                        "variant__attribute_values__attribute_value__attribute",
+                    ),
+                )
+            )
+            .get()
+        )
+        return Response(
+            StorefrontOrderReceiptSerializer(instance=order_for_receipt).data,
+            status=status.HTTP_200_OK,
+        )

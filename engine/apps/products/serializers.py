@@ -113,6 +113,7 @@ class StorefrontProductListSerializer(SafeModelSerializer):
             "available_quantity",
             "variant_count",
             "extra_data",
+            "prepayment_type",
         ]
 
     def _low_threshold(self) -> int:
@@ -190,6 +191,7 @@ class StorefrontProductDetailSerializer(SafeModelSerializer):
             "available_quantity",
             "variants",
             "extra_data",
+            "prepayment_type",
         ]
 
     def _low_threshold(self) -> int:

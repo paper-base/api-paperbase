@@ -158,6 +158,7 @@ class AdminOrderListSerializer(SafeModelSerializer):
         model = Order
         fields = [
             'public_id', 'order_number', 'email', 'status',
+            'payment_status', 'transaction_id', 'payer_number',
             'flag',
             'subtotal_before_discount', 'discount_total', 'subtotal_after_discount',
             'shipping_cost', 'total',
@@ -201,6 +202,7 @@ class AdminOrderSerializer(SafeModelSerializer):
         model = Order
         fields = [
             'public_id', 'order_number', 'user_public_id', 'email', 'status',
+            'payment_status', 'transaction_id', 'payer_number',
             'flag',
             'subtotal_before_discount', 'discount_total', 'subtotal_after_discount',
             'shipping_cost', 'total',
@@ -215,6 +217,7 @@ class AdminOrderSerializer(SafeModelSerializer):
         ]
         read_only_fields = [
             'public_id', 'order_number', 'status',
+            'payment_status', 'transaction_id', 'payer_number',
             'subtotal_before_discount', 'discount_total', 'subtotal_after_discount',
             'shipping_cost', 'total',
             'courier_provider', 'courier_consignment_id',

@@ -86,7 +86,7 @@ class AdminProductListSerializer(SafeModelSerializer):
             'image_url', 'category_public_id', 'category_name',
             'display_order',
             'variant_count', 'total_stock', 'available_quantity', 'stock_source',
-            'is_active', 'extra_data', 'created_at',
+            'is_active', 'extra_data', 'prepayment_type', 'created_at',
         ]
 
     def get_image_url(self, obj):
@@ -147,7 +147,7 @@ class AdminProductSerializer(SafeModelSerializer):
             'description',
             'variant_count', 'total_stock', 'available_quantity', 'stock_source',
             'is_active', 'extra_data', 'images',
-            'display_order',
+            'display_order', 'prepayment_type',
             'created_at', 'updated_at',
         ]
         read_only_fields = [

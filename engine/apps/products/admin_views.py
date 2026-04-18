@@ -102,6 +102,16 @@ class AdminProductViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
                 )
             )
 
+        prepayment_value = (
+            (self.request.query_params.get("prepayment_type") or "").strip().lower()
+        )
+        if prepayment_value in (
+            Product.PrepaymentType.NONE,
+            Product.PrepaymentType.DELIVERY_ONLY,
+            Product.PrepaymentType.FULL,
+        ):
+            qs = qs.filter(prepayment_type=prepayment_value)
+
         category_public_id = (self.request.query_params.get("category") or "").strip()
         if category_public_id:
             cat = Category.objects.filter(

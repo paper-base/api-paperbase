@@ -19,6 +19,7 @@ from engine.apps.stores.services import (
 from .constants import (
     GENERIC_NOTIFICATION,
     ORDER_RECEIVED,
+    PAYMENT_SUBMITTED,
     PLATFORM_NEW_SUBSCRIPTION,
     SUBSCRIPTION_ACTIVATED,
     SUBSCRIPTION_CHANGED,
@@ -69,6 +70,52 @@ def notify_store_new_order(order) -> None:
     }
     ctx.update(build_order_email_context(order))
     send_email_task.delay(ORDER_RECEIVED, to_email, ctx)
+
+
+def _resolve_prepayment_type_safe(order) -> str:
+    """Best-effort prepayment type resolution; returns 'none' if the helper cannot compute it."""
+    try:
+        from engine.apps.orders.services import resolve_order_prepayment_type
+
+        return resolve_order_prepayment_type(order) or "none"
+    except Exception:
+        return "none"
+
+
+def notify_store_payment_submitted(order) -> None:
+    """
+    PAYMENT_SUBMITTED to store internal email after a customer submits payment details.
+
+    Same entitlement + per-store setting gate as ORDER_RECEIVED. Idempotency is
+    guaranteed by the order-service state machine (a second submission on the
+    same order is rejected before reaching this trigger).
+    """
+    store = order.store
+    owner = get_store_owner_user(store)
+    if not owner or not has_feature(owner, ORDER_EMAIL_NOTIFICATIONS_FEATURE):
+        return
+    settings, _ = StoreSettings.objects.get_or_create(store=store)
+    if not settings.email_notify_owner_on_order_received:
+        return
+    to_email = _store_internal_email(store)
+    if not to_email:
+        return
+    owner_email = (store.owner_email or "").strip()
+    ctx = {
+        "store_name": store.name,
+        "store_public_id": store.public_id,
+        "order_number": order.order_number,
+        "customer_name": (order.shipping_name or "").strip(),
+        "customer_email": (order.email or "").strip(),
+        "transaction_id": (order.transaction_id or "").strip(),
+        "payer_number": (order.payer_number or "").strip(),
+        "payment_status": "submitted",
+        "prepayment_type": _resolve_prepayment_type_safe(order),
+        "total": str(order.total),
+        "currency": store.currency,
+        "store_contact_email": (store.contact_email or "").strip() or owner_email,
+    }
+    send_email_task.delay(PAYMENT_SUBMITTED, to_email, ctx)
 
 
 def should_send_customer_confirmation_order_email(order) -> bool:
