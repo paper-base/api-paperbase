@@ -52,6 +52,9 @@ _PREFIXES: dict[str, str] = {
     "storeapikey": "sak",
     "purchaseledger": "phl",
     "purchaseadjustment": "pad",
+    "blog": "blg",
+    "blogcategory": "bcg",
+    "blogtag": "btg",
 }
 
 

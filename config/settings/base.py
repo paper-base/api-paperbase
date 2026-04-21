@@ -63,6 +63,7 @@ INSTALLED_APPS = [
     "engine.apps.inventory",
     "engine.apps.shipping",
     "engine.apps.banners",
+    "engine.apps.blogs",
     "engine.apps.basic_analytics",
     "engine.apps.couriers",
     "engine.apps.fraud_check",
@@ -131,6 +132,7 @@ CACHE_TTL_RELATED_PRODUCTS = int(os.getenv("CACHE_TTL_RELATED_PRODUCTS", "180"))
 CACHE_TTL_CATEGORIES = int(os.getenv("CACHE_TTL_CATEGORIES", "300"))
 CACHE_TTL_CATALOG_FILTERS = int(os.getenv("CACHE_TTL_CATALOG_FILTERS", "300"))
 CACHE_TTL_BANNERS = int(os.getenv("CACHE_TTL_BANNERS", "300"))
+CACHE_TTL_BLOGS = int(os.getenv("CACHE_TTL_BLOGS", "300"))
 CACHE_TTL_NOTIFICATIONS = int(os.getenv("CACHE_TTL_NOTIFICATIONS", "300"))
 CACHE_TTL_STORE_SETTINGS = int(os.getenv("CACHE_TTL_STORE_SETTINGS", "300"))
 CACHE_TTL_FEATURE_CONFIG = int(os.getenv("CACHE_TTL_FEATURE_CONFIG", "600"))

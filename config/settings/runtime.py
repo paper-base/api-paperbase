@@ -10,6 +10,7 @@ from __future__ import annotations
 from urllib.parse import urlparse
 
 import dj_database_url
+import sentry_sdk
 from django.core.exceptions import ImproperlyConfigured
 
 from .base import *  # noqa: F403,F401
@@ -44,6 +45,13 @@ def _storage_backend() -> str:
 
 DEBUG = env_bool("DEBUG", False)  # noqa: F405
 IS_DEVELOPMENT = DEBUG
+
+SENTRY_DSN = os.getenv("SENTRY_DSN", "").strip()  # noqa: F405
+if SENTRY_DSN:
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        send_default_pii=True,
+    )
 
 if DEBUG:
     SECRET_KEY = os.getenv(  # noqa: F405

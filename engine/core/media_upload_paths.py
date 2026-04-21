@@ -95,6 +95,19 @@ def tenant_banner_image_upload_to(instance, filename: str) -> str:
     return f"tenants/{store_pub}/banners/{banner_pub}.{ext}"
 
 
+def tenant_blog_featured_image_upload_to(instance, filename: str) -> str:
+    if not getattr(instance, "store_id", None):
+        raise ValueError("Blog missing store for upload path")
+    store = instance.store
+    if not store:
+        raise ValueError("Blog.store is required for upload path")
+    store_pub = _non_empty_public_id(getattr(store, "public_id", None), label="store.public_id")
+    blog_pub = _non_empty_public_id(getattr(instance, "public_id", None), label="blog.public_id")
+    ext = media_file_extension(filename)
+    unique = uuid.uuid4().hex[:16]
+    return f"tenants/{store_pub}/blogs/{blog_pub}/featured_{unique}.{ext}"
+
+
 def tenant_store_logo_upload_to(instance, filename: str) -> str:
     store_pub = _non_empty_public_id(getattr(instance, "public_id", None), label="store.public_id")
     ext = media_file_extension(filename)

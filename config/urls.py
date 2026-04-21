@@ -33,6 +33,7 @@ api_v1_patterns = [
     path('catalog/', include('engine.apps.products.catalog_urls')),
     path('categories/', include(category_urlpatterns)),
     path('banners/', include('engine.apps.banners.urls')),
+    path('blogs/', include('engine.apps.blogs.urls')),
     path('orders/', include('engine.apps.orders.urls')),
     path('shipping/', include('engine.apps.shipping.urls')),
     path('pricing/', include('engine.apps.orders.pricing_urls')),

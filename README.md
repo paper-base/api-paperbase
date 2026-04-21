@@ -140,8 +140,11 @@ Storefront catalog, checkout, and public content endpoints require the **publish
 | GET | `/api/v1/notifications/active/` | API key | Active storefront CTAs |
 | GET | `/api/v1/search/?q=…` | API key | Storefront search |
 | POST | `/api/v1/support/tickets/` | API key | Submit support ticket |
+| **Blog** |
+| GET | `/api/v1/blogs/` | API key | Published blog posts (tenant-scoped, feature-gated) |
+| GET | `/api/v1/blogs/<public_id>/` | API key | Blog post detail (increments `views`) |
 
-**Admin API** (staff only): `/api/v1/admin/` – stats, `basic-analytics/overview/` (home dashboard series), branding, CRUD including `support-tickets/`, products, orders, inventory, notifications, etc.
+**Admin API** (staff only): `/api/v1/admin/` – stats, `basic-analytics/overview/` (home dashboard series), branding, CRUD including `support-tickets/`, products, orders, inventory, notifications, `blogs/`, `blog-categories/`, `blog-tags/`, etc.
 
 ### Storefront JSON contract (breaking conventions)
 
@@ -191,6 +194,46 @@ celery -A config beat -l info
 ```
 
 Do not pass `--schedule` or a schedule file path. Periodic tasks from `CELERY_BEAT_SCHEDULE` sync into the database when Beat starts; you can also view or edit them under Django admin **Periodic tasks**.
+
+## Blog CMS
+
+A tenant-scoped blogging module lives in `engine.apps.blogs`:
+
+- **Models:** `Blog`, `BlogCategory`, `BlogTag`. Every row carries an opaque
+  `public_id` (prefixes `blg_`, `bcg_`, `btg_`) plus a `store` FK; `(store, slug)`
+  is unique per model. `Blog` uses `published_at` (timestamp when the post is
+  considered live), plus `is_featured`, `is_public`, `is_deleted` (soft-delete),
+  and `views`. There is no `status` or `scheduled_at` column — visibility on the
+  storefront is driven by `published_at`, `is_public`, and `is_deleted`.
+- **Media:** the featured image reuses the existing
+  `engine.core.media_upload_paths` pipeline
+  (`tenant_blog_featured_image_upload_to` → `tenants/<store>/blogs/<blog>/…`).
+  No new storage, no new endpoints, no inline content image uploads — the
+  body is plain text/markdown/HTML and authors paste external URLs for
+  inline images.
+- **Storefront endpoints:** `GET /api/v1/blogs/` and
+  `GET /api/v1/blogs/<public_id>/` return only rows with `published_at` set,
+  `published_at` not in the future, `is_public=true`, and `is_deleted=false`,
+  scoped to the store resolved from the publishable API key. Detail requests
+  increment `views` atomically.
+- **Dashboard endpoints:** `GET/POST/PATCH/DELETE /api/v1/admin/blogs/` for CRUD.
+  On create and update, the API sets `published_at` to the current time when it
+  is still null so new posts become visible without a separate publish step.
+  `/api/v1/admin/blog-categories/` and `/api/v1/admin/blog-tags/` provide the
+  supporting taxonomy. Destroys are soft (`is_deleted=True`, media scheduled
+  for deletion). List supports optional filters: `q` or `search` (title
+  contains), `category` (category `public_id`), `tag` (tag `public_id`),
+  `published_date` (`today` | `last_7_days` | `last_30_days`, same semantics
+  as customer “joined date” filters on `published_at`).
+- **Feature toggle:** endpoints (both storefront and admin) require
+  `StoreSettings.modules_enabled["blog"] === true`, enforced by
+  `engine.core.permissions.IsModuleEnabled` (returns `403` when disabled).
+  The dashboard controls this flag from *Apps → Blog*; the frontend hides
+  the module UI when the flag is off.
+- **Tenant isolation:** every query filters by the active store resolved via
+  `get_active_store(request)` / `require_api_key_store(request)`; all
+  external identifiers are `public_id` / `*_public_id`
+  (enforced by `SafeModelSerializer`).
 
 ## Auth
 
