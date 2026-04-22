@@ -12,6 +12,7 @@ class IntegrationEventSettingsSerializer(SafeModelSerializer):
         fields = [
             "track_purchase",
             "track_initiate_checkout",
+            "track_add_to_cart",
             "track_view_content",
             "track_search",
         ]

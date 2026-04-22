@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import os
+import re
 from typing import Any
 
 import requests
@@ -13,8 +16,93 @@ from engine.apps.tracking.contract import ALLOWED_EVENT_NAMES
 
 logger = logging.getLogger(__name__)
 
-GRAPH_API_VERSION = "v18.0"
+GRAPH_API_VERSION = os.environ.get("META_GRAPH_API_VERSION", "v25.0")
 GRAPH_API_BASE = "https://graph.facebook.com"
+
+EVENT_LOG_RETENTION_HOURS = int(os.environ.get("EVENT_LOG_RETENTION_HOURS", "72"))
+
+
+# ---------------------------------------------------------------------------
+# PII hashing helpers
+# ---------------------------------------------------------------------------
+
+def _normalize_and_hash(value: str) -> str:
+    """SHA-256 hash a normalized string per Meta's spec."""
+    normalized = value.strip().lower()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _normalize_phone(phone: str) -> str:
+    """Strip all non-digit characters. Meta expects digits only."""
+    return re.sub(r"[^\d]", "", phone)
+
+
+def _build_user_data(payload: dict[str, Any], client_ip: str | None) -> dict[str, Any]:
+    """
+    Build CAPI user_data dict. All PII fields are SHA-256 hashed per Meta spec
+    before being included. Non-PII signals are passed as-is.
+
+    Reference:
+    https://developers.facebook.com/docs/marketing-api/conversions-api/parameters/customer-information-parameters
+    """
+    ud: dict[str, Any] = {}
+
+    # Hashed PII fields
+    email = payload.get("email") or ""
+    if email and "@" in email:
+        ud["em"] = [_normalize_and_hash(email)]
+
+    phone = payload.get("phone") or ""
+    if phone:
+        normalized_phone = _normalize_phone(phone)
+        if len(normalized_phone) >= 7:
+            ud["ph"] = [_normalize_and_hash(normalized_phone)]
+
+    first_name = payload.get("first_name") or ""
+    if first_name:
+        ud["fn"] = [_normalize_and_hash(first_name)]
+
+    last_name = payload.get("last_name") or ""
+    if last_name:
+        ud["ln"] = [_normalize_and_hash(last_name)]
+
+    external_id = payload.get("external_id") or ""
+    if external_id:
+        ud["external_id"] = [_normalize_and_hash(str(external_id))]
+
+    city = payload.get("city") or ""
+    if city:
+        ud["ct"] = [_normalize_and_hash(city)]
+
+    state = payload.get("state") or ""
+    if state:
+        ud["st"] = [_normalize_and_hash(state)]
+
+    zip_code = payload.get("zip_code") or ""
+    if zip_code:
+        ud["zp"] = [_normalize_and_hash(zip_code)]
+
+    country = payload.get("country") or ""
+    if country:
+        ud["country"] = [_normalize_and_hash(country.lower())]
+
+    # Non-hashed browser signals — passed as-is per Meta spec
+    fbp = payload.get("fbp") or ""
+    if fbp:
+        ud["fbp"] = fbp
+
+    fbc = payload.get("fbc") or ""
+    if fbc:
+        ud["fbc"] = fbc
+
+    if client_ip:
+        ud["client_ip_address"] = client_ip
+
+    ua = payload.get("user_agent") or ""
+    if ua:
+        ud["client_user_agent"] = ua
+
+    return ud
 
 
 def _try_db_log(*, store, status: str, event_name: str, message: str, metadata: dict[str, Any] | None = None) -> None:
@@ -103,7 +191,7 @@ def send_capi_event(
     server-side.
     """
 
-    from engine.apps.marketing_integrations.models import MarketingIntegration
+    from engine.apps.marketing_integrations.models import IntegrationEventSettings, MarketingIntegration
     from engine.apps.stores.models import Store
 
     spid = (store_public_id or "").strip()
@@ -126,15 +214,68 @@ def send_capi_event(
         _try_db_log(store=store, status="skipped", event_name=event_name, message="no_integration")
         return
 
+    # Gate: respect per-event toggle from IntegrationEventSettings.
+    # PageView is always allowed (not in the map).
+    # If no settings row exists, all events are allowed by default.
+    _EVENT_GATE_MAP = {
+        "Purchase": "track_purchase",
+        "InitiateCheckout": "track_initiate_checkout",
+        "AddToCart": "track_add_to_cart",
+        "ViewContent": "track_view_content",
+        "Search": "track_search",
+    }
+    gate_field = _EVENT_GATE_MAP.get(event_name)
+    if gate_field:
+        try:
+            event_settings = IntegrationEventSettings.objects.filter(
+                integration=integration
+            ).first()
+        except Exception:
+            event_settings = None
+        if event_settings is not None and not getattr(event_settings, gate_field, True):
+            logger.info(
+                "tracking.capi_event_gated",
+                extra={
+                    "store_public_id": spid,
+                    "event_name": event_name,
+                    "gate_field": gate_field,
+                },
+            )
+            _try_db_log(
+                store=store,
+                status="skipped",
+                event_name=event_name,
+                message="gated_by_event_settings",
+                metadata={"gate_field": gate_field},
+            )
+            return
+
     pixel_id = (getattr(integration, "pixel_id", "") or "").strip()
     access_token = decrypt_value(getattr(integration, "access_token_encrypted", "") or "")
-    if not pixel_id or not access_token:
+    if not access_token:
+        logger.error(
+            "tracking.capi_credential_decrypt_failed",
+            extra={
+                "store_public_id": spid,
+                "integration_id": str(integration.public_id),
+                "hint": "FIELD_ENCRYPTION_KEY may have been rotated without re-encrypting stored tokens",
+            },
+        )
         _try_db_log(
             store=store,
             status="failed",
             event_name=event_name,
-            message="missing_credentials",
-            metadata={"pixel_id": pixel_id, "event_id": event_id},
+            message="credential_decrypt_failed",
+            metadata={"integration_id": str(integration.public_id), "event_id": event_id},
+        )
+        return
+    if not pixel_id:
+        _try_db_log(
+            store=store,
+            status="failed",
+            event_name=event_name,
+            message="missing_pixel_id",
+            metadata={"event_id": event_id},
         )
         return
 
@@ -240,22 +381,60 @@ def send_capi_event(
         )
         return
 
-    custom_data: dict[str, Any] = {
-        "value": payload.get("value", 0) or 0,
-        "currency": payload.get("currency", "BDT") or "BDT",
-        "content_ids": payload.get("content_ids") or [],
-        "content_type": payload.get("content_type", "product") or "product",
-    }
+    custom_data: dict[str, Any] = {}
 
-    user_data: dict[str, Any] = {
-        "client_user_agent": user_agent,
-    }
-    if client_ip:
-        user_data["client_ip_address"] = client_ip
-    if isinstance(fbp, str) and fbp:
-        user_data["fbp"] = fbp
-    if isinstance(fbc, str) and fbc:
-        user_data["fbc"] = fbc
+    value = payload.get("value")
+    if value is not None:
+        try:
+            custom_data["value"] = float(value)
+        except (TypeError, ValueError):
+            pass
+
+    currency = payload.get("currency") or ""
+    if currency:
+        custom_data["currency"] = currency.upper()
+
+    content_ids = payload.get("content_ids") or []
+    if content_ids:
+        custom_data["content_ids"] = content_ids
+        custom_data["content_type"] = "product"
+
+    # Build contents array from items if present.
+    # items is a list of dicts with keys: id, product_id, quantity, item_price/price.
+    items = payload.get("items") or []
+    if items:
+        contents = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            item_id = item.get("id") or item.get("product_id") or ""
+            if not item_id:
+                continue
+            entry: dict[str, Any] = {"id": str(item_id)}
+            qty = item.get("quantity")
+            if qty is not None:
+                try:
+                    entry["quantity"] = int(qty)
+                except (TypeError, ValueError):
+                    entry["quantity"] = 1
+            price = item.get("item_price") or item.get("price")
+            if price is not None:
+                try:
+                    entry["item_price"] = float(price)
+                except (TypeError, ValueError):
+                    pass
+            contents.append(entry)
+        if contents:
+            custom_data["contents"] = contents
+            custom_data["num_items"] = len(contents)
+    elif content_ids:
+        custom_data["num_items"] = len(content_ids)
+
+    order_id = payload.get("order_id") or ""
+    if order_id:
+        custom_data["order_id"] = str(order_id)
+
+    user_data: dict[str, Any] = _build_user_data(payload, client_ip or None)
 
     if not user_data:
         _try_db_log(
@@ -353,12 +532,12 @@ def send_capi_event(
     time_limit=150,
 )
 def cleanup_old_event_logs() -> int:
-    """Celery beat: delete StoreEventLog rows older than 1 hour (app=tracking only)."""
+    """Celery beat: delete StoreEventLog rows older than EVENT_LOG_RETENTION_HOURS (app=tracking only)."""
     from datetime import timedelta
 
     from engine.apps.marketing_integrations.models import StoreEventLog
 
-    cutoff = timezone.now() - timedelta(hours=1)
+    cutoff = timezone.now() - timedelta(hours=EVENT_LOG_RETENTION_HOURS)
     qs = StoreEventLog.objects.filter(created_at__lt=cutoff, app="tracking")
     deleted, _ = qs.delete()
     return int(deleted or 0)

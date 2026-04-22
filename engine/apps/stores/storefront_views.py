@@ -67,6 +67,27 @@ class StorePublicView(APIView):
             if isinstance(raw_modules, dict):
                 modules = {k: bool(v) for k, v in raw_modules.items()}
 
+        # Pixel ID is a public-facing identifier — safe to expose in this
+        # storefront-scoped response. Allows tracker.js to self-configure
+        # without requiring the storefront to set global JS variables.
+        pixel_id = None
+        try:
+            from engine.apps.marketing_integrations.models import MarketingIntegration
+
+            integration = (
+                MarketingIntegration.objects.filter(
+                    store=store,
+                    provider=MarketingIntegration.Provider.FACEBOOK,
+                    is_active=True,
+                )
+                .values("pixel_id")
+                .first()
+            )
+            if integration:
+                pixel_id = integration["pixel_id"] or None
+        except Exception:
+            pixel_id = None
+
         payload = {
             "store_name": store.name,
             "logo_url": absolute_media_url(store.logo, request),
@@ -85,6 +106,9 @@ class StorePublicView(APIView):
                 f"?v={getattr(settings, 'TRACKER_BUILD_ID', '')}"
             ),
             "tracking_ingest_endpoint": "https://api.paperbase.me/tracking/event",
+            # Public pixel ID for tracker.js self-configuration.
+            # None when no active Facebook integration exists.
+            "pixel_id": pixel_id,
             "theme_settings": {
                 "primary_color": theme.get("primary_color") or "",
             },

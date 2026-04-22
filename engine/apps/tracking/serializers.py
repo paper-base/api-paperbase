@@ -7,6 +7,16 @@ from rest_framework import serializers
 from engine.apps.tracking.contract import ALLOWED_EVENT_NAMES
 
 
+class CartItemSerializer(serializers.Serializer):
+    """Represents a single line-item in a cart or order for CAPI custom_data.contents."""
+
+    id = serializers.CharField(required=False, allow_null=True, allow_blank=True, max_length=255)
+    product_id = serializers.CharField(required=False, allow_null=True, allow_blank=True, max_length=255)
+    quantity = serializers.IntegerField(required=False, allow_null=True, min_value=1)
+    item_price = serializers.DecimalField(required=False, allow_null=True, max_digits=12, decimal_places=2)
+    price = serializers.DecimalField(required=False, allow_null=True, max_digits=12, decimal_places=2)
+
+
 class TrackingEventIngestSerializer(serializers.Serializer):
     """
     Strict ingestion schema for tracker.js -> Django.
@@ -37,6 +47,22 @@ class TrackingEventIngestSerializer(serializers.Serializer):
     fbc = serializers.CharField(required=False, allow_null=True, default=None, max_length=512, allow_blank=False)
     user_agent = serializers.CharField(min_length=1, max_length=512, allow_blank=False, trim_whitespace=False)
     extra = serializers.DictField(required=False, default=dict)
+
+    # Structured cart/order fields for richer CAPI custom_data.
+    items = CartItemSerializer(many=True, required=False, allow_null=True, default=list)
+    order_id = serializers.CharField(required=False, allow_null=True, allow_blank=True, max_length=255, default=None)
+
+    # PII fields — optional, hashed server-side before sending to Meta.
+    # Never stored raw — only passed through to the Celery task for hashing.
+    email = serializers.EmailField(required=False, allow_null=True, allow_blank=True, default=None)
+    phone = serializers.CharField(required=False, allow_null=True, allow_blank=True, max_length=30, default=None)
+    first_name = serializers.CharField(required=False, allow_null=True, allow_blank=True, max_length=100, default=None)
+    last_name = serializers.CharField(required=False, allow_null=True, allow_blank=True, max_length=100, default=None)
+    external_id = serializers.CharField(required=False, allow_null=True, allow_blank=True, max_length=255, default=None)
+    city = serializers.CharField(required=False, allow_null=True, allow_blank=True, max_length=100, default=None)
+    state = serializers.CharField(required=False, allow_null=True, allow_blank=True, max_length=100, default=None)
+    zip_code = serializers.CharField(required=False, allow_null=True, allow_blank=True, max_length=20, default=None)
+    country = serializers.CharField(required=False, allow_null=True, allow_blank=True, max_length=2, default=None)
 
     def validate_event_source_url(self, value: str) -> str:
         raw = (value or "").strip()
