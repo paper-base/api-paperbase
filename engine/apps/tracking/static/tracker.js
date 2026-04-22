@@ -35,7 +35,20 @@
   }
 
   function randomString(len) {
-    var chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    var chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    try {
+      var crypto = window.crypto || window.msCrypto;
+      if (crypto && crypto.getRandomValues) {
+        var arr = new Uint8Array(len);
+        crypto.getRandomValues(arr);
+        return Array.prototype.map.call(arr, function (byte) {
+          return chars[byte % chars.length];
+        }).join("");
+      }
+    } catch (e) {
+      // Fall through to Math.random fallback
+    }
+    // Fallback for environments without Web Crypto API
     var out = "";
     for (var i = 0; i < len; i++) out += chars.charAt(Math.floor(Math.random() * chars.length));
     return out;
@@ -101,73 +114,23 @@
   function apiKeyFromConfig() {
     return (tracker.config && tracker.config.apiKey)
       ? tracker.config.apiKey
-      : (window.PAPERBASE_PUBLISHABLE_KEY || window.__PAPERBASE_API_KEY__ || "");
-  }
-
-  function readMetaContent(name) {
-    try {
-      var el = document && document.querySelector ? document.querySelector('meta[name="' + name + '"]') : null;
-      if (!el) return null;
-      var c = el.getAttribute("content");
-      c = (c == null) ? "" : String(c);
-      c = c.trim();
-      return c || null;
-    } catch (e) {
-      return null;
-    }
+      : (window.PAPERBASE_PUBLISHABLE_KEY || "");
   }
 
   function resolvePixelIdFromGlobals() {
     try {
-      var candidates = [
-        (window.PAPERBASE_PIXEL_ID || ""),
-        (window.__PAPERBASE_PIXEL_ID__ || ""),
-        (window.PAPERBASE_META_PIXEL_ID || ""),
-        (window.__PAPERBASE_META_PIXEL_ID__ || ""),
-        readMetaContent("paperbase-pixel-id"),
-        readMetaContent("paperbase-meta-pixel-id"),
-        readMetaContent("meta-pixel-id"),
-      ];
-      for (var i = 0; i < candidates.length; i++) {
-        var v = (candidates[i] == null) ? "" : String(candidates[i]).trim();
-        if (v) return v;
-      }
-      return null;
+      var v = String(window.PAPERBASE_PIXEL_ID || "").trim();
+      return v || null;
     } catch (e) {
       return null;
     }
   }
 
-  function guessPixelIdFromStorePublic(respJson) {
+  function pixelIdFromStorePublic(respJson) {
     try {
       if (!respJson || typeof respJson !== "object") return null;
-      // If the store has already embedded it into storefront_public in some key,
-      // it may be surfaced here without backend changes.
-      var keys = [
-        "pixel_id",
-        "pixelId",
-        "meta_pixel_id",
-        "metaPixelId",
-        "facebook_pixel_id",
-        "facebookPixelId",
-        "fb_pixel_id",
-        "fbPixelId",
-      ];
-      for (var i = 0; i < keys.length; i++) {
-        var v = respJson[keys[i]];
-        if (typeof v === "string" && v.trim()) return v.trim();
-      }
-      // Nested common containers
-      var nested = [respJson.meta, respJson.tracking, respJson.integrations, respJson.marketing];
-      for (var j = 0; j < nested.length; j++) {
-        var o = nested[j];
-        if (!o || typeof o !== "object") continue;
-        for (var k = 0; k < keys.length; k++) {
-          var vv = o[keys[k]];
-          if (typeof vv === "string" && vv.trim()) return vv.trim();
-        }
-      }
-      return null;
+      var v = String(respJson.pixel_id || "").trim();
+      return v || null;
     } catch (e) {
       return null;
     }
@@ -249,7 +212,7 @@
         if (typeof window.fbq === "function") {
           window.fbq("init", pixelId);
           _pixelState.initDone = true;
-          debugLog("[tracker] pixel init", { pixel_id: pixelId, source: "global/meta" });
+              debugLog("[tracker] pixel init", { pixel_id: pixelId, source: "global" });
           flushPixelQueue();
         }
       } catch (e) {
@@ -284,7 +247,7 @@
         if (!resp || !resp.ok) return null;
         return resp.json ? resp.json() : null;
       }).then(function (json) {
-        var pid = guessPixelIdFromStorePublic(json);
+        var pid = pixelIdFromStorePublic(json);
         if (pid) {
           _pixelState.pixelId = pid;
           try {
@@ -359,6 +322,11 @@
     return (obj && (obj.public_id || obj.publicId || obj.id || obj.sku)) ? String(obj.public_id || obj.publicId || obj.id || obj.sku) : "";
   }
 
+  var PII_FIELDS = [
+    "email", "phone", "first_name", "last_name", "external_id",
+    "city", "state", "zip_code", "country",
+  ];
+
   function buildPayload(eventName, data) {
     var eventId = generateEventId(eventName);
     var value = data && data.value != null ? Number(data.value) : 0;
@@ -368,7 +336,7 @@
     var contentIds = normalizeArray(data && data.content_ids);
     var contentType = (data && data.content_type) ? String(data.content_type) : "product";
 
-    return {
+    var payload = {
       event_name: eventName,
       event_id: eventId,
       event_time: data && data.event_time ? Number(data.event_time) : nowUnix(),
@@ -382,6 +350,22 @@
       user_agent: userAgent(),
       extra: (data && data.extra && typeof data.extra === "object") ? data.extra : {},
     };
+
+    // Forward PII fields for server-side hashing — never sent to Meta directly.
+    for (var i = 0; i < PII_FIELDS.length; i++) {
+      var f = PII_FIELDS[i];
+      if (data && data[f]) payload[f] = String(data[f]);
+    }
+
+    // Forward structured cart/order fields.
+    if (data && Array.isArray(data.items) && data.items.length) {
+      payload.items = data.items;
+    }
+    if (data && data.order_id) {
+      payload.order_id = String(data.order_id);
+    }
+
+    return payload;
   }
 
   function sendEvent(eventName, data, pixelCustomData) {
@@ -467,7 +451,7 @@
 
       // Allow pixelId override via init (still optional).
       if (this.config.pixelId && !resolvePixelIdFromGlobals()) {
-        try { window.__PAPERBASE_PIXEL_ID__ = this.config.pixelId; } catch (e) { /* ignore */ }
+        try { window.PAPERBASE_PIXEL_ID = this.config.pixelId; } catch (e) { /* ignore */ }
       }
 
       // Ensure Pixel is initialized as early as possible.
@@ -485,28 +469,60 @@
     },
 
     viewContent: function (product) {
+      // product may include an optional `customer` object with PII fields.
+      // PII fields (email, phone, etc.) are sent over HTTPS to YOUR backend
+      // only. They are hashed (SHA-256) server-side before forwarding to Meta.
+      // They are never stored in your database. Never log these fields.
       var id = pickId(product);
+      var customer = (product && product.customer) || {};
       return sendEvent("ViewContent", {
         currency: pickCurrency(product, tracker.config.currency),
         content_type: "product",
         content_ids: id ? [id] : [],
         value: pickValue(product, 0),
         extra: { product: product || {} },
+        email: customer.email || "",
+        phone: customer.phone || "",
+        first_name: customer.first_name || "",
+        last_name: customer.last_name || "",
+        external_id: customer.external_id || "",
+        city: customer.city || "",
+        state: customer.state || "",
+        zip_code: customer.zip_code || "",
+        country: customer.country || "",
       });
     },
 
     addToCart: function (product) {
+      // product may include an optional `customer` object with PII fields.
+      // PII fields (email, phone, etc.) are sent over HTTPS to YOUR backend
+      // only. They are hashed (SHA-256) server-side before forwarding to Meta.
+      // They are never stored in your database. Never log these fields.
       var id = pickId(product);
+      var customer = (product && product.customer) || {};
       return sendEvent("AddToCart", {
         currency: pickCurrency(product, tracker.config.currency),
         content_type: "product",
         content_ids: id ? [id] : [],
         value: pickValue(product, 0),
         extra: { product: product || {} },
+        email: customer.email || "",
+        phone: customer.phone || "",
+        first_name: customer.first_name || "",
+        last_name: customer.last_name || "",
+        external_id: customer.external_id || "",
+        city: customer.city || "",
+        state: customer.state || "",
+        zip_code: customer.zip_code || "",
+        country: customer.country || "",
       });
     },
 
     initiateCheckout: function (cart) {
+      // cart may include an optional `customer` object with PII fields.
+      // PII fields (email, phone, etc.) are sent over HTTPS to YOUR backend
+      // only. They are hashed (SHA-256) server-side before forwarding to Meta.
+      // They are never stored in your database. Never log these fields.
       var ids = [];
       try {
         if (cart && Array.isArray(cart.items)) {
@@ -515,16 +531,31 @@
       } catch (e) {
         ids = [];
       }
+      var customer = (cart && cart.customer) || {};
       return sendEvent("InitiateCheckout", {
         currency: pickCurrency(cart, tracker.config.currency),
         content_type: "product",
         content_ids: ids,
+        items: (cart && cart.items) || [],
         value: pickValue(cart, 0),
         extra: { cart: cart || {} },
+        email: customer.email || "",
+        phone: customer.phone || "",
+        first_name: customer.first_name || "",
+        last_name: customer.last_name || "",
+        external_id: customer.external_id || "",
+        city: customer.city || "",
+        state: customer.state || "",
+        zip_code: customer.zip_code || "",
+        country: customer.country || "",
       });
     },
 
     purchase: function (order) {
+      // order may include a `customer` object with PII fields.
+      // PII fields (email, phone, etc.) are sent over HTTPS to YOUR backend
+      // only. They are hashed (SHA-256) server-side before forwarding to Meta.
+      // They are never stored in your database. Never log these fields.
       var ids = [];
       try {
         if (order && Array.isArray(order.items)) {
@@ -533,12 +564,24 @@
       } catch (e) {
         ids = [];
       }
+      var customer = (order && order.customer) || {};
       return sendEvent("Purchase", {
         currency: pickCurrency(order, tracker.config.currency),
         content_type: "product",
         content_ids: ids,
+        items: (order && order.items) || [],
+        order_id: (order && (order.order_id || order.id)) ? String(order.order_id || order.id) : "",
         value: pickValue(order, 0),
         extra: { order: order || {} },
+        email: customer.email || "",
+        phone: customer.phone || "",
+        first_name: customer.first_name || "",
+        last_name: customer.last_name || "",
+        external_id: customer.external_id || (order && order.user_id) || "",
+        city: customer.city || "",
+        state: customer.state || "",
+        zip_code: customer.zip_code || "",
+        country: customer.country || "",
       });
     },
   };
