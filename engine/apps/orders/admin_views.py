@@ -1,6 +1,6 @@
 import logging
 
-from django.db.models import Count
+from django.db.models import Count, Q
 from rest_framework import serializers, viewsets, mixins, status
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -156,7 +156,7 @@ class AdminOrderViewSet(
         )
         serializer.is_valid(raise_exception=True)
         self.perform_update(serializer)
-        instance.refresh_from_db()
+        instance = self._refetch_annotated(instance.pk)
         return Response(AdminOrderSerializer(instance).data, status=status.HTTP_200_OK)
 
     def partial_update(self, request, *args, **kwargs):
@@ -172,7 +172,36 @@ class AdminOrderViewSet(
         qs = apply_order_admin_filters(qs, query_params=self.request.query_params)
         # Explicit stable ordering for paginator (avoids UnorderedObjectListWarning;
         # ties on created_at are broken by primary key).
-        return qs.annotate(items_count=Count("items")).order_by("-created_at", "id")
+        return qs.annotate(
+            items_count=Count("items", distinct=True),
+            unavailable_items_count=Count("items", filter=Q(items__product__isnull=True), distinct=True),
+        ).order_by("-created_at", "id")
+
+    def _refetch_annotated(self, pk):
+        """Re-fetch a single Order with the annotations and prefetches that
+        AdminOrderSerializer depends on.
+
+        Intentionally bypasses ``apply_order_admin_filters`` (which is scoped to
+        the list endpoint's query params): a mutation may legitimately move the
+        row out of the caller's filter window, and the refetch must still
+        return the just-mutated order. Tenant scoping is preserved explicitly.
+        """
+        ctx = get_active_store(self.request)
+        if not ctx.store:
+            return None
+        return (
+            super().get_queryset()
+            .filter(pk=pk, store=ctx.store)
+            .annotate(
+                items_count=Count("items", distinct=True),
+                unavailable_items_count=Count(
+                    "items",
+                    filter=Q(items__product__isnull=True),
+                    distinct=True,
+                ),
+            )
+            .first()
+        )
 
     def get_serializer_context(self):
         context = super().get_serializer_context()
@@ -240,7 +269,7 @@ class AdminOrderViewSet(
         courier = resolve_courier(store=store, order=order)
         result = run_courier_api(order, courier)
         persist_dispatch(order, courier, result.get("consignment_id", ""))
-        order.refresh_from_db()
+        order = self._refetch_annotated(order.pk)
 
         try:
             queue_customer_order_dispatched_email(order)
@@ -268,7 +297,7 @@ class AdminOrderViewSet(
         if not next_status:
             raise ValidationError({"status": "This field is required."})
         order = apply_order_status_change(order=order, to_status=next_status, request=request)
-        order.refresh_from_db()
+        order = self._refetch_annotated(order.pk)
         log_activity(
             request=request,
             action=ActivityLog.Action.CUSTOM,
@@ -303,7 +332,7 @@ class AdminOrderViewSet(
             raise ValidationError({"valid": "Expected a boolean."})
 
         order = apply_payment_verification(order=order, valid=valid, request=request)
-        order.refresh_from_db()
+        order = self._refetch_annotated(order.pk)
         log_activity(
             request=request,
             action=ActivityLog.Action.CUSTOM,

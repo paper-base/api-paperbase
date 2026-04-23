@@ -1,7 +1,7 @@
 import logging
 
 from django.db import transaction
-from django.db.models import Prefetch
+from django.db.models import Count, Prefetch, Q
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import status
 from rest_framework.exceptions import NotFound
@@ -67,8 +67,13 @@ class OrderCreateView(CreateAPIView):
         store = ctx.store
         if not store:
             raise PermissionDenied("No active store resolved.")
-        queryset = Order.objects.filter(store=store).prefetch_related(
-            "items__product", "items__product__images"
+        queryset = Order.objects.filter(store=store).annotate(
+            unavailable_items_count=Count("items", filter=Q(items__product__isnull=True), distinct=True),
+        ).prefetch_related(
+            "items__product",
+            "items__product__images",
+            "items__variant",
+            "items__variant__attribute_values__attribute_value__attribute",
         )
         page = self.paginate_queryset(queryset)
         if page is not None:
@@ -290,7 +295,7 @@ class OrderCreateView(CreateAPIView):
         )
         append_ledger_lines_for_order(order=order)
 
-        _notify_order_created(order)
+        transaction.on_commit(lambda created_order=order: _notify_order_created(created_order))
 
         order_for_receipt = (
             Order.objects.filter(pk=order.pk)
@@ -319,6 +324,8 @@ class OrderDetailView(ProvenTenantContextMixin, RetrieveAPIView):
         'items__product',
         'items__product__images',
         'items__variant__attribute_values__attribute_value__attribute',
+    ).annotate(
+        unavailable_items_count=Count("items", filter=Q(items__product__isnull=True), distinct=True),
     )
     lookup_field = "public_id"
     lookup_url_kwarg = "public_id"

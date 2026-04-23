@@ -165,8 +165,6 @@ def _finalize_subscription_activation_emails_and_side_effects(
     if prev_plan is None:
         queue_platform_new_subscription_email(user, subscription)
 
-    sync_order_email_notification_settings_for_user(user)
-
     from .feature_gate import invalidate_feature_config_cache
 
     invalidate_feature_config_cache(user)
@@ -335,12 +333,19 @@ def activate_subscription(
             metadata={},
         )
 
-    _finalize_subscription_activation_emails_and_side_effects(
-        user=user,
-        subscription=subscription,
-        payment=payment,
-        prev_plan=prev_plan,
-        change_reason=change_reason,
+    sync_order_email_notification_settings_for_user(user)
+    transaction.on_commit(
+        lambda active_user=user,
+        active_subscription=subscription,
+        success_payment=payment,
+        previous_plan=prev_plan,
+        reason=change_reason: _finalize_subscription_activation_emails_and_side_effects(
+            user=active_user,
+            subscription=active_subscription,
+            payment=success_payment,
+            prev_plan=previous_plan,
+            change_reason=reason,
+        )
     )
 
     return subscription

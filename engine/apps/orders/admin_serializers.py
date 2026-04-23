@@ -180,10 +180,10 @@ class AdminOrderListSerializer(SafeModelSerializer):
         return {"public_id": customer.public_id, "name": customer.name, "phone": customer.phone}
 
     def get_unavailable_products_count(self, obj):
-        return obj.items.filter(product__isnull=True).count()
+        return getattr(obj, "unavailable_items_count", 0)
 
     def get_has_unavailable_products(self, obj):
-        return self.get_unavailable_products_count(obj) > 0
+        return bool(getattr(obj, "unavailable_items_count", 0))
 
 
 class AdminOrderSerializer(SafeModelSerializer):
@@ -232,10 +232,10 @@ class AdminOrderSerializer(SafeModelSerializer):
         return {"public_id": customer.public_id, "name": customer.name, "phone": customer.phone}
 
     def get_unavailable_products_count(self, obj):
-        return obj.items.filter(product__isnull=True).count()
+        return getattr(obj, "unavailable_items_count", 0)
 
     def get_has_unavailable_products(self, obj):
-        return self.get_unavailable_products_count(obj) > 0
+        return bool(getattr(obj, "unavailable_items_count", 0))
 
 
 class AdminOrderItemUpdateSerializer(serializers.Serializer):

@@ -245,6 +245,7 @@ REST_FRAMEWORK = {
         "health": "60/min",
         "heavy_search": "10/min",
         "standard_api": "600/min",
+        "tracking_ingest": "300/min",
     },
 }
 

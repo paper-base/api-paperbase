@@ -78,9 +78,29 @@ def send_order_email_task(order_public_id: str, expected_store_public_id: str) -
                 "courier_consignment_id": consignment,
             }
             ctx.update(build_order_email_context(order))
-            send_email(ORDER_CONFIRMED, customer_email, ctx)
-            order.customer_confirmation_sent_at = timezone.now()
+            sent_marker = timezone.now()
+            order.customer_confirmation_sent_at = sent_marker
             order.save(update_fields=["customer_confirmation_sent_at"])
+
+            def _send_after_commit(
+                *,
+                to_email: str = customer_email,
+                context: dict = ctx,
+                order_id: int = order.pk,
+                marker=sent_marker,
+            ) -> None:
+                from engine.apps.orders.models import Order
+
+                try:
+                    send_email(ORDER_CONFIRMED, to_email, context)
+                except Exception:
+                    Order.objects.filter(
+                        pk=order_id,
+                        customer_confirmation_sent_at=marker,
+                    ).update(customer_confirmation_sent_at=None)
+                    raise
+
+            transaction.on_commit(_send_after_commit)
 
 
 @app.task(
