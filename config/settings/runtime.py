@@ -80,16 +80,8 @@ if not _database_url:
     else:
         raise ImproperlyConfigured("DATABASE_URL is required when DEBUG=false.")
 
-_default_db = dj_database_url.parse(_database_url, conn_max_age=600)
-if env_bool("DATABASE_PGBOUNCER", False):  # noqa: F405
-    _default_db["CONN_MAX_AGE"] = 0
-    _default_db["CONN_HEALTH_CHECKS"] = True
-    _default_db["ATOMIC_REQUESTS"] = False
-    _db_opts = dict(_default_db.get("OPTIONS") or {})
-    _db_opts["disable_server_side_cursors"] = True
-    _default_db["OPTIONS"] = _db_opts
-else:
-    _default_db["CONN_HEALTH_CHECKS"] = True
+_default_db = dj_database_url.config(default=_database_url, conn_max_age=0)
+_default_db["DISABLE_SERVER_SIDE_CURSORS"] = True
 DATABASES = {"default": _default_db}
 
 # ---------------------------------------------------------------------------
