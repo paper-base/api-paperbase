@@ -8,7 +8,7 @@ import sys
 import time
 
 url = (os.environ.get("DATABASE_URL") or "").strip()
-if not url or url.startswith("sqlite"):
+if not url:
     sys.exit(0)
 if not (url.startswith("postgres://") or url.startswith("postgresql://")):
     sys.exit(0)

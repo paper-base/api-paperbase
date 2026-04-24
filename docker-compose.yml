@@ -29,6 +29,7 @@ services:
       - .:/app
     # Host .env is injected here (Compose reads it at startup; not COPY’d into the image).
     # Keys under `environment` below override .env when both are set (e.g. DATABASE_URL).
+    # S3-compatible storage (e.g. R2): set AWS_* object storage vars in .env (see .env.example).
     env_file:
       - .env
     environment:
@@ -38,7 +39,11 @@ services:
       DATABASE_URL: postgresql://paperbase:paperbase@db:5432/paperbase
       REDIS_URL: redis://redis:6379/0
       ALLOWED_HOSTS: localhost,127.0.0.1,[::1]
-      DJANGO_STORAGE_BACKEND: filesystem
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_STORAGE_BUCKET_NAME: ${AWS_STORAGE_BUCKET_NAME}
+      AWS_S3_ENDPOINT_URL: ${AWS_S3_ENDPOINT_URL}
+      AWS_S3_CUSTOM_DOMAIN: ${AWS_S3_CUSTOM_DOMAIN}
       PORT: "8000"
     command: python manage.py runserver 0.0.0.0:8000
     depends_on:

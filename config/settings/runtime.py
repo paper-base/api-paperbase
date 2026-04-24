@@ -8,6 +8,7 @@ Set DEBUG=true for local development; DEBUG=false for production-like runs.
 from __future__ import annotations
 
 import logging
+import os
 from urllib.parse import urlparse
 
 import dj_database_url
@@ -26,24 +27,13 @@ def _require_env(name: str) -> str:
     return value
 
 
-def _storage_backend() -> str:
-    raw = (os.getenv("DJANGO_STORAGE_BACKEND") or "").strip().lower()  # noqa: F405
-    if raw in {"s3", "r2"}:
-        return "s3"
-    if raw in {"filesystem", "local", "fs"}:
-        return "filesystem"
-    if env_bool("USE_S3_STORAGE", False):  # noqa: F405
-        return "s3"
-    _r2_keys = (
-        "R2_ACCESS_KEY_ID",
-        "R2_SECRET_ACCESS_KEY",
-        "R2_BUCKET_NAME",
-        "R2_ENDPOINT_URL",
-        "R2_PUBLIC_URL",
-    )
-    if all(os.getenv(k, "").strip() for k in _r2_keys):  # noqa: F405
-        return "s3"
-    return "filesystem"
+def _s3_custom_domain_host(raw: str) -> str:
+    """Hostname for public URLs; accepts storage.example.com or https://storage.example.com/."""
+    value = raw.strip().rstrip("/")
+    if not value:
+        return ""
+    parsed = urlparse(value if "://" in value else f"https://{value}")
+    return (parsed.netloc or parsed.path).strip().strip("/")
 
 
 DEBUG = env_bool("DEBUG", False)  # noqa: F405
@@ -70,17 +60,17 @@ else:
         raise ImproperlyConfigured("ALLOWED_HOSTS must be set when DEBUG=false.")
 
 # ---------------------------------------------------------------------------
-# Database (DATABASE_URL only)
+# Database (DATABASE_URL only — Postgres; fail fast if unset)
 # ---------------------------------------------------------------------------
 
-_database_url = os.getenv("DATABASE_URL", "").strip()  # noqa: F405
-if not _database_url:
-    if TESTING or DEBUG:  # noqa: F405
-        _database_url = f"sqlite:///{(BASE_DIR / 'db.sqlite3').as_posix()}"  # noqa: F405
-    else:
-        raise ImproperlyConfigured("DATABASE_URL is required when DEBUG=false.")
+try:
+    DATABASE_URL = os.environ["DATABASE_URL"].strip()
+except KeyError as exc:
+    raise ImproperlyConfigured("DATABASE_URL environment variable is required.") from exc
+if not DATABASE_URL:
+    raise ImproperlyConfigured("DATABASE_URL must be set to a non-empty value.")
 
-_default_db = dj_database_url.config(default=_database_url, conn_max_age=0)
+_default_db = dj_database_url.parse(DATABASE_URL, conn_max_age=0)
 _default_db["DISABLE_SERVER_SIDE_CURSORS"] = True
 DATABASES = {"default": _default_db}
 
@@ -140,83 +130,59 @@ else:
     raise ImproperlyConfigured("REDIS_URL is required when DEBUG=false.")
 
 # ---------------------------------------------------------------------------
-# Static / media storage
+# Static / media — S3-compatible object storage (e.g. Cloudflare R2) via django-storages + boto3
 # ---------------------------------------------------------------------------
 
-_storage = _storage_backend()
+if "storages" not in INSTALLED_APPS:  # noqa: F405
+    INSTALLED_APPS = [*INSTALLED_APPS, "storages"]  # noqa: F405
 
-if _storage == "s3":
-    R2_ACCESS_KEY_ID = _require_env("R2_ACCESS_KEY_ID")
-    R2_SECRET_ACCESS_KEY = _require_env("R2_SECRET_ACCESS_KEY")
-    R2_BUCKET_NAME = _require_env("R2_BUCKET_NAME")
-    R2_ENDPOINT_URL = _require_env("R2_ENDPOINT_URL")
-    R2_PUBLIC_URL = _require_env("R2_PUBLIC_URL").strip().rstrip("/")
+AWS_ACCESS_KEY_ID = _require_env("AWS_ACCESS_KEY_ID")
+AWS_SECRET_ACCESS_KEY = _require_env("AWS_SECRET_ACCESS_KEY")
+AWS_STORAGE_BUCKET_NAME = _require_env("AWS_STORAGE_BUCKET_NAME")
+AWS_S3_ENDPOINT_URL = _require_env("AWS_S3_ENDPOINT_URL")
+AWS_S3_REGION_NAME = os.getenv("AWS_S3_REGION_NAME", "auto").strip() or "auto"  # noqa: F405
 
-    _r2_public = urlparse(R2_PUBLIC_URL if "://" in R2_PUBLIC_URL else f"https://{R2_PUBLIC_URL}")
-    R2_CUSTOM_DOMAIN = (_r2_public.netloc or _r2_public.path).strip().strip("/")
-    if not R2_CUSTOM_DOMAIN:
-        raise ImproperlyConfigured("R2_PUBLIC_URL must be a valid URL or domain.")
+_s3_public_host = _s3_custom_domain_host(_require_env("AWS_S3_CUSTOM_DOMAIN"))
+if not _s3_public_host:
+    raise ImproperlyConfigured(
+        "AWS_S3_CUSTOM_DOMAIN must be a non-empty hostname (e.g. storage.paperbase.me) "
+        "or https URL with that host."
+    )
+AWS_S3_CUSTOM_DOMAIN = _s3_public_host
 
-    if "storages" not in INSTALLED_APPS:  # noqa: F405
-        INSTALLED_APPS = ["storages", *INSTALLED_APPS]  # noqa: F405
+AWS_S3_ADDRESSING_STYLE = "path"
+AWS_DEFAULT_ACL = None
+AWS_QUERYSTRING_AUTH = False
+AWS_S3_FILE_OVERWRITE = False
+AWS_S3_SIGNATURE_VERSION = "s3v4"
 
-    AWS_ACCESS_KEY_ID = R2_ACCESS_KEY_ID
-    AWS_SECRET_ACCESS_KEY = R2_SECRET_ACCESS_KEY
-    AWS_STORAGE_BUCKET_NAME = R2_BUCKET_NAME
-    AWS_S3_ENDPOINT_URL = R2_ENDPOINT_URL
-    AWS_S3_REGION_NAME = "auto"
-    AWS_S3_CUSTOM_DOMAIN = R2_CUSTOM_DOMAIN
-    AWS_QUERYSTRING_AUTH = False
-    AWS_DEFAULT_ACL = None
-    AWS_S3_FILE_OVERWRITE = False
-    AWS_S3_SIGNATURE_VERSION = "s3v4"
-    AWS_S3_ADDRESSING_STYLE = "virtual"
-
-    STORAGES = {
-        "default": {
-            "BACKEND": "storages.backends.s3.S3Storage",
-            "OPTIONS": {
-                "location": "media",
-                "default_acl": AWS_DEFAULT_ACL,
-                "querystring_auth": AWS_QUERYSTRING_AUTH,
-                "file_overwrite": AWS_S3_FILE_OVERWRITE,
-            },
+STORAGES = {
+    "default": {
+        "BACKEND": "storages.backends.s3boto3.S3Boto3Storage",
+        "OPTIONS": {
+            "location": "media",
+            "default_acl": None,
+            "querystring_auth": False,
+            "file_overwrite": False,
         },
-        "staticfiles": {
-            "BACKEND": "storages.backends.s3.S3Storage",
-            "OPTIONS": {
-                "location": "static",
-                "default_acl": AWS_DEFAULT_ACL,
-                "querystring_auth": AWS_QUERYSTRING_AUTH,
-                "file_overwrite": True,
-            },
-        },
-    }
+    },
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedStaticFilesStorage",
+    },
+}
 
-    MEDIA_URL = f"{R2_PUBLIC_URL}/media/"
-    STATIC_URL = f"{R2_PUBLIC_URL}/static/"
-else:
-    STATIC_URL = "/static/"
-    STATIC_ROOT = BASE_DIR / "staticfiles"  # noqa: F405
-    MEDIA_URL = "/media/"
-    MEDIA_ROOT = BASE_DIR / "media"  # noqa: F405
-    STORAGES = {
-        "default": {
-            "BACKEND": "django.core.files.storage.FileSystemStorage",
-        },
-        "staticfiles": {
-            "BACKEND": "whitenoise.storage.CompressedStaticFilesStorage",
-        },
-    }
-    _mw = list(MIDDLEWARE)  # noqa: F405
-    _wn = "whitenoise.middleware.WhiteNoiseMiddleware"
-    if _wn not in _mw:
-        try:
-            _idx = _mw.index("django.middleware.security.SecurityMiddleware") + 1
-        except ValueError:
-            _idx = 0
-        _mw.insert(_idx, _wn)
-    MIDDLEWARE = _mw
+MEDIA_ROOT = None  # noqa: F405
+MEDIA_URL = f"https://{_s3_public_host}/media/"
+
+_mw = list(MIDDLEWARE)  # noqa: F405
+_wn = "whitenoise.middleware.WhiteNoiseMiddleware"
+if _wn not in _mw:
+    try:
+        _idx = _mw.index("django.middleware.security.SecurityMiddleware") + 1
+    except ValueError:
+        _idx = 0
+    _mw.insert(_idx, _wn)
+MIDDLEWARE = _mw
 
 # ---------------------------------------------------------------------------
 # Production-only security and secrets
