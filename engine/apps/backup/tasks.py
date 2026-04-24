@@ -8,6 +8,8 @@ from django.conf import settings
 
 from config.celery import app
 
+from engine.apps.backup.prune import prune_noncritical_tables, prune_summary
+
 logger = logging.getLogger(__name__)
 
 BACKUP_SUBPROCESS_TIMEOUT_SECONDS = 3 * 60 * 60
@@ -45,6 +47,17 @@ def _run_script(script_name: str) -> tuple[str, str]:
 def run_base_backup(self) -> None:
     logger.info("Starting base backup task", extra={"task": self.name, "queue": "backup"})
     try:
+        try:
+            counts = prune_noncritical_tables()
+            logger.info(
+                "Pre-base-backup prune finished",
+                extra={"task": self.name, "prune": prune_summary(counts)},
+            )
+        except Exception:
+            logger.exception(
+                "Pre-base-backup prune failed; continuing with pg_basebackup",
+                extra={"task": self.name},
+            )
         stdout, stderr = _run_script("backup-full.sh")
     except subprocess.CalledProcessError as exc:
         logger.error(
@@ -62,4 +75,25 @@ def run_base_backup(self) -> None:
     logger.info(
         "Base backup task completed",
         extra={"task": self.name, "queue": "backup", "stdout": stdout[-1000:], "stderr": stderr[-1000:]},
+    )
+
+
+@app.task(
+    bind=True,
+    autoretry_for=(OSError,),
+    retry_backoff=True,
+    retry_jitter=True,
+    max_retries=2,
+    acks_late=True,
+    soft_time_limit=600,
+    time_limit=660,
+    name="engine.apps.backup.run_backup_table_prune",
+)
+def run_backup_table_prune(self) -> None:
+    """Periodic prune of non-critical tables (same logic as pre-base-backup)."""
+    logger.info("Starting backup table prune task", extra={"task": self.name})
+    counts = prune_noncritical_tables()
+    logger.info(
+        "Backup table prune task completed",
+        extra={"task": self.name, "prune": prune_summary(counts)},
     )

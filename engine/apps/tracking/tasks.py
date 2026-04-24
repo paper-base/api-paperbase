@@ -531,7 +531,7 @@ def send_capi_event(
     time_limit=150,
 )
 def cleanup_old_event_logs() -> int:
-    """Celery beat: delete StoreEventLog rows older than EVENT_LOG_RETENTION_HOURS (app=tracking only)."""
+    """Celery beat: delete StoreEventLog rows older than EVENT_LOG_RETENTION_HOURS (default 72; app=tracking only)."""
     from datetime import timedelta
 
     from engine.apps.marketing_integrations.models import StoreEventLog

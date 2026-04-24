@@ -19,7 +19,16 @@ Compatibility notes:
 - `BACKUP_CRON_FULL` is accepted as fallback for `BACKUP_CRON_BASE` during migration.
 
 Runtime requirement:
-- Celery worker must consume the `backup` queue in production.
+- Celery worker must consume the `backup` queue in production (base backup task).
+- General Celery workers process the default queue for periodic maintenance (including steady-state table prune).
+
+## Physical backups and table exclusion
+
+Backups are **physical** only: `pg_basebackup` copies the entire PostgreSQL data directory (cluster files). WAL archiving captures **every** change in the cluster.
+
+**You cannot exclude specific tables** from `pg_basebackup` or from WAL-based PITR. Table-level exclusion exists only in **logical** dumps (`pg_dump`), which this stack does **not** use for BASE backups (there is no `pg_dump` in the base backup path).
+
+**Philosophy:** We do not exclude data at backup time. We control data volume **at the source** using retention policies and batched deletes on non-critical tables (see below).
 
 ## Storage Layout
 
@@ -39,14 +48,48 @@ Example `meta/latest.json`:
 ## Backup Flow
 
 1. Celery Beat enqueues the base backup task on the `backup` queue.
-2. Celery Worker runs `backup/backup-full.sh` (kept as entrypoint, now performs base backups).
-3. Script runs `pg_basebackup -D - -Ft -z -X fetch` and writes `base_<timestamp>.tar.gz`.
-4. Script validates backup integrity (`gzip -t` + `tar -tzf`).
-5. Artifact is uploaded to R2.
-6. `meta/latest.json` is updated with `latest_base`.
+2. Worker runs **pre-base prune** (`engine.apps.backup.prune.prune_noncritical_tables`): batched, time-based deletes on non-critical tables (see next section). Skipped entirely when `BACKUP_PRUNE_ENABLED=false`. If prune raises an unexpected error, the worker logs it and **still runs** `pg_basebackup` so the base backup is not blocked.
+3. Worker runs `backup/backup-full.sh` (entrypoint for base backups).
+4. Script runs `pg_basebackup -D - -Ft -z -X fetch` and writes `base_<timestamp>.tar.gz`.
+5. Script validates backup integrity (`gzip -t` + `tar -tzf`).
+6. Artifact is uploaded to R2.
+7. `meta/latest.json` is updated with `latest_base`.
 
-Default schedule:
+Default schedules:
 - base backup: daily `0 2 * * *` (`BACKUP_CRON_BASE`)
+- steady-state prune: `engine.apps.backup.run_backup_table_prune` every six hours at :30 (`30 */6 * * *`) on the **default** Celery queue (same retention rules as step 2; reduces heap and write churn between daily bases).
+
+Related periodic tasks (not part of the base tarball script, but part of overall retention):
+
+- `engine.apps.tracking.cleanup_old_event_logs` — `StoreEventLog` rows with `app="tracking"` older than `EVENT_LOG_RETENTION_HOURS` (default **72**).
+- `engine.apps.orders.cleanup_expired_order_exports` — completed export files past `expires_at` (rows may remain `EXPIRED` until hard-pruned by backup prune).
+- `engine.core.purge_expired_trash` — expired `TrashItem` rows.
+
+## Non-critical tables and in-database retention
+
+These tables are treated as **non-critical for long-term backup bulk** (operational logs, dismissals, cache-like snapshots, terminal export jobs, etc.). They remain inside PostgreSQL and inside physical backups until pruned; retention is controlled with `BACKUP_PRUNE_*` settings (see `.env.example`).
+
+| Logical area | DB table | Prune behavior |
+|--------------|----------|----------------|
+| Marketing / tracking events | `marketing_integrations_storeeventlog` | Rows older than `BACKUP_PRUNE_STORE_EVENT_LOG_HOURS` (default 72), **all** `app` values; complements tracking’s `app="tracking"` cleaner. |
+| Fraud cache log | `fraud_check_fraudchecklog` | Rows with `checked_at` older than `BACKUP_PRUNE_FRAUD_CHECK_LOG_DAYS`. |
+| Email audit | `emails_emaillog` | Rows with `created_at` older than `BACKUP_PRUNE_EMAIL_LOG_DAYS`. |
+| Admin UI activity | `core_activitylog` | Rows with `created_at` older than `BACKUP_PRUNE_ACTIVITY_LOG_DAYS`. |
+| Django admin history | `django_admin_log` | `LogEntry` rows with `action_time` older than `BACKUP_PRUNE_ADMIN_LOG_DAYS`. |
+| Django sessions | `django_session` | Rows with `expire_date` in the past (same idea as `clearsessions`). |
+| Basic analytics snapshots | `analytics_storedashboardstatssnapshot` | Rows with `end_date` older than `BACKUP_PRUNE_DASHBOARD_SNAPSHOT_DAYS` (calendar days). |
+| Notification dismissals | `notifications_notificationdismissal` | Rows with calendar `date` older than `BACKUP_PRUNE_NOTIFICATION_DISMISSAL_DAYS`. |
+| Order CSV export jobs | `orders_orderexportjob` | `EXPIRED` or `FAILED` rows with `updated_at` older than `BACKUP_PRUNE_ORDER_EXPORT_JOB_DAYS`. |
+| Soft-delete trash | `core_trashitem` | Not pruned here; use `engine.core.purge_expired_trash` (daily). |
+
+Deletes run in configurable batches (`BACKUP_PRUNE_BATCH_SIZE`) under a system execution scope so tenant-scoped models can be pruned safely from Celery.
+
+### WAL and base backup size
+
+- **Base tarball:** Smaller heaps for the tables above yield smaller `pg_basebackup` archives once autovacuum reclaims space.
+- **WAL:** Ongoing inserts to large log tables generate sustained WAL volume. Pruning **caps** table growth and limits future WAL from those tables. A large prune run still emits WAL for the `DELETE`s themselves; steady-state scheduling plus batching avoids a single huge spike right before `pg_basebackup` when possible.
+
+Disable pruning only when necessary (e.g. forensic hold): set `BACKUP_PRUNE_ENABLED=false`.
 
 ## WAL Archiving (infra-managed PostgreSQL)
 

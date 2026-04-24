@@ -131,6 +131,25 @@ GLOBAL_DAILY_LIMIT = int(os.getenv("GLOBAL_DAILY_LIMIT", "0"))
 GLOBAL_MONTHLY_LIMIT = int(os.getenv("GLOBAL_MONTHLY_LIMIT", "0"))
 FRAUD_CACHE_TTL_DAYS = int(os.getenv("FRAUD_CACHE_TTL_DAYS", "3"))
 
+# ---------------------------------------------------------------------------
+# Pre-backup / steady-state prune of non-critical tables (physical backups
+# cannot exclude tables; see docs/backup-restore.md).
+# ---------------------------------------------------------------------------
+BACKUP_PRUNE_ENABLED = env_bool("BACKUP_PRUNE_ENABLED", True)
+BACKUP_PRUNE_BATCH_SIZE = max(50, int(os.getenv("BACKUP_PRUNE_BATCH_SIZE", "500")))
+BACKUP_PRUNE_EMAIL_LOG_DAYS = int(os.getenv("BACKUP_PRUNE_EMAIL_LOG_DAYS", "90"))
+BACKUP_PRUNE_ACTIVITY_LOG_DAYS = int(os.getenv("BACKUP_PRUNE_ACTIVITY_LOG_DAYS", "180"))
+BACKUP_PRUNE_ADMIN_LOG_DAYS = int(os.getenv("BACKUP_PRUNE_ADMIN_LOG_DAYS", "180"))
+BACKUP_PRUNE_FRAUD_CHECK_LOG_DAYS = int(os.getenv("BACKUP_PRUNE_FRAUD_CHECK_LOG_DAYS", "30"))
+BACKUP_PRUNE_NOTIFICATION_DISMISSAL_DAYS = int(
+    os.getenv("BACKUP_PRUNE_NOTIFICATION_DISMISSAL_DAYS", "90")
+)
+BACKUP_PRUNE_DASHBOARD_SNAPSHOT_DAYS = int(
+    os.getenv("BACKUP_PRUNE_DASHBOARD_SNAPSHOT_DAYS", "400")
+)
+BACKUP_PRUNE_STORE_EVENT_LOG_HOURS = int(os.getenv("BACKUP_PRUNE_STORE_EVENT_LOG_HOURS", "72"))
+BACKUP_PRUNE_ORDER_EXPORT_JOB_DAYS = int(os.getenv("BACKUP_PRUNE_ORDER_EXPORT_JOB_DAYS", "30"))
+
 # Storefront rate limits (per minute, fixed window) — see engine.core.rate_limit
 TENANT_STOREFRONT_RATE_LIMIT_PER_IP_PER_MIN = int(
     os.getenv("TENANT_STOREFRONT_RATE_LIMIT_PER_IP_PER_MIN", "100")
@@ -364,6 +383,10 @@ CELERY_TASK_ANNOTATIONS = {
         "soft_time_limit": 7800,
         "time_limit": 8400,
     },
+    "engine.apps.backup.run_backup_table_prune": {
+        "soft_time_limit": 600,
+        "time_limit": 660,
+    },
 }
 
 CELERY_TASK_ROUTES = {
@@ -379,7 +402,7 @@ CELERY_BEAT_SCHEDULE = {
         "task": "engine.core.purge_expired_trash",
         "schedule": crontab(minute=15, hour=3),
     },
-    # Tracking StoreEventLog rows: TTL 1h — run often so stale rows do not linger.
+    # StoreEventLog (tracking app=tracking): retention EVENT_LOG_RETENTION_HOURS (default 72).
     "tracking-cleanup-old-event-logs-frequent": {
         "task": "engine.apps.tracking.cleanup_old_event_logs",
         "schedule": crontab(minute="*/15"),
@@ -392,6 +415,11 @@ CELERY_BEAT_SCHEDULE = {
         "task": "engine.apps.backup.run_base_backup",
         "schedule": env_crontab("BACKUP_CRON_BASE", os.getenv("BACKUP_CRON_FULL", "0 2 * * *")),
         "options": {"queue": "backup"},
+    },
+    # Steady-state prune (same rules as pre-base-backup); caps WAL/heap between daily bases.
+    "backup-table-prune-steady-state": {
+        "task": "engine.apps.backup.run_backup_table_prune",
+        "schedule": crontab(minute=30, hour="*/6"),
     },
 }
 
