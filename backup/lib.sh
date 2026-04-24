@@ -136,15 +136,13 @@ paperbase_json_get_field() {
 
 paperbase_write_latest_json() {
   local dst="$1"
-  local latest_full="$2"
-  local latest_snapshot="$3"
-  local timestamp="${4:-$(date -u +"%Y-%m-%dT%H:%M:%SZ")}"
+  local latest_base="$2"
+  local timestamp="${3:-$(date -u +"%Y-%m-%dT%H:%M:%SZ")}"
   local tmp="${dst}.tmp"
 
   cat >"$tmp" <<EOF
 {
-  "latest_full": "${latest_full}",
-  "latest_snapshot": "${latest_snapshot}",
+  "latest_base": "${latest_base}",
   "timestamp": "${timestamp}"
 }
 EOF
@@ -164,25 +162,20 @@ paperbase_try_read_latest_json() {
 
 paperbase_try_update_latest_pointer() {
   local bucket="$1"
-  local new_latest_full="${2:-}"
-  local new_latest_snapshot="${3:-}"
+  local new_latest_base="${2:-}"
   local tmp_dir
   tmp_dir="$(mktemp -d "$(paperbase_tmpdir)/meta.XXXXXX")"
   local latest_local="${tmp_dir}/latest.json"
-  local existing_full=""
-  local existing_snapshot=""
-  local final_full=""
-  local final_snapshot=""
+  local existing_base=""
+  local final_base=""
   local target_uri="s3://${bucket}/$(paperbase_latest_json_key)"
 
   if paperbase_try_read_latest_json "$bucket" "$latest_local"; then
-    existing_full="$(paperbase_json_get_field "$latest_local" latest_full || true)"
-    existing_snapshot="$(paperbase_json_get_field "$latest_local" latest_snapshot || true)"
+    existing_base="$(paperbase_json_get_field "$latest_local" latest_base || true)"
   fi
 
-  final_full="${new_latest_full:-$existing_full}"
-  final_snapshot="${new_latest_snapshot:-$existing_snapshot}"
-  paperbase_write_latest_json "$latest_local" "$final_full" "$final_snapshot"
+  final_base="${new_latest_base:-$existing_base}"
+  paperbase_write_latest_json "$latest_local" "$final_base"
 
   if ! paperbase_aws_s3_cp_with_retry "$latest_local" "$target_uri"; then
     paperbase_log "WARN: latest pointer update failed for ${target_uri} (backup kept)."

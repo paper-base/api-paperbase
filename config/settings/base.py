@@ -360,19 +360,14 @@ CELERY_TASK_ANNOTATIONS = {
         "soft_time_limit": 300,
         "time_limit": 330,
     },
-    "engine.apps.backup.run_full_backup": {
+    "engine.apps.backup.run_base_backup": {
         "soft_time_limit": 7800,
         "time_limit": 8400,
-    },
-    "engine.apps.backup.run_snapshot_backup": {
-        "soft_time_limit": 4200,
-        "time_limit": 4800,
     },
 }
 
 CELERY_TASK_ROUTES = {
-    "engine.apps.backup.run_full_backup": {"queue": "backup"},
-    "engine.apps.backup.run_snapshot_backup": {"queue": "backup"},
+    "engine.apps.backup.run_base_backup": {"queue": "backup"},
 }
 
 CELERY_BEAT_SCHEDULE = {
@@ -393,14 +388,9 @@ CELERY_BEAT_SCHEDULE = {
         "task": "engine.apps.orders.cleanup_expired_order_exports",
         "schedule": crontab(minute="*/12"),
     },
-    "backup-full-daily": {
-        "task": "engine.apps.backup.run_full_backup",
-        "schedule": env_crontab("BACKUP_CRON_FULL", "0 2 * * *"),
-        "options": {"queue": "backup"},
-    },
-    "backup-snapshot-every-10-min": {
-        "task": "engine.apps.backup.run_snapshot_backup",
-        "schedule": env_crontab("BACKUP_CRON_SNAPSHOT", "*/10 * * * *"),
+    "backup-base-daily": {
+        "task": "engine.apps.backup.run_base_backup",
+        "schedule": env_crontab("BACKUP_CRON_BASE", os.getenv("BACKUP_CRON_FULL", "0 2 * * *")),
         "options": {"queue": "backup"},
     },
 }

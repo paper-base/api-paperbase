@@ -1,6 +1,6 @@
-# Backup and Restore Runbook
+# Backup and Restore Runbook (BASE + WAL PITR)
 
-This runbook describes the production backup and restore flow for PostgreSQL using S3-compatible storage (Cloudflare R2) triggered by Celery Beat and executed by Celery Worker.
+This runbook describes the production backup architecture for PostgreSQL using BASE backups plus WAL archiving (PITR) on S3-compatible storage (Cloudflare R2).
 
 ## Required Environment Variables
 
@@ -10,85 +10,111 @@ This runbook describes the production backup and restore flow for PostgreSQL usi
 - `AWS_DEFAULT_REGION` (R2 commonly uses `auto`)
 - `AWS_S3_ENDPOINT_URL`
 - `BACKUP_S3_BUCKET`
-- `BACKUP_PREFIX_FULL` (default: `backups/full`)
-- `BACKUP_PREFIX_SNAPSHOT` (default: `backups/snapshot`)
+- `BACKUP_PREFIX_BASE` (default: `backups/base`)
+- `BACKUP_PREFIX_WAL` (default: `backups/wal`)
 - `TZ` (optional process timezone hint)
 
-Compatibility:
-- `BACKUP_PREFIX_WAL` is still accepted if `BACKUP_PREFIX_SNAPSHOT` is unset.
+Compatibility notes:
+- `BACKUP_PREFIX_FULL` is accepted as fallback for `BACKUP_PREFIX_BASE` during migration.
+- `BACKUP_CRON_FULL` is accepted as fallback for `BACKUP_CRON_BASE` during migration.
 
 Runtime requirement:
 - Celery worker must consume the `backup` queue in production.
 
 ## Storage Layout
 
-- Full backups: `backups/full/YYYY/MM/DD/file.sql.gz`
-- Snapshot backups: `backups/snapshot/YYYY/MM/DD/file.dump`
+- BASE backups: `backups/base/YYYY/MM/DD/base_<timestamp>.tar.gz`
+- WAL archives: `backups/wal/<wal_file_name>`
 - Latest pointer: `meta/latest.json`
 
 Example `meta/latest.json`:
 
 ```json
 {
-  "latest_full": "backups/full/2026/04/24/paperbase_20260424_020000.sql.gz",
-  "latest_snapshot": "backups/snapshot/2026/04/24/paperbase_20260424_121000.dump",
-  "timestamp": "2026-04-24T12:10:07Z"
+  "latest_base": "backups/base/2026/04/24/base_20260424_020000.tar.gz",
+  "timestamp": "2026-04-24T02:00:13Z"
 }
 ```
 
 ## Backup Flow
 
-1. Celery Beat enqueues backup tasks on the dedicated `backup` queue.
-2. Celery Worker consumes `backup` queue and executes `backup/backup-full.sh` and `backup/backup-snapshot.sh`.
-3. Script creates one artifact:
-   - full: `pg_dump "$DIRECT_DATABASE_URL" | gzip` -> `.sql.gz`
-   - snapshot: `pg_dump -Fc "$DIRECT_DATABASE_URL"` -> `.dump`
-4. Artifact is uploaded to R2 in the standardized prefix path.
-5. After successful upload, script updates `meta/latest.json`.
-6. If `latest.json` update fails, backup still succeeds and only logs a warning.
+1. Celery Beat enqueues the base backup task on the `backup` queue.
+2. Celery Worker runs `backup/backup-full.sh` (kept as entrypoint, now performs base backups).
+3. Script runs `pg_basebackup -D - -Ft -z -X fetch` and writes `base_<timestamp>.tar.gz`.
+4. Script validates backup integrity (`gzip -t` + `tar -tzf`).
+5. Artifact is uploaded to R2.
+6. `meta/latest.json` is updated with `latest_base`.
 
-This makes backup data path authoritative while keeping pointer updates failure-safe.
+Default schedule:
+- base backup: daily `0 2 * * *` (`BACKUP_CRON_BASE`)
 
-Default schedules:
+## WAL Archiving (infra-managed PostgreSQL)
 
-- full backup: daily `0 2 * * *` (`BACKUP_CRON_FULL`)
-- snapshot backup: every 10 minutes `*/10 * * * *` (`BACKUP_CRON_SNAPSHOT`)
+Enable on the PostgreSQL host/service:
+
+```conf
+wal_level = replica
+archive_mode = on
+archive_command = 'aws s3 cp %p s3://$BACKUP_S3_BUCKET/backups/wal/%f --endpoint-url=$AWS_S3_ENDPOINT_URL'
+```
+
+Production recommendation:
+- Wrap `archive_command` in a retry-capable shell wrapper that logs failures and returns non-zero on persistent error.
+
+Validation checklist:
+1. Force WAL switch (`SELECT pg_switch_wal();`).
+2. Confirm new object appears under `backups/wal/`.
+3. Check PostgreSQL logs for archive success/failure entries.
 
 ## Restore Flow
 
-1. Create a new PostgreSQL database (any host/environment).
-2. Choose the target DB URL explicitly (first positional argument).
-3. Run:
-   - `scripts/restore.sh postgresql://user:pass@host:5432/db --type full`
-   - or `scripts/restore.sh postgresql://user:pass@host:5432/db --type snapshot`
-   - or `scripts/restore.sh postgresql://user:pass@host:5432/db --s3-uri s3://bucket/path/file.sql.gz|file.dump` (manual override)
-4. Without `--s3-uri`, restore fetches `meta/latest.json`.
-5. Restore picks exactly one object:
-   - `--type full` -> `latest_full`
-   - `--type snapshot` -> `latest_snapshot`
-6. Restore downloads the object and executes:
-   - `.sql.gz` -> `gunzip -c | psql`
-   - `.dump` -> `pg_restore`
-7. Database is recovered from that single backup artifact.
+The restore script is host-level and assumes control of PostgreSQL service and data directory.
 
-## Restore Strategy Rules
+### Base-only restore
 
-- FULL backup is the primary recovery source.
-- SNAPSHOT backup is an alternative recovery point.
-- Restores are exclusive: FULL or SNAPSHOT, never chained.
+```bash
+scripts/restore.sh "<DATABASE_URL>" --type base --pg-data-dir /var/lib/postgresql/data
+```
 
-Correct:
-- restore FULL
-- restore SNAPSHOT
+### Point-in-time restore (PITR)
 
-Incorrect:
-- restore FULL then SNAPSHOT in one recovery workflow
-- combine incremental layers from these artifacts
+```bash
+scripts/restore.sh "<DATABASE_URL>" --type pitr --target-time "2026-04-24 12:10:00" --pg-data-dir /var/lib/postgresql/data
+```
 
-## Determinism and Safety
+Behavior:
+1. Resolve base object from `meta/latest.json` (`latest_base`) unless `--s3-uri` is provided.
+2. Stop PostgreSQL service.
+3. Replace target `PGDATA` with extracted base backup.
+4. For `--type pitr`, write:
+   - `restore_command` (download WAL from `BACKUP_PREFIX_WAL`)
+   - `recovery_target_time`
+   - `recovery.signal`
+5. Start PostgreSQL and allow automatic WAL replay.
 
-- One restore target per execution.
-- Manual `--s3-uri` always overrides pointer selection.
-- Restore fails fast if no target DB URL argument is provided.
-- No secrets are hardcoded in scripts.
-- Backup upload is treated as critical; pointer update is best-effort.
+## Reliability Controls
+
+- `flock` prevents overlapping base backup jobs.
+- S3 uploads/downloads retry with exponential backoff (`BACKUP_AWS_MAX_ATTEMPTS`, default 3).
+- Scripts fail fast on missing critical env vars and invalid CLI arguments.
+- Logs include backup start/end and validation checkpoints.
+
+## Retention Strategy (R2 lifecycle policy)
+
+Do not delete objects in scripts. Use bucket lifecycle rules:
+- BASE backups: retain 7-30 days
+- WAL archives: retain 3-7 days
+
+## Migration Notes (from FULL+SNAPSHOT)
+
+What changed:
+- Removed logical snapshot backups (`backup-snapshot.sh` and snapshot scheduler/task paths).
+- Replaced logical full dump with physical base backup (`pg_basebackup`).
+- Pointer schema changed from `latest_full/latest_snapshot` to `latest_base`.
+- Restore modes changed from `full|snapshot` to `base|pitr`.
+
+Cutover sequence:
+1. Deploy new backup code and env vars (`BACKUP_PREFIX_BASE`, `BACKUP_PREFIX_WAL`).
+2. Enable PostgreSQL WAL archiving at infra level.
+3. Run one base backup and verify `meta/latest.json` has `latest_base`.
+4. Run a disposable PITR drill before declaring production-ready.

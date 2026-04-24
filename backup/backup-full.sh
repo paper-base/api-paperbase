@@ -22,15 +22,15 @@ if [[ -z "$bucket" ]]; then
   exit 1
 fi
 
-prefix="${BACKUP_PREFIX_FULL:-backups/full}"
+prefix="${BACKUP_PREFIX_BASE:-${BACKUP_PREFIX_FULL:-backups/base}}"
 prefix="${prefix#/}"
 prefix="${prefix%/}"
 
 lock_dir="$(paperbase_tmpdir)"
 mkdir -p "$lock_dir"
-exec 200>"$lock_dir/full.lock"
+exec 200>"$lock_dir/base.lock"
 if ! flock -n 200; then
-  paperbase_log "SKIP: another full backup is running."
+  paperbase_log "SKIP: another base backup is running."
   exit 0
 fi
 
@@ -38,27 +38,27 @@ paperbase_wait_for_postgres "$DIRECT_DATABASE_URL" || exit 1
 
 stamp="$(date -u +"%Y%m%d_%H%M%S")"
 path_date="$(date -u +"%Y/%m/%d")"
-remote_key="${prefix}/${path_date}/paperbase_${stamp}.sql.gz"
+remote_key="${prefix}/${path_date}/base_${stamp}.tar.gz"
 
-tmp_dir="$(mktemp -d "$(paperbase_tmpdir)/full.XXXXXX")"
+tmp_dir="$(mktemp -d "$(paperbase_tmpdir)/base.XXXXXX")"
 cleanup() {
   rm -rf "$tmp_dir"
 }
 trap cleanup EXIT INT TERM
 
-tmp_sql_gz="${tmp_dir}/dump.sql.gz"
-paperbase_log "Starting pg_dump (plain SQL, gzip) -> ${tmp_sql_gz##*/}"
-
-extra_args=()
-if [[ -n "${PG_DUMP_EXTRA_ARGS:-}" ]]; then
-  read -r -a extra_args <<<"$PG_DUMP_EXTRA_ARGS"
-fi
+tmp_base_tar_gz="${tmp_dir}/base.tar.gz"
+paperbase_log "backup_start type=base target=${tmp_base_tar_gz##*/}"
 
 set -o pipefail
-paperbase_run_nice pg_dump "${extra_args[@]}" "$DIRECT_DATABASE_URL" | gzip -1 >"$tmp_sql_gz"
+paperbase_run_nice pg_basebackup -D - -Ft -z -X fetch -d "$DIRECT_DATABASE_URL" >"$tmp_base_tar_gz"
+
+paperbase_log "backup_validate type=base check=gzip"
+gzip -t "$tmp_base_tar_gz"
+paperbase_log "backup_validate type=base check=tar"
+tar -tzf "$tmp_base_tar_gz" >/dev/null
 
 paperbase_log "Uploading s3://${bucket}/${remote_key}"
-paperbase_aws_s3_cp_with_retry "$tmp_sql_gz" "s3://${bucket}/${remote_key}"
+paperbase_aws_s3_cp_with_retry "$tmp_base_tar_gz" "s3://${bucket}/${remote_key}"
 
-paperbase_try_update_latest_pointer "$bucket" "$remote_key" ""
-paperbase_log "OK: full backup uploaded."
+paperbase_try_update_latest_pointer "$bucket" "$remote_key"
+paperbase_log "backup_end type=base status=ok remote=s3://${bucket}/${remote_key}"
