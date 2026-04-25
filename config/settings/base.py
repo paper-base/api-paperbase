@@ -2,7 +2,6 @@ from datetime import timedelta
 from pathlib import Path
 import os
 import sys
-import ssl
 import datetime
 from celery.schedules import crontab
 
@@ -332,12 +331,6 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
-CELERY_REDIS_BACKEND_USE_SSL = {
-    "ssl_cert_reqs": ssl.CERT_REQUIRED,
-}
-CELERY_BROKER_USE_SSL = {
-    "ssl_cert_reqs": ssl.CERT_REQUIRED,
-}
 CELERY_TIMEZONE = "UTC"
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
 CELERY_TASK_TIME_LIMIT = 600
