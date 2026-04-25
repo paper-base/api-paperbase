@@ -29,7 +29,7 @@ Backups are **physical** only: `pg_basebackup` copies the entire PostgreSQL data
 ## Storage Layout
 
 - BASE backups: `backups/base/YYYY/MM/DD/base_<timestamp>.tar.gz`
-- WAL archives: `backups/wal/<wal_file_name>`
+- WAL archives: `backups/wal/<wal_file_name>.gz` (gzip-compressed 16 MiB segments; typical object size about 1–3 MiB)
 - Latest pointer: `meta/latest.json`
 
 Example `meta/latest.json`:
@@ -89,20 +89,23 @@ Disable pruning only when necessary (e.g. forensic hold): set `BACKUP_PRUNE_ENAB
 
 ## WAL Archiving (infra-managed PostgreSQL)
 
-Enable on the PostgreSQL host/service:
+Enable on the PostgreSQL host/service. The repo ships `postgres-ssl/archive_wal.sh`, which **gzip-streams** each segment to R2/S3 as `%f.gz` (same env vars as other backup tooling: `BACKUP_S3_BUCKET`, optional `BACKUP_PREFIX_WAL`, `AWS_S3_ENDPOINT_URL`, `AWS_DEFAULT_REGION`, `BACKUP_AWS_MAX_ATTEMPTS`).
+
+Example `postgresql.conf` fragment:
 
 ```conf
 wal_level = replica
 archive_mode = on
-archive_command = 'aws s3 cp %p s3://$BACKUP_S3_BUCKET/backups/wal/%f --endpoint-url=$AWS_S3_ENDPOINT_URL'
+archive_command = '/usr/local/bin/archive_wal.sh %p %f'
 ```
 
-Production recommendation:
-- Wrap `archive_command` in a retry-capable shell wrapper that logs failures and returns non-zero on persistent error.
+Production notes:
+- Prefer the provided wrapper (retries, endpoint/region flags, compression) over a bare `aws s3 cp %p …/%f`.
+- If you ever stored **uncompressed** WAL as `%f` without `.gz`, PITR `restore_command` must match that layout (see restore script) or those objects must be migrated/renamed.
 
 Validation checklist:
 1. Force WAL switch (`SELECT pg_switch_wal();`).
-2. Confirm new object appears under `backups/wal/`.
+2. Confirm a new object appears under `backups/wal/` with a `.gz` suffix matching the WAL file name.
 3. Check PostgreSQL logs for archive success/failure entries.
 
 ## Restore Flow
@@ -126,7 +129,7 @@ Behavior:
 2. Stop PostgreSQL service.
 3. Replace target `PGDATA` with extracted base backup.
 4. For `--type pitr`, write:
-   - `restore_command` (download WAL from `BACKUP_PREFIX_WAL`)
+   - `restore_command` (download `BACKUP_PREFIX_WAL/%f.gz` from S3/R2, decompress with `gunzip -c` into `%p`)
    - `recovery_target_time`
    - `recovery.signal`
 5. Start PostgreSQL and allow automatic WAL replay.

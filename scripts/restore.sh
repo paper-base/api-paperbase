@@ -201,7 +201,7 @@ if [[ "$restore_type" == "pitr" ]]; then
   wal_prefix="${BACKUP_PREFIX_WAL:-backups/wal}"
   wal_prefix="${wal_prefix#/}"
   wal_prefix="${wal_prefix%/}"
-  restore_command="aws s3 cp s3://${bucket}/${wal_prefix}/%f %p --endpoint-url=${AWS_S3_ENDPOINT_URL} --region $(paperbase_aws_region)"
+  restore_command="aws s3 cp s3://${bucket}/${wal_prefix}/%f.gz - --endpoint-url=${AWS_S3_ENDPOINT_URL} --region $(paperbase_aws_region) | gunzip -c > %p"
   sudo tee -a "${pg_data_dir}/postgresql.auto.conf" >/dev/null <<EOF
 restore_command = '${restore_command}'
 recovery_target_time = '${target_time}'
