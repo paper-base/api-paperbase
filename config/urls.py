@@ -5,7 +5,7 @@ from django.urls import include, path
 
 import inngest.django
 from config.inngest import inngest_client
-from config.inngest_functions import inngest_functions
+from config import inngest_functions
 
 from config.health_views import HealthCheckView
 from engine.core.storefront_search_views import StorefrontSearchView
