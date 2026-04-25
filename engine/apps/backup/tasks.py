@@ -33,6 +33,45 @@ def _run_script(script_name: str) -> tuple[str, str]:
     return (proc.stdout or "").strip(), (proc.stderr or "").strip()
 
 
+def _execute_base_backup(task) -> None:
+    logger.info("Starting base backup task", extra={"task": task.name, "queue": "backup"})
+    try:
+        try:
+            counts = prune_noncritical_tables()
+            logger.info(
+                "Pre-base-backup prune finished",
+                extra={"task": task.name, "prune": prune_summary(counts)},
+            )
+        except Exception:
+            logger.exception(
+                "Pre-base-backup prune failed; continuing with pg_basebackup",
+                extra={"task": task.name},
+            )
+        stdout, stderr = _run_script("backup-base.sh")
+    except subprocess.CalledProcessError as exc:
+        logger.error(
+            "Base backup script failed",
+            extra={
+                "task": task.name,
+                "queue": "backup",
+                "returncode": exc.returncode,
+                "stdout": (exc.stdout or "").strip()[-4000:],
+                "stderr": (exc.stderr or "").strip()[-4000:],
+            },
+        )
+        raise task.retry(exc=exc, countdown=120)
+
+    logger.info(
+        "Base backup task completed",
+        extra={
+            "task": task.name,
+            "queue": "backup",
+            "stdout": stdout[-1000:],
+            "stderr": stderr[-1000:],
+        },
+    )
+
+
 @app.task(
     bind=True,
     autoretry_for=(subprocess.TimeoutExpired, OSError),
@@ -45,37 +84,7 @@ def _run_script(script_name: str) -> tuple[str, str]:
     name="engine.apps.backup.run_base_backup",
 )
 def run_base_backup(self) -> None:
-    logger.info("Starting base backup task", extra={"task": self.name, "queue": "backup"})
-    try:
-        try:
-            counts = prune_noncritical_tables()
-            logger.info(
-                "Pre-base-backup prune finished",
-                extra={"task": self.name, "prune": prune_summary(counts)},
-            )
-        except Exception:
-            logger.exception(
-                "Pre-base-backup prune failed; continuing with pg_basebackup",
-                extra={"task": self.name},
-            )
-        stdout, stderr = _run_script("backup-full.sh")
-    except subprocess.CalledProcessError as exc:
-        logger.error(
-            "Base backup script failed",
-            extra={
-                "task": self.name,
-                "queue": "backup",
-                "returncode": exc.returncode,
-                "stdout": (exc.stdout or "").strip()[-4000:],
-                "stderr": (exc.stderr or "").strip()[-4000:],
-            },
-        )
-        raise self.retry(exc=exc, countdown=120)
-
-    logger.info(
-        "Base backup task completed",
-        extra={"task": self.name, "queue": "backup", "stdout": stdout[-1000:], "stderr": stderr[-1000:]},
-    )
+    _execute_base_backup(self)
 
 
 @app.task(

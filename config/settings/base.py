@@ -413,7 +413,7 @@ CELERY_BEAT_SCHEDULE = {
     },
     "backup-base-daily": {
         "task": "engine.apps.backup.run_base_backup",
-        "schedule": env_crontab("BACKUP_CRON_BASE", os.getenv("BACKUP_CRON_FULL", "0 2 * * *")),
+        "schedule": env_crontab("BACKUP_CRON_BASE", "0 2 * * *"),
         "options": {"queue": "backup"},
     },
     # Steady-state prune (same rules as pre-base-backup); caps WAL/heap between daily bases.

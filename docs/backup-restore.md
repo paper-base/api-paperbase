@@ -14,10 +14,6 @@ This runbook describes the production backup architecture for PostgreSQL using B
 - `BACKUP_PREFIX_WAL` (default: `backups/wal`)
 - `TZ` (optional process timezone hint)
 
-Compatibility notes:
-- `BACKUP_PREFIX_FULL` is accepted as fallback for `BACKUP_PREFIX_BASE` during migration.
-- `BACKUP_CRON_FULL` is accepted as fallback for `BACKUP_CRON_BASE` during migration.
-
 Runtime requirement:
 - Celery worker must consume the `backup` queue in production (base backup task).
 - General Celery workers process the default queue for periodic maintenance (including steady-state table prune).
@@ -49,7 +45,7 @@ Example `meta/latest.json`:
 
 1. Celery Beat enqueues the base backup task on the `backup` queue.
 2. Worker runs **pre-base prune** (`engine.apps.backup.prune.prune_noncritical_tables`): batched, time-based deletes on non-critical tables (see next section). Skipped entirely when `BACKUP_PRUNE_ENABLED=false`. If prune raises an unexpected error, the worker logs it and **still runs** `pg_basebackup` so the base backup is not blocked.
-3. Worker runs `backup/backup-full.sh` (entrypoint for base backups).
+3. Worker runs `backup/backup-base.sh` (entrypoint for base backups).
 4. Script runs `pg_basebackup -D - -Ft -z -X fetch` and writes `base_<timestamp>.tar.gz`.
 5. Script validates backup integrity (`gzip -t` + `tar -tzf`).
 6. Artifact is uploaded to R2.

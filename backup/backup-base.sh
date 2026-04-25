@@ -22,7 +22,7 @@ if [[ -z "$bucket" ]]; then
   exit 1
 fi
 
-prefix="${BACKUP_PREFIX_BASE:-${BACKUP_PREFIX_FULL:-backups/base}}"
+prefix="${BACKUP_PREFIX_BASE:-backups/base}"
 prefix="${prefix#/}"
 prefix="${prefix%/}"
 
