@@ -58,6 +58,12 @@ class AdminCustomerViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
                 | Q(phone__icontains=search)
             )
 
+        is_repeat_customer = (self.request.query_params.get("is_repeat_customer") or "").strip().lower()
+        if is_repeat_customer in {"true", "1", "yes"}:
+            qs = qs.filter(is_repeat_customer=True)
+        elif is_repeat_customer in {"false", "0", "no"}:
+            qs = qs.filter(is_repeat_customer=False)
+
         if self.action == "list":
             qs = annotate_queryset_list_purchase_metrics(qs)
         return qs

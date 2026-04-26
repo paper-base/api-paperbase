@@ -1420,6 +1420,41 @@ class CrossTenantAdminIsolationTests(TestCase):
         self.assertIn(self.customer_a.public_id, public_ids)
         self.assertNotIn(self.customer_b.public_id, public_ids)
 
+    def test_admin_customer_list_filters_by_repeat_customer_flag(self):
+        """Customer list repeat filter should scope to repeat/non-repeat within active store."""
+        repeat_customer = Customer.objects.create(
+            store=self.store_a,
+            user=self.admin_a,
+            name="Repeat Customer",
+            phone="01712345671",
+            email="repeat-a@example.com",
+            is_repeat_customer=True,
+        )
+        non_repeat_customer = Customer.objects.create(
+            store=self.store_a,
+            user=self.admin_a,
+            name="Non Repeat Customer",
+            phone="01712345672",
+            email="non-repeat-a@example.com",
+            is_repeat_customer=False,
+        )
+
+        self._auth_as(self.admin_a, self.store_a)
+
+        repeat_resp = self.client.get("/api/v1/admin/customers/?is_repeat_customer=true")
+        self.assertEqual(repeat_resp.status_code, 200)
+        repeat_results = repeat_resp.data.get("results", repeat_resp.data)
+        repeat_ids = [item.get("public_id") for item in repeat_results]
+        self.assertIn(repeat_customer.public_id, repeat_ids)
+        self.assertNotIn(non_repeat_customer.public_id, repeat_ids)
+
+        non_repeat_resp = self.client.get("/api/v1/admin/customers/?is_repeat_customer=false")
+        self.assertEqual(non_repeat_resp.status_code, 200)
+        non_repeat_results = non_repeat_resp.data.get("results", non_repeat_resp.data)
+        non_repeat_ids = [item.get("public_id") for item in non_repeat_results]
+        self.assertIn(non_repeat_customer.public_id, non_repeat_ids)
+        self.assertNotIn(repeat_customer.public_id, non_repeat_ids)
+
     def test_admin_customer_detail_cross_store_denied(self):
         """Store A admin fetching store B's customer returns 404."""
         self._auth_as(self.admin_a, self.store_a)
