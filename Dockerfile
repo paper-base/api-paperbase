@@ -6,13 +6,21 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    awscli \
-    bash \
-    gzip \
-    libpq5 \
-    postgresql-client \
-    util-linux \
+# Add Postgres 18 apt repository first — default Debian repos only have up to 17
+RUN apt-get update && apt-get install -y curl gnupg lsb-release \
+    && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+       | gpg --dearmor -o /usr/share/keyrings/postgresql.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/postgresql.gpg] \
+       https://apt.postgresql.org/pub/repos/apt \
+       $(lsb_release -cs)-pgdg main" \
+       > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update && apt-get install -y \
+       postgresql-client-18 \
+       awscli \
+       tar \
+       gzip \
+       util-linux \
+       curl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt /app/

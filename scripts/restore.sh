@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# PITR restore helper for Paperbase PostgreSQL BASE+WAL architecture.
+# Restore helper for Paperbase pg_dump backups.
 # Usage:
-#   ./scripts/restore.sh <DATABASE_URL> --type base --pg-data-dir /var/lib/postgresql/data
-#   ./scripts/restore.sh <DATABASE_URL> --type pitr --target-time "YYYY-MM-DD HH:MM:SS" --pg-data-dir /var/lib/postgresql/data
+#   ./scripts/restore.sh <DATABASE_URL>
+#   ./scripts/restore.sh <DATABASE_URL> --s3-uri s3://bucket/path/to/base_*.dump
 # Optional overrides:
-#   --s3-uri s3://bucket/path/to/base_*.tar.gz
-#   --service-name postgresql
+#   --clean (drop existing schema objects before restore)
 #   --dry-run
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -17,11 +16,14 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/restore.sh <DATABASE_URL> --type base|pitr --pg-data-dir /path/to/pgdata [--target-time "YYYY-MM-DD HH:MM:SS"] [--s3-uri s3://bucket/path/base_*.tar.gz] [--service-name postgresql] [--dry-run]
+  scripts/restore.sh <DATABASE_URL> [--s3-uri s3://bucket/path/base_*.dump] [--clean] [--dry-run]
 
-Env: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_S3_ENDPOINT_URL.
-For latest pointer resolution: also BACKUP_S3_BUCKET.
-WAL restore prefix: BACKUP_PREFIX_WAL (default backups/wal).
+Env:
+  AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_S3_ENDPOINT_URL.
+  For latest pointer resolution: also BACKUP_S3_BUCKET (or AWS_STORAGE_BUCKET_NAME).
+Notes:
+  - Restores a pg_dump custom-format archive with pg_restore.
+  - --clean passes --clean --if-exists to pg_restore (destructive).
 EOF
   exit "${1:-0}"
 }
@@ -38,46 +40,11 @@ target_url="$1"
 shift
 
 dry_run=0
-restore_type="base"
 s3_uri=""
-target_time=""
-pg_data_dir=""
-service_name="postgresql"
+restore_clean=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --type)
-      if [[ -z "${2:-}" ]]; then
-        paperbase_log "ERROR: --type requires a value: base or pitr"
-        exit 1
-      fi
-      restore_type="$2"
-      shift 2
-      ;;
-    --target-time)
-      if [[ -z "${2:-}" ]]; then
-        paperbase_log "ERROR: --target-time requires a value"
-        exit 1
-      fi
-      target_time="$2"
-      shift 2
-      ;;
-    --pg-data-dir)
-      if [[ -z "${2:-}" ]]; then
-        paperbase_log "ERROR: --pg-data-dir requires a value"
-        exit 1
-      fi
-      pg_data_dir="$2"
-      shift 2
-      ;;
-    --service-name)
-      if [[ -z "${2:-}" ]]; then
-        paperbase_log "ERROR: --service-name requires a value"
-        exit 1
-      fi
-      service_name="$2"
-      shift 2
-      ;;
     --s3-uri)
       if [[ -z "${2:-}" ]]; then
         paperbase_log "ERROR: --s3-uri requires a value"
@@ -85,6 +52,10 @@ while [[ $# -gt 0 ]]; do
       fi
       s3_uri="$2"
       shift 2
+      ;;
+    --clean)
+      restore_clean=1
+      shift
       ;;
     --dry-run)
       dry_run=1
@@ -98,19 +69,6 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ "$restore_type" != "base" && "$restore_type" != "pitr" ]]; then
-  paperbase_log "ERROR: --type must be one of: base, pitr"
-  exit 1
-fi
-if [[ -z "$pg_data_dir" ]]; then
-  paperbase_log "ERROR: --pg-data-dir is required for host-level restore"
-  exit 1
-fi
-if [[ "$restore_type" == "pitr" && -z "$target_time" ]]; then
-  paperbase_log "ERROR: --target-time is required for --type pitr"
-  exit 1
-fi
-
 paperbase_require_env AWS_ACCESS_KEY_ID || exit 1
 paperbase_require_env AWS_SECRET_ACCESS_KEY || exit 1
 paperbase_require_env AWS_S3_ENDPOINT_URL || exit 1
@@ -119,16 +77,6 @@ bucket="$(paperbase_backup_bucket)"
 if [[ -z "$s3_uri" && -z "$bucket" ]]; then
   paperbase_log "ERROR: set BACKUP_S3_BUCKET (or AWS_STORAGE_BUCKET_NAME fallback) when --s3-uri is not provided"
   exit 1
-fi
-if [[ "$restore_type" == "pitr" && -z "$bucket" ]]; then
-  paperbase_log "ERROR: PITR mode requires BACKUP_S3_BUCKET (or AWS_STORAGE_BUCKET_NAME) for WAL restore_command"
-  exit 1
-fi
-if [[ "$restore_type" == "pitr" ]]; then
-  if ! date -d "$target_time" +"%Y-%m-%d %H:%M:%S" >/dev/null 2>&1; then
-    paperbase_log "ERROR: --target-time must parse as 'YYYY-MM-DD HH:MM:SS'"
-    exit 1
-  fi
 fi
 
 if [[ -z "$target_url" ]]; then
@@ -176,41 +124,34 @@ fname="${uri##*/}"
 local_path="${tmp_root}/${fname}"
 
 if ((dry_run)); then
-  paperbase_log "DRY-RUN: would download $uri -> $local_path and extract to $pg_data_dir"
-  paperbase_log "DRY-RUN: would stop/start service=$service_name mode=$restore_type"
+  paperbase_log "DRY-RUN: would download $uri -> $local_path"
+  if ((restore_clean)); then
+    paperbase_log "DRY-RUN: would run pg_restore --clean --if-exists to ${target_url}"
+  else
+    paperbase_log "DRY-RUN: would run pg_restore to ${target_url}"
+  fi
   exit 0
 fi
 
 paperbase_log "Downloading..."
 paperbase_aws_s3_download_with_retry "$uri" "$local_path"
 
-if [[ "$fname" != *.tar.gz ]]; then
-  paperbase_log "ERROR: unsupported file type for BASE restore (expected .tar.gz)"
+if [[ "$fname" != *.dump ]]; then
+  paperbase_log "ERROR: unsupported file type for restore (expected .dump)"
   exit 1
 fi
 
-paperbase_log "restore_start type=${restore_type} service=${service_name} data_dir=${pg_data_dir}"
-sudo systemctl stop "$service_name"
-sudo rm -rf "$pg_data_dir"
-sudo mkdir -p "$pg_data_dir"
-sudo tar -xzf "$local_path" -C "$pg_data_dir"
-sudo chown -R postgres:postgres "$pg_data_dir"
-sudo chmod 700 "$pg_data_dir"
+paperbase_log "restore_start type=pg_dump target_db=${target_url}"
 
-if [[ "$restore_type" == "pitr" ]]; then
-  wal_prefix="${BACKUP_PREFIX_WAL:-backups/wal}"
-  wal_prefix="${wal_prefix#/}"
-  wal_prefix="${wal_prefix%/}"
-  restore_command="aws s3 cp s3://${bucket}/${wal_prefix}/%f.gz - --endpoint-url=${AWS_S3_ENDPOINT_URL} --region $(paperbase_aws_region) | gunzip -c > %p"
-  sudo tee -a "${pg_data_dir}/postgresql.auto.conf" >/dev/null <<EOF
-restore_command = '${restore_command}'
-recovery_target_time = '${target_time}'
-EOF
-  sudo touch "${pg_data_dir}/recovery.signal"
-else
-  sudo sed -i '/^restore_command = /d;/^recovery_target_time = /d' "${pg_data_dir}/postgresql.auto.conf" 2>/dev/null || true
-  sudo rm -f "${pg_data_dir}/recovery.signal"
+pg_restore_args=(
+  --no-password
+  --verbose
+  --dbname="$target_url"
+)
+if ((restore_clean)); then
+  pg_restore_args+=(--clean --if-exists)
 fi
 
-sudo systemctl start "$service_name"
-paperbase_log "restore_end type=${restore_type} status=ok target_db=${target_url}"
+pg_restore "${pg_restore_args[@]}" "$local_path"
+
+paperbase_log "restore_end type=pg_dump status=ok target_db=${target_url}"
