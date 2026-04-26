@@ -41,4 +41,4 @@ echo "Collecting static files..."
 python manage.py collectstatic --noinput
 echo "Static files ready"
 echo "Starting server..."
-exec gunicorn -c gunicorn.conf.py -k uvicorn.workers.UvicornWorker config.asgi:application
+exec newrelic-admin run-program gunicorn config.wsgi:application --bind 0.0.0.0:${PORT:-8000}
