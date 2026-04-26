@@ -415,15 +415,31 @@ CELERY_TASK_ROUTES = {
 }
 
 CELERY_BEAT_SCHEDULE = {
+    # CAPI flush coordinator
     "capi-flush-coordinator": {
         "task": "engine.apps.tracking.coordinate_capi_flush",
         "schedule": CAPI_FLUSH_INTERVAL_SECONDS,
         "options": {"queue": "capi"},
     },
+    
+    # Cleanup old event logs — every 6 hours
     "cleanup-old-event-logs": {
         "task": "engine.apps.tracking.cleanup_old_event_logs",
         "schedule": crontab(minute="0", hour="*/6"),
         "options": {"queue": "default"},
+    },
+        # Inventory sync — every hour
+    "inventory-sync": {
+        "task": "engine.apps.inventory.schedule_product_stock_cache_all_stores",
+        "schedule": crontab(minute="0"),  # top of every hour
+        "options": {"queue": "default"},
+    },
+
+    # Base backup — every day at midnight UTC
+    "base-backup": {
+        "task": "engine.apps.backup.run_base_backup",
+        "schedule": crontab(hour="0", minute="0"),
+        "options": {"queue": "backup"},
     },
 }
 
