@@ -26,7 +26,7 @@ from .constants import (
     SUBSCRIPTION_PAYMENT,
     TWO_FA_DISABLE,
 )
-from engine.utils.time import format_bd_date, format_bd_with_label
+from engine.utils.time import format_bd, format_bd_date, format_bd_with_label
 
 from .tasks import send_email_task, send_order_email_task
 
@@ -302,6 +302,8 @@ def queue_two_fa_disabled_email(user) -> None:
         {
             "user_name": user.get_short_name() or user.email,
             "user_email": user.email,
-            "disabled_at": format_bd_with_label(),
+            # Keep raw BD datetime here; template controls how timezone label is shown
+            # so we don't end up with duplicated "(GMT+6)" in customized templates.
+            "disabled_at": format_bd(),
         },
     )

@@ -315,7 +315,7 @@ DEFAULT_EMAIL_TEMPLATES: dict[str, dict[str, str]] = {
         "html_body": (
             "<p>Hello {{ user_name|default:user_email }},</p>"
             "<p>Two-factor authentication (2FA) was <strong>disabled</strong> for your account.</p>"
-            "<p><strong>When</strong> {{ disabled_at }}</p>"
+            "<p><strong>When?</strong> {{ disabled_at }} (GMT+6)</p>"
             "<p>Only someone with access to your password could have done this. If it was you, no action is needed. "
             "If you did not turn off 2FA, sign in as soon as you can, turn 2FA back on, change your password, "
             "and contact support.</p>"
@@ -323,7 +323,7 @@ DEFAULT_EMAIL_TEMPLATES: dict[str, dict[str, str]] = {
         "text_body": (
             "Hello {{ user_name|default:user_email }},\n\n"
             "Two-factor authentication was disabled for your account.\n"
-            "Time: {{ disabled_at }}\n\n"
+            "Time: {{ disabled_at }} (GMT+6)\n\n"
             "If this was not you, secure your account immediately: sign in, re-enable 2FA, change your password, "
             "and contact support.\n"
         ),
