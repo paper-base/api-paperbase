@@ -7,7 +7,7 @@ import os
 from django.core.cache import cache
 
 NOTIFICATIONS_SUMMARY_CACHE_TTL = int(
-    os.getenv("NOTIFICATIONS_SUMMARY_CACHE_TTL", "20")
+    os.getenv("NOTIFICATIONS_SUMMARY_CACHE_TTL", "60")
 )
 
 

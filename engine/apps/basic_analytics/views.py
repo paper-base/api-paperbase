@@ -27,10 +27,10 @@ from engine.utils.bd_query import filter_by_bd_date_range, trunc_created_bd
 from engine.utils.time import bd_today
 
 # Tenant-scoped cache for GET admin/basic-analytics/overview/ final JSON only.
-DASHBOARD_STATS_CACHE_TTL_LIVE_SECONDS = 45
+DASHBOARD_STATS_CACHE_TTL_LIVE_SECONDS = 90
 DASHBOARD_STATS_CACHE_TTL_HISTORICAL_SECONDS = 600
 # Normalized day-bucket overview: short TTL (includes "today" in canonical window).
-DASHBOARD_LIVE_OVERVIEW_TTL_SECONDS = 20
+DASHBOARD_LIVE_OVERVIEW_TTL_SECONDS = 60
 
 logger = logging.getLogger(__name__)
 

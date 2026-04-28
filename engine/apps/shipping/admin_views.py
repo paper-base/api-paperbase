@@ -73,6 +73,11 @@ class AdminShippingZoneViewSet(
             raise ValidationError({"detail": "Could not update shipping zone due to a conflicting rule."})
         invalidate_shipping_cache(store.public_id)
 
+    def perform_destroy(self, instance):
+        store = self._get_store_or_error()
+        super().perform_destroy(instance)
+        invalidate_shipping_cache(store.public_id)
+
 
 class AdminShippingMethodViewSet(
     mixins.CreateModelMixin,
@@ -121,6 +126,11 @@ class AdminShippingMethodViewSet(
             serializer.save()
         except IntegrityError:
             raise ValidationError({"detail": "Could not update shipping method due to a conflicting rule."})
+        invalidate_shipping_cache(store.public_id)
+
+    def perform_destroy(self, instance):
+        store = self._get_store_or_error()
+        super().perform_destroy(instance)
         invalidate_shipping_cache(store.public_id)
 
 
@@ -178,5 +188,10 @@ class AdminShippingRateViewSet(
                     )
                 }
             )
+        invalidate_shipping_cache(store.public_id)
+
+    def perform_destroy(self, instance):
+        store = self._get_store_or_error()
+        super().perform_destroy(instance)
         invalidate_shipping_cache(store.public_id)
 

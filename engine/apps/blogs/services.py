@@ -48,18 +48,18 @@ def get_public_blogs(store, request, *, tag_slug: str | None = None):
 def get_public_blog_detail(store, public_id: str, request):
     """Return serialized detail for a published storefront blog, or None if missing."""
     from .serializers import PublicBlogDetailSerializer
+    cache_key = cache_service.build_key(store.public_id, "blog", public_id)
 
-    blog = (
-        _public_list_queryset(store)
-        .filter(public_id=public_id)
-        .first()
-    )
-    if blog is None:
-        return None
-    # Fire-and-forget view counter bump (F-expression, no race).
-    Blog.objects.filter(pk=blog.pk).update(views=F("views") + 1)
-    blog.views = (blog.views or 0) + 1
-    return PublicBlogDetailSerializer(blog, context={"request": request}).data
+    def fetcher():
+        blog = _public_list_queryset(store).filter(public_id=public_id).first()
+        if blog is None:
+            return None
+        # Fire-and-forget view counter bump (F-expression, no race).
+        Blog.objects.filter(pk=blog.pk).update(views=F("views") + 1)
+        blog.views = (blog.views or 0) + 1
+        return PublicBlogDetailSerializer(blog, context={"request": request}).data
+
+    return cache_service.get_or_set(cache_key, fetcher, 600)
 
 
 # --- Dashboard service helpers -----------------------------------------------
@@ -83,3 +83,4 @@ def soft_delete_blog(blog: Blog) -> Blog:
 def invalidate_blog_cache(store_public_id: str) -> None:
     """Clear all blog cache entries for a store."""
     cache_service.invalidate_store_resource(store_public_id, "blogs")
+    cache_service.invalidate_store_resource(store_public_id, "blog")

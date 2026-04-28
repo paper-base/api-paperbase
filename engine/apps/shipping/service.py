@@ -161,6 +161,7 @@ def get_shipping_options(store, zone_public_id: str, order_total_str: str | None
 def invalidate_shipping_cache(store_public_id: str) -> None:
     """Clear shipping option caches for a store."""
     cache_service.invalidate_store_resource(store_public_id, "shipping_options")
+    cache_service.delete(cache_service.build_key(store_public_id, "shipping_zones_catalog"))
 
 
 # ---------------------------------------------------------------------------
@@ -175,21 +176,26 @@ def build_shipping_zones_catalog(store: Store) -> list[dict]:
     For each distinct (min_order_total, max_order_total) band on rates that
     apply to the zone (and method-zone eligibility), expose the lowest price.
     """
-    zones = ShippingZone.objects.filter(store=store, is_active=True).order_by("name")
-    out: list[dict] = []
-    for zone in zones:
-        out.append(
-            {
-                "zone_public_id": zone.public_id,
-                "name": zone.name,
-                "estimated_days": zone.estimated_delivery_text or "",
-                "is_active": zone.is_active,
-                "created_at": zone.created_at.isoformat() if zone.created_at else None,
-                "updated_at": zone.updated_at.isoformat() if zone.updated_at else None,
-                "cost_rules": _zone_cost_rules(store, zone),
-            }
-        )
-    return out
+    key = cache_service.build_key(store.public_id, "shipping_zones_catalog")
+
+    def fetcher():
+        zones = ShippingZone.objects.filter(store=store, is_active=True).order_by("name")
+        out: list[dict] = []
+        for zone in zones:
+            out.append(
+                {
+                    "zone_public_id": zone.public_id,
+                    "name": zone.name,
+                    "estimated_days": zone.estimated_delivery_text or "",
+                    "is_active": zone.is_active,
+                    "created_at": zone.created_at.isoformat() if zone.created_at else None,
+                    "updated_at": zone.updated_at.isoformat() if zone.updated_at else None,
+                    "cost_rules": _zone_cost_rules(store, zone),
+                }
+            )
+        return out
+
+    return cache_service.get_or_set(key, fetcher, 300)
 
 
 def _zone_cost_rules(store: Store, zone: ShippingZone) -> list[dict]:

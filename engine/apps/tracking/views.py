@@ -241,10 +241,10 @@ class TrackingEventIngestView(APIView):
             )
             return Response({"detail": "Invalid event_id."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Lightweight replay protection: ignore duplicates for same store + event_id within 10s.
+        # Lightweight replay protection: ignore duplicates for same store + event_id within 60s.
         dedupe_key = cache_service.build_key(store_public_id_for_log, "tracking_ingest_dedupe", event_id_for_log)
         try:
-            first_seen = cache.add(dedupe_key, "1", timeout=10)
+            first_seen = cache.add(dedupe_key, "1", timeout=60)
         except Exception:
             first_seen = True
         if not first_seen:
