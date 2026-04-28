@@ -81,7 +81,7 @@ class SupportTicketAttachment(models.Model):
         on_delete=models.CASCADE,
         related_name="attachments",
     )
-    file = models.FileField(upload_to=tenant_support_attachment_upload_to)
+    file = models.FileField(upload_to=tenant_support_attachment_upload_to, max_length=500)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

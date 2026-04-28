@@ -27,6 +27,7 @@ _PREFIXES: dict[str, str] = {
     "rate": "srt",
     "ticket": "tkt",
     "banner": "ban",
+    "bannerimage": "bni",
     "plan": "pln",
     "subscription": "sub",
     "payment": "pay",

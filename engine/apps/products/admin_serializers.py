@@ -39,13 +39,18 @@ class AdminProductImageSerializer(SafeModelSerializer):
         queryset=Product.objects.none(),
         source='product',
     )
+    image_key = serializers.CharField(write_only=True, required=False, allow_blank=False)
 
     class Meta:
         model = ProductImage
-        fields = ['public_id', 'product_public_id', 'image', 'order']
+        fields = ['public_id', 'product_public_id', 'image', 'image_key', 'order']
         read_only_fields = ['public_id']
+        extra_kwargs = {"image": {"read_only": True}}
 
     def validate(self, attrs):
+        image_key = attrs.pop("image_key", None)
+        if image_key:
+            attrs["image"] = image_key
         product = attrs.get('product')
         if product is None or not getattr(product, 'pk', None):
             return attrs
@@ -68,6 +73,20 @@ class AdminProductImageSerializer(SafeModelSerializer):
         if store_id is not None:
             qs = Product.objects.filter(store_id=store_id)
         self.fields["product_public_id"].queryset = qs
+
+    def update(self, instance, validated_data):
+        old_image_key = (
+            instance.image.name
+            if instance.image and getattr(instance.image, "name", None)
+            else None
+        )
+        image_provided = "image" in validated_data
+
+        instance = super().update(instance, validated_data)
+
+        if image_provided and old_image_key and old_image_key != getattr(instance.image, "name", ""):
+            schedule_media_deletion_from_keys([old_image_key])
+        return instance
 
 
 class AdminProductListSerializer(SafeModelSerializer):
@@ -123,6 +142,7 @@ class AdminProductListSerializer(SafeModelSerializer):
 
 class AdminProductSerializer(SafeModelSerializer):
     images = AdminProductImageSerializer(many=True, read_only=True)
+    image_key = serializers.CharField(write_only=True, required=False, allow_blank=False)
     remove_image = serializers.CharField(write_only=True, required=False, allow_blank=True)
     brand = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     original_price = AllowBlankNullDecimalField(
@@ -143,7 +163,7 @@ class AdminProductSerializer(SafeModelSerializer):
         model = Product
         fields = [
             'public_id', 'name', 'brand', 'slug', 'price', 'original_price',
-            'image', 'remove_image', 'category', 'category_name',
+            'image', 'image_key', 'remove_image', 'category', 'category_name',
             'description',
             'variant_count', 'total_stock', 'available_quantity', 'stock_source',
             'is_active', 'extra_data', 'images',
@@ -203,10 +223,16 @@ class AdminProductSerializer(SafeModelSerializer):
         return super().validate(attrs)
 
     def create(self, validated_data):
+        image_key = validated_data.pop("image_key", None)
+        if image_key:
+            validated_data["image"] = image_key
         validated_data.pop("remove_image", None)
         return super().create(validated_data)
 
     def update(self, instance, validated_data):
+        image_key = validated_data.pop("image_key", None)
+        if image_key:
+            validated_data["image"] = image_key
         remove_raw = validated_data.pop("remove_image", None)
         remove_flag = remove_raw is True or (
             isinstance(remove_raw, str) and remove_raw.strip().lower() in ("true", "1")
@@ -220,16 +246,18 @@ class AdminProductSerializer(SafeModelSerializer):
 
         image_provided = "image" in validated_data
         incoming_image = validated_data.get("image") if image_provided else None
+        should_delete_old_main = False
 
         if remove_flag and not image_provided:
-            if old_main_key:
-                schedule_media_deletion_from_keys([old_main_key])
             validated_data["image"] = None
+            should_delete_old_main = bool(old_main_key)
         elif image_provided and incoming_image is not None and old_main_key:
-            schedule_media_deletion_from_keys([old_main_key])
+            should_delete_old_main = True
 
         old_category_id = instance.category_id
         instance = super().update(instance, validated_data)
+        if should_delete_old_main and old_main_key:
+            schedule_media_deletion_from_keys([old_main_key])
         if instance.category_id != old_category_id:
             from django.db.models import Max
 
@@ -255,6 +283,7 @@ class AdminCategorySerializer(SafeModelSerializer):
         required=False,
     )
     parent_name = serializers.SerializerMethodField()
+    image_key = serializers.CharField(write_only=True, required=False, allow_blank=False)
 
     class Meta:
         model = Category
@@ -264,6 +293,7 @@ class AdminCategorySerializer(SafeModelSerializer):
             "slug",
             "description",
             "image",
+            "image_key",
             "parent",
             "parent_name",
             "order",
@@ -272,6 +302,7 @@ class AdminCategorySerializer(SafeModelSerializer):
             "child_count",
         ]
         read_only_fields = ["public_id", "slug"]
+        extra_kwargs = {"image": {"read_only": True}}
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -324,6 +355,29 @@ class AdminCategorySerializer(SafeModelSerializer):
             parent=parent,
         )
         return super().validate(attrs)
+
+    def create(self, validated_data):
+        image_key = validated_data.pop("image_key", None)
+        if image_key:
+            validated_data["image"] = image_key
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        image_key = validated_data.pop("image_key", None)
+        if image_key:
+            validated_data["image"] = image_key
+        old_image_key = (
+            instance.image.name
+            if instance.image and getattr(instance.image, "name", None)
+            else None
+        )
+        image_provided = "image" in validated_data
+
+        instance = super().update(instance, validated_data)
+
+        if image_provided and old_image_key and old_image_key != getattr(instance.image, "name", ""):
+            schedule_media_deletion_from_keys([old_image_key])
+        return instance
 
 
 class AdminProductAttributeValueSerializer(SafeModelSerializer):

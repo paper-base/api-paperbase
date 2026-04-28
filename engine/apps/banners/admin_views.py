@@ -16,7 +16,7 @@ from .services import invalidate_banner_cache
 class AdminBannerViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
     parser_classes = [MultiPartParser, FormParser, JSONParser]
     serializer_class = AdminBannerSerializer
-    queryset = Banner.objects.all()
+    queryset = Banner.objects.prefetch_related("images").all()
     lookup_field = 'public_id'
 
     def get_queryset(self):

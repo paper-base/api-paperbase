@@ -6,8 +6,8 @@ from .models import SupportTicket, SupportTicketAttachment
 
 
 class SupportTicketCreateSerializer(SafeModelSerializer):
-    attachments = serializers.ListField(
-        child=serializers.FileField(),
+    attachment_keys = serializers.ListField(
+        child=serializers.CharField(allow_blank=False),
         required=False,
         allow_empty=True,
         write_only=True,
@@ -24,14 +24,14 @@ class SupportTicketCreateSerializer(SafeModelSerializer):
             "order_number",
             "category",
             "priority",
-            "attachments",
+            "attachment_keys",
         ]
 
     def create(self, validated_data):
-        attachments = validated_data.pop("attachments", [])
+        attachment_keys = validated_data.pop("attachment_keys", [])
         ticket = super().create(validated_data)
-        for f in attachments:
-            SupportTicketAttachment.objects.create(ticket=ticket, file=f)
+        for key in attachment_keys:
+            SupportTicketAttachment.objects.create(ticket=ticket, file=key)
         return ticket
 
 

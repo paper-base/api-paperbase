@@ -95,6 +95,25 @@ def tenant_banner_image_upload_to(instance, filename: str) -> str:
     return f"tenants/{store_pub}/banners/{banner_pub}.{ext}"
 
 
+def tenant_banner_gallery_image_upload_to(instance, filename: str) -> str:
+    """Extra banner images under the same tenant store folder as the main banner image."""
+    if not getattr(instance, "banner_id", None):
+        raise ValueError("BannerImage missing banner for upload path")
+    banner = instance.banner
+    if not banner:
+        raise ValueError("BannerImage.banner is required for upload path")
+    if not getattr(banner, "store_id", None):
+        raise ValueError("Banner missing store for gallery upload path")
+    store = banner.store
+    if not store:
+        raise ValueError("Banner.store is required for gallery upload path")
+    store_pub = _non_empty_public_id(getattr(store, "public_id", None), label="store.public_id")
+    banner_pub = _non_empty_public_id(getattr(banner, "public_id", None), label="banner.public_id")
+    image_pub = _non_empty_public_id(getattr(instance, "public_id", None), label="bannerimage.public_id")
+    ext = media_file_extension(filename)
+    return f"tenants/{store_pub}/banners/{banner_pub}_{image_pub}.{ext}"
+
+
 def tenant_blog_featured_image_upload_to(instance, filename: str) -> str:
     if not getattr(instance, "store_id", None):
         raise ValueError("Blog missing store for upload path")

@@ -30,6 +30,7 @@ class AdminBlogSerializer(SafeModelSerializer):
     """Dashboard CRUD serializer — public_id-only external references."""
 
     featured_image_url = serializers.SerializerMethodField(read_only=True)
+    featured_image_key = serializers.CharField(write_only=True, required=False, allow_blank=False)
     remove_featured_image = serializers.CharField(
         write_only=True, required=False, allow_blank=True
     )
@@ -54,6 +55,7 @@ class AdminBlogSerializer(SafeModelSerializer):
             "content",
             "excerpt",
             "featured_image",
+            "featured_image_key",
             "remove_featured_image",
             "featured_image_url",
             "meta_title",
@@ -117,6 +119,9 @@ class AdminBlogSerializer(SafeModelSerializer):
         return tags
 
     def validate(self, attrs):
+        image_key = attrs.pop("featured_image_key", None)
+        if image_key:
+            attrs["featured_image"] = image_key
         # Multipart parsers may pass "" for cleared file fields; normalize before save.
         if attrs.get("featured_image") == "":
             attrs["featured_image"] = None
@@ -153,16 +158,18 @@ class AdminBlogSerializer(SafeModelSerializer):
         )
         image_provided = "featured_image" in validated_data
         incoming_image = validated_data.get("featured_image") if image_provided else None
+        should_delete_old = False
 
         if remove_flag and not image_provided:
-            if old_key:
-                schedule_media_deletion_from_keys([old_key])
             validated_data["featured_image"] = None
+            should_delete_old = bool(old_key)
         elif image_provided and incoming_image is not None and old_key:
-            schedule_media_deletion_from_keys([old_key])
+            should_delete_old = True
 
         tags, clear_tags = self._pop_relations(validated_data)
         instance = super().update(instance, validated_data)
+        if should_delete_old and old_key:
+            schedule_media_deletion_from_keys([old_key])
         if clear_tags:
             instance.tags.clear()
         elif tags is not None:

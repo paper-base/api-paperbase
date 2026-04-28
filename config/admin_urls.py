@@ -33,6 +33,7 @@ from engine.apps.shipping.admin_views import (
 )
 from engine.apps.couriers.admin_views import AdminCourierViewSet
 from engine.apps.marketing_integrations.admin_views import AdminMarketingIntegrationViewSet
+from engine.core.presign_views import PresignUploadView
 
 from engine.apps.basic_analytics.views import BasicAnalyticsOverviewView
 
@@ -73,6 +74,7 @@ router.register(r'couriers', AdminCourierViewSet, basename='admin-couriers')
 router.register(r'marketing-integrations', AdminMarketingIntegrationViewSet, basename='admin-marketing-integrations')
 
 urlpatterns = [
+    path("media/presign/", PresignUploadView.as_view(), name="media-presign"),
     path("orders/export/", OrderExportCreateView.as_view(), name="admin-order-export-create"),
     path(
         "orders/export/<uuid:job_id>/",

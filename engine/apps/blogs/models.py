@@ -82,6 +82,7 @@ class Blog(models.Model):
         upload_to=tenant_blog_featured_image_upload_to,
         blank=True,
         null=True,
+        max_length=500,
     )
 
     meta_title = models.CharField(max_length=255, blank=True)

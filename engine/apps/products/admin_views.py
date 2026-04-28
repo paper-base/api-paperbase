@@ -1,10 +1,11 @@
 from decimal import Decimal, InvalidOperation
 
 from django.db import transaction
+from django.db.models.deletion import ProtectedError
 from django.db.models import Count, Max, Sum
 from django.db.models import Q
 from django.utils.text import slugify
-from rest_framework import viewsets
+from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
@@ -458,6 +459,17 @@ class AdminCategoryViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
             entity_id=instance.public_id,
             summary=f"Category updated: {getattr(instance, 'name', '')}".strip() or "Category updated",
         )
+
+    def destroy(self, request, *args, **kwargs):
+        try:
+            return super().destroy(request, *args, **kwargs)
+        except ProtectedError:
+            return Response(
+                {
+                    "detail": "This category cannot be deleted because it has child products or subcategories linked to it. Please reassign or delete them first."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
     def perform_destroy(self, instance):
         name = getattr(instance, "name", "")

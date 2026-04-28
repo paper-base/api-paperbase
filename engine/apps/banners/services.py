@@ -23,6 +23,7 @@ def get_active_banners(store, request, slot: str | None = None):
             Banner.objects.filter(store=store, is_active=True)
             .filter(Q(start_at__isnull=True) | Q(start_at__lte=now))
             .filter(Q(end_at__isnull=True) | Q(end_at__gte=now))
+            .prefetch_related("images")
             .order_by("order", "id")
         )
         if slot:

@@ -50,7 +50,9 @@ class Category(models.Model):
         blank=True,
         help_text="Category description for the frontend",
     )
-    image = models.ImageField(upload_to=tenant_category_image_upload_to, blank=True, null=True)
+    image = models.ImageField(
+        upload_to=tenant_category_image_upload_to, blank=True, null=True, max_length=500
+    )
     parent = models.ForeignKey(
         "self",
         on_delete=models.CASCADE,
@@ -158,7 +160,9 @@ class Product(models.Model):
     original_price = models.DecimalField(
         max_digits=10, decimal_places=2, null=True, blank=True
     )
-    image = models.ImageField(upload_to=tenant_product_main_upload_to, blank=True, null=True)
+    image = models.ImageField(
+        upload_to=tenant_product_main_upload_to, blank=True, null=True, max_length=500
+    )
     status = models.CharField(
         max_length=20,
         choices=Status.choices,
@@ -302,7 +306,7 @@ class ProductImage(models.Model):
     product = models.ForeignKey(
         Product, on_delete=models.CASCADE, related_name='images'
     )
-    image = models.ImageField(upload_to=tenant_product_gallery_upload_to)
+    image = models.ImageField(upload_to=tenant_product_gallery_upload_to, max_length=500)
     alt = models.CharField(max_length=255, blank=True, help_text="Alt text for accessibility")
     order = models.PositiveIntegerField(default=0)
 
