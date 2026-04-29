@@ -60,7 +60,7 @@ class Order(models.Model):
         help_text="Non-sequential public identifier (e.g. ord_xxx).",
     )
     order_number = models.CharField(
-        max_length=20, unique=True, db_index=True, editable=False,
+        max_length=20, db_index=True, editable=False,
     )
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
@@ -165,6 +165,7 @@ class Order(models.Model):
 
     class Meta:
         ordering = ['-created_at']
+        unique_together = [('store', 'order_number')]
         indexes = [
             models.Index(fields=["store_id", "status", "created_at"], name="orders_store_status_creat_idx"),
         ]

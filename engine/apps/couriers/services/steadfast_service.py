@@ -142,7 +142,26 @@ def create_order(order, courier) -> dict[str, Any]:
     headers = _auth_headers(courier)
 
     response = requests.post(url, json=payload, headers=headers, timeout=30)
-    response.raise_for_status()
+    if not response.ok:
+        try:
+            error_body = response.json()
+            if isinstance(error_body, str):
+                detail = error_body
+            else:
+                detail = (
+                    error_body.get("message")
+                    or error_body.get("error")
+                    or error_body.get("detail")
+                    or str(error_body)
+                )
+        except Exception:
+            detail = response.text or f"HTTP {response.status_code}"
+
+        logger.error(
+            "Steadfast API error for order %s | status=%s | detail=%s",
+            order.order_number, response.status_code, detail,
+        )
+        raise ValidationError({"detail": f"Steadfast error: {detail}"})
     data = response.json()
     if not isinstance(data, dict):
         logger.warning("Steadfast create_order: JSON root is not an object; keys unavailable")
