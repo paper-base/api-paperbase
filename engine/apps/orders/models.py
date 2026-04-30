@@ -7,6 +7,7 @@ from django.core.exceptions import ValidationError
 
 from engine.apps.customers.models import Customer
 from engine.core.ids import generate_public_id
+from engine.core.media_upload_paths import tenant_order_invoice_upload_to
 from engine.core.tenant_queryset import TenantAwareManager
 from engine.apps.products.models import Product
 from engine.apps.stores.models import Store
@@ -160,6 +161,13 @@ class Order(models.Model):
         default=dict,
         help_text="JSON audit snapshot of order pricing breakdown (lines + rollups + shipping).",
     )
+    pdf_file = models.FileField(
+        upload_to=tenant_order_invoice_upload_to,
+        max_length=512,
+        blank=True,
+        null=True,
+    )
+    pdf_generated_at = models.DateTimeField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

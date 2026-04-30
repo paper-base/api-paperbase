@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+
 from django.db.models import Q
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -12,6 +14,7 @@ from engine.apps.products.serializers import (
 )
 from engine.apps.products.services import annotate_storefront_product_stock, build_product_list_queryset
 from engine.apps.products.stock_signals import get_low_stock_threshold
+from engine.core import cache_service
 from engine.core.tenancy import require_api_key_store, require_resolved_store
 
 
@@ -57,53 +60,57 @@ class StorefrontSearchView(APIView):
             empty["trending"] = False
             return Response(empty)
 
-        prod_qs = (
-            annotate_storefront_product_stock(
-                Product.objects.filter(
-                    store=store,
-                    is_active=True,
-                    status=Product.Status.ACTIVE,
+        query_hash = hashlib.md5(q.encode()).hexdigest()
+        cache_key = cache_service.build_key(store.public_id, "search", query_hash)
+
+        def fetcher():
+            prod_qs = (
+                annotate_storefront_product_stock(
+                    Product.objects.filter(
+                        store=store,
+                        is_active=True,
+                        status=Product.Status.ACTIVE,
+                    )
+                    .filter(
+                        Q(name__icontains=q)
+                        | Q(brand__icontains=q)
+                        | Q(description__icontains=q)
+                    )
+                    .select_related("category")
+                    .prefetch_related("images")
                 )
-                .filter(
-                    Q(name__icontains=q)
-                    | Q(brand__icontains=q)
-                    | Q(description__icontains=q)
-                )
-                .select_related("category")
-                .prefetch_related("images")
+                .order_by("name", "display_order")[:10]
             )
-            .order_by("name", "display_order")[:10]
-        )
-        product_rows = list(prod_qs)
-        products = StorefrontProductListSerializer(
-            product_rows, many=True, context=ctx
-        ).data
+            product_rows = list(prod_qs)
+            products = StorefrontProductListSerializer(
+                product_rows, many=True, context=ctx
+            ).data
 
-        cat_qs = list(
-            Category.objects.filter(store=store, is_active=True, name__icontains=q)
-            .order_by("name", "id")[:8]
-        )
-        categories = StorefrontCategorySerializer(
-            cat_qs, many=True, context={"request": request}
-        ).data
+            cat_qs = list(
+                Category.objects.filter(store=store, is_active=True, name__icontains=q)
+                .order_by("name", "id")[:8]
+            )
+            categories = StorefrontCategorySerializer(
+                cat_qs, many=True, context={"request": request}
+            ).data
 
-        suggestions: list[str] = []
-        for row in product_rows:
-            if row.name and row.name not in suggestions:
-                suggestions.append(row.name)
-            if len(suggestions) >= 10:
-                break
-        for c in cat_qs:
-            if c.name not in suggestions:
-                suggestions.append(c.name)
-            if len(suggestions) >= 10:
-                break
-
-        return Response(
-            {
+            suggestions: list[str] = []
+            for row in product_rows:
+                if row.name and row.name not in suggestions:
+                    suggestions.append(row.name)
+                if len(suggestions) >= 10:
+                    break
+            for cat in cat_qs:
+                if cat.name not in suggestions:
+                    suggestions.append(cat.name)
+                if len(suggestions) >= 10:
+                    break
+            return {
                 "products": products,
                 "categories": categories,
                 "suggestions": suggestions[:10],
                 "trending": False,
             }
-        )
+
+        payload = cache_service.get_or_set(cache_key, fetcher, 60)
+        return Response(payload)

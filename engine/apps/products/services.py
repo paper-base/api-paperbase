@@ -202,6 +202,54 @@ def build_product_list_queryset(store, query_params):
     return qs.order_by("display_order", "name")
 
 
+def get_storefront_home_sections(store, request, limit: int = 8) -> dict:
+    """Cached storefront home sections grouped by category."""
+    clamped_limit = max(1, min(int(limit or 8), 24))
+    key = cache_service.build_key(store.public_id, "home_sections")
+
+    def fetcher():
+        threshold = get_low_stock_threshold(store)
+        product_qs = (
+            annotate_storefront_product_stock(
+                Product.objects.filter(
+                    store=store,
+                    is_active=True,
+                    status=Product.Status.ACTIVE,
+                )
+                .select_related("category")
+                .prefetch_related("images")
+                .order_by("display_order", "name")
+            )
+        )
+        categories = list(
+            Category.objects.filter(store=store, is_active=True)
+            .order_by("order", "name")
+            .prefetch_related(
+                Prefetch("products", queryset=product_qs, to_attr="_storefront_active_products")
+            )
+        )
+        sections = []
+        for category in categories:
+            products = getattr(category, "_storefront_active_products", [])[:clamped_limit]
+            if not products:
+                continue
+            sections.append(
+                {
+                    "category": StorefrontCategorySerializer(
+                        category, context={"request": request}
+                    ).data,
+                    "products": StorefrontProductListSerializer(
+                        products,
+                        many=True,
+                        context={"request": request, "low_stock_threshold": threshold},
+                    ).data,
+                }
+            )
+        return {"sections": sections}
+
+    return cache_service.get_or_set(key, fetcher, 120)
+
+
 # ---------------------------------------------------------------------------
 # Related products (shared query for detail + /related/)
 # ---------------------------------------------------------------------------
@@ -467,6 +515,8 @@ def invalidate_product_cache(store_public_id: str) -> None:
     cache_service.invalidate_store_resource(store_public_id, "product")
     cache_service.invalidate_store_resource(store_public_id, "related")
     cache_service.invalidate_store_resource(store_public_id, "catalog")
+    cache_service.invalidate_store_resource(store_public_id, "search")
+    cache_service.delete(cache_service.build_key(store_public_id, "home_sections"))
 
 
 def invalidate_category_cache(store_public_id: str) -> None:
@@ -475,6 +525,8 @@ def invalidate_category_cache(store_public_id: str) -> None:
     cache_service.invalidate_store_resource(store_public_id, "category")
     cache_service.invalidate_store_resource(store_public_id, "products")
     cache_service.invalidate_store_resource(store_public_id, "catalog")
+    cache_service.invalidate_store_resource(store_public_id, "search")
+    cache_service.delete(cache_service.build_key(store_public_id, "home_sections"))
 
 
 # ---------------------------------------------------------------------------

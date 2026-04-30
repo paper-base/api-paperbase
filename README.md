@@ -25,6 +25,7 @@ docker compose up --build
 ```
 
 Secrets and provider keys (e.g. `RESEND_API_KEY`) live in **`.env`** at the repository root: Compose passes them into the `web` container via `env_file` (the file is not baked into the image). Values under `environment` in `docker-compose.yml` still override `.env` for the keys listed there (such as `DATABASE_URL`).
+Use the same `SECRET_KEY` and `STORE_API_KEY_SECRET` for every process that talks to the same database (web, workers, and local shells), otherwise storefront API keys created in one runtime will not validate in another.
 
 The **web** image uses [`entrypoint.sh`](entrypoint.sh): wait for Postgres (when `DATABASE_URL` is Postgres), then `migrate`, then `collectstatic`, then Gunicorn. The Dockerfile does not run migrations or collectstatic at build time.
 
@@ -167,7 +168,11 @@ Legacy shims (same behavior after env defaults):
 - `config.settings.development` — forces `DEBUG=true`, then loads `runtime`
 - `config.settings.production` — refuses `DEBUG=true`, forces `DEBUG=false`, then loads `runtime`
 
-See `.env.example` for the full list. With `DEBUG=false`, configure at least:
+See `.env.example` for the full list. In all environments configure at least:
+
+- `STORE_API_KEY_SECRET` (required for API key hashing; must be identical across runtimes sharing one DB)
+
+With `DEBUG=false`, additionally configure:
 
 - `SECRET_KEY`
 - `ALLOWED_HOSTS` (comma-separated)

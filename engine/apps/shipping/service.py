@@ -195,7 +195,8 @@ def build_shipping_zones_catalog(store: Store) -> list[dict]:
             )
         return out
 
-    return cache_service.get_or_set(key, fetcher, 300)
+    ttl = int(getattr(settings, "CACHE_TTL_SHIPPING_ZONES", 600))
+    return cache_service.get_or_set(key, fetcher, ttl)
 
 
 def _zone_cost_rules(store: Store, zone: ShippingZone) -> list[dict]:

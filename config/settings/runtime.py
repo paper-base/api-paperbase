@@ -50,6 +50,7 @@ else:
     SECRET_KEY = _require_env("SECRET_KEY")
 
 SIMPLE_JWT["SIGNING_KEY"] = SECRET_KEY  # noqa: F405
+STORE_API_KEY_SECRET = _require_env("STORE_API_KEY_SECRET")  # noqa: F405
 
 if DEBUG:
     _allowed = env_list("ALLOWED_HOSTS")  # noqa: F405
@@ -70,7 +71,9 @@ except KeyError as exc:
 if not DATABASE_URL:
     raise ImproperlyConfigured("DATABASE_URL must be set to a non-empty value.")
 
-_default_db = dj_database_url.parse(DATABASE_URL, conn_max_age=0)
+# This deployment currently points directly at Postgres (no PgBouncer in compose),
+# so persistent Django DB connections reduce connect churn for API traffic.
+_default_db = dj_database_url.parse(DATABASE_URL, conn_max_age=600)
 _default_db["DISABLE_SERVER_SIDE_CURSORS"] = True
 DATABASES = {"default": _default_db}
 
@@ -191,8 +194,6 @@ MIDDLEWARE = _mw
 CORS_ALLOW_ALL_ORIGINS = True
 
 if not DEBUG:
-    STORE_API_KEY_SECRET = _require_env("STORE_API_KEY_SECRET")  # noqa: F405
-
     if not TENANT_API_KEY_ENFORCE:  # noqa: F405
         raise ImproperlyConfigured("TENANT_API_KEY_ENFORCE must be True when DEBUG=false.")
 

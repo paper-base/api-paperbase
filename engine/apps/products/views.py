@@ -167,6 +167,8 @@ class ProductSearchView(StorefrontTenantMixin, ListAPIView):
     Real-time product search endpoint.
     Searches product name, brand, and description fields.
     Not cached — dynamic user input makes cache hit rates too low.
+
+    Deprecated for storefront search UX: prefer /api/v1/search/ unified payload.
     """
     serializer_class = StorefrontProductListSerializer
     permission_classes = [IsStorefrontAPIKey]
@@ -200,3 +202,22 @@ class ProductSearchView(StorefrontTenantMixin, ListAPIView):
     def list(self, request, *args, **kwargs):
         response = super().list(request, *args, **kwargs)
         return response
+
+
+class StorefrontHomeSectionsView(StorefrontTenantMixin, APIView):
+    """Storefront home sections endpoint (category + first N products)."""
+
+    permission_classes = [IsStorefrontAPIKey]
+    authentication_classes = []
+    allow_api_key = True
+    access_scope = "storefront"
+
+    def get(self, request):
+        store = require_api_key_store(request)
+        try:
+            limit = int(request.query_params.get("limit", "8"))
+        except (TypeError, ValueError):
+            limit = 8
+        # Query-budget target: one category query and one product prefetch query.
+        data = services.get_storefront_home_sections(store, request, limit=limit)
+        return Response(data)

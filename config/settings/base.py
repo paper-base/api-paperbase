@@ -79,6 +79,7 @@ INSTALLED_APPS = [
     "engine.apps.inventory",
     "engine.apps.shipping",
     "engine.apps.banners",
+    "engine.apps.popups",
     "engine.apps.blogs",
     "engine.apps.basic_analytics",
     "engine.apps.couriers",
@@ -177,6 +178,7 @@ CACHE_TTL_NOTIFICATIONS = int(os.getenv("CACHE_TTL_NOTIFICATIONS", "300"))
 CACHE_TTL_STORE_SETTINGS = int(os.getenv("CACHE_TTL_STORE_SETTINGS", "300"))
 CACHE_TTL_FEATURE_CONFIG = int(os.getenv("CACHE_TTL_FEATURE_CONFIG", "600"))
 CACHE_TTL_SHIPPING_OPTIONS = int(os.getenv("CACHE_TTL_SHIPPING_OPTIONS", "300"))
+CACHE_TTL_SHIPPING_ZONES = int(os.getenv("CACHE_TTL_SHIPPING_ZONES", "600"))
 
 # CORS shared pieces
 CORS_ALLOW_HEADERS = list(__import__("corsheaders.defaults").defaults.default_headers) + [
@@ -308,7 +310,7 @@ REST_FRAMEWORK = {
         "auth_reset": "5/min",
         "auth_otp_challenge": "12/min",
         "auth_otp_manage": "20/min",
-        "direct_order": "30/hour",
+        "direct_order": "120/hour",
         "health": "60/min",
         "heavy_search": "10/min",
         "standard_api": "600/min",
@@ -434,6 +436,7 @@ CELERY_TASK_ROUTES = {
     "engine.apps.emails.send_email":            {"queue": "critical"},
     "engine.apps.emails.send_order_email":      {"queue": "critical"},
     "engine.apps.orders.export_orders_csv":     {"queue": "critical"},
+    "engine.apps.orders.generate_order_invoice_pdf": {"queue": "critical"},
 
     # CAPI queue — dedicated, isolated from everything
     "engine.apps.tracking.coordinate_capi_flush": {"queue": "capi"},
@@ -470,7 +473,7 @@ CELERY_BEAT_SCHEDULE = {
     "inventory-sync": {
         "task": "engine.apps.inventory.schedule_product_stock_cache_all_stores",
         "schedule": crontab(minute="0"),  # top of every hour
-        "options": {"queue": "default"},
+        "options": {"queue": "default", "expires": 55 * 60},
     },
 
     # Base backup — 6:00 AM GMT

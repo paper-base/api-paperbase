@@ -49,7 +49,7 @@ class StorefrontProductVariantSerializer(SafeModelSerializer):
 
     def get_options(self, obj):
         rows = []
-        for link in obj.attribute_values.select_related("attribute_value__attribute").all():
+        for link in obj.attribute_values.all():
             av = link.attribute_value
             attr = av.attribute
             rows.append(
@@ -89,8 +89,11 @@ class StorefrontProductListSerializer(SafeModelSerializer):
         read_only=True,
         allow_null=True,
     )
+    # annotation: _pub_variant_count
     stock_status = serializers.SerializerMethodField()
+    # annotation: _pub_base_inventory_qty or _pub_variant_stock_sum
     available_quantity = serializers.SerializerMethodField()
+    # annotation: _pub_variant_count
     variant_count = serializers.SerializerMethodField()
     category_public_id = serializers.CharField(source="category.public_id", read_only=True)
     category_slug = serializers.CharField(source="category.slug", read_only=True)
@@ -120,10 +123,7 @@ class StorefrontProductListSerializer(SafeModelSerializer):
         return int(self.context.get("low_stock_threshold", 5))
 
     def _active_variant_count(self, obj) -> int:
-        n = getattr(obj, "_pub_variant_count", None)
-        if n is not None:
-            return int(n)
-        return obj.variants.filter(is_active=True).count()
+        return int(getattr(obj, "_pub_variant_count", 0) or 0)
 
     def get_image_url(self, obj):
         return absolute_media_url(obj.image, self.context.get("request"))
@@ -134,12 +134,7 @@ class StorefrontProductListSerializer(SafeModelSerializer):
     def _total_stock_for_status(self, obj) -> int:
         n = self._active_variant_count(obj)
         if n > 0:
-            s = getattr(obj, "_pub_variant_stock_sum", None)
-            if s is None:
-                from django.db.models import Sum as SumAgg
-
-                s = obj.variants.filter(is_active=True).aggregate(x=SumAgg("inventory__quantity"))["x"]
-            return int(s or 0)
+            return int(getattr(obj, "_pub_variant_stock_sum", 0) or 0)
         base = getattr(obj, "_pub_base_inventory_qty", None)
         return int(base or 0)
 
@@ -164,7 +159,9 @@ class StorefrontProductDetailSerializer(SafeModelSerializer):
         read_only=True,
         allow_null=True,
     )
+    # annotation: _pub_variant_count
     stock_status = serializers.SerializerMethodField()
+    # annotation: _pub_base_inventory_qty or _pub_variant_stock_sum
     available_quantity = serializers.SerializerMethodField()
     variants = StorefrontProductVariantSerializer(many=True, read_only=True)
     category_public_id = serializers.CharField(source="category.public_id", read_only=True)
@@ -198,17 +195,17 @@ class StorefrontProductDetailSerializer(SafeModelSerializer):
         return int(self.context.get("low_stock_threshold", 5))
 
     def _active_variant_count(self, obj) -> int:
-        n = getattr(obj, "_pub_variant_count", None)
-        if n is not None:
-            return int(n)
-        return obj.variants.filter(is_active=True).count()
+        return int(getattr(obj, "_pub_variant_count", 0) or 0)
 
     def get_image_url(self, obj):
         return absolute_media_url(obj.image, self.context.get("request"))
 
     def get_images(self, obj):
-        qs = obj.images.all().order_by("order", "id")
-        if not qs.exists():
+        prefetched = getattr(obj, "_prefetched_objects_cache", {}).get("images")
+        if prefetched is None:
+            return []
+        qs = sorted(prefetched, key=lambda image: (image.order, image.id))
+        if not qs:
             return []
         return ProductImageSerializer(
             qs,
@@ -219,12 +216,7 @@ class StorefrontProductDetailSerializer(SafeModelSerializer):
     def _total_stock_for_status(self, obj) -> int:
         n = self._active_variant_count(obj)
         if n > 0:
-            s = getattr(obj, "_pub_variant_stock_sum", None)
-            if s is None:
-                from django.db.models import Sum as SumAgg
-
-                s = obj.variants.filter(is_active=True).aggregate(x=SumAgg("inventory__quantity"))["x"]
-            return int(s or 0)
+            return int(getattr(obj, "_pub_variant_stock_sum", 0) or 0)
         base = getattr(obj, "_pub_base_inventory_qty", None)
         return int(base or 0)
 

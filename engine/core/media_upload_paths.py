@@ -114,6 +114,25 @@ def tenant_banner_gallery_image_upload_to(instance, filename: str) -> str:
     return f"tenants/{store_pub}/banners/{banner_pub}_{image_pub}.{ext}"
 
 
+def tenant_popup_image_upload_to(instance, filename: str) -> str:
+    """Popup image uploads live under the store tenant folder."""
+    if not getattr(instance, "popup_id", None):
+        raise ValueError("StorePopupImage missing popup for upload path")
+    popup = instance.popup
+    if not popup:
+        raise ValueError("StorePopupImage.popup is required for upload path")
+    if not getattr(popup, "store_id", None):
+        raise ValueError("StorePopup missing store for upload path")
+    store = popup.store
+    if not store:
+        raise ValueError("StorePopup.store is required for upload path")
+
+    store_pub = _non_empty_public_id(getattr(store, "public_id", None), label="store.public_id")
+    ext = media_file_extension(filename)
+    unique = uuid.uuid4().hex
+    return f"tenants/{store_pub}/popups/{unique}.{ext}"
+
+
 def tenant_blog_featured_image_upload_to(instance, filename: str) -> str:
     if not getattr(instance, "store_id", None):
         raise ValueError("Blog missing store for upload path")
@@ -162,3 +181,19 @@ def generate_order_export_file_path(
     store_pub = _non_empty_public_id(store_public_id, label="store.public_id")
     date_str = export_date.isoformat()
     return f"tenants/{store_pub}/exports/order_{store_pub}_{date_str}__{job_id}.csv"
+
+
+def tenant_order_invoice_upload_to(instance, filename: str) -> str:
+    if not getattr(instance, "store_id", None):
+        raise ValueError("Order missing store for invoice upload path")
+    if not getattr(instance, "id", None):
+        raise ValueError("Order missing id for invoice upload path")
+    store = getattr(instance, "store", None)
+    if not store:
+        raise ValueError("Order.store is required for invoice upload path")
+    store_pub = _non_empty_public_id(getattr(store, "public_id", None), label="store.public_id")
+    order_number = (getattr(instance, "order_number", "") or "").strip()
+    if not order_number:
+        raise ValueError("Order missing order_number for invoice upload path")
+    ext = media_file_extension(filename)
+    return f"tenants/{store_pub}/store_invoices/orders/{instance.id}/invoice_{order_number}.{ext}"

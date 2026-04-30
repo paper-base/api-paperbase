@@ -2,3 +2,4 @@
 
 from engine.apps.orders.export_cleanup import cleanup_expired_order_exports  # noqa: F401
 from engine.apps.orders.export_tasks import export_orders_csv  # noqa: F401
+from engine.apps.orders.invoice_tasks import generate_order_invoice_pdf  # noqa: F401

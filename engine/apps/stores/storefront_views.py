@@ -91,6 +91,7 @@ class StorePublicView(APIView):
         payload = {
             "store_name": store.name,
             "logo_url": absolute_media_url(store.logo, request),
+            "language": (getattr(settings_row, "language", "") or "en") if settings_row else "en",
             "currency": store.currency,
             "currency_symbol": store.currency_symbol or "",
             "country": public_extra.get("country") or "",

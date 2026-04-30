@@ -9,12 +9,8 @@ from typing import Any
 SOCIAL_LINK_PLATFORM_KEYS: tuple[str, ...] = (
     "facebook",
     "instagram",
-    "twitter",
-    "youtube",
-    "linkedin",
+    "whatsapp",
     "tiktok",
-    "pinterest",
-    "website",
 )
 
 _MAX_URL_LEN = 500

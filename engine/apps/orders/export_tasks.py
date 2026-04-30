@@ -10,12 +10,14 @@ import uuid
 from datetime import timedelta
 from typing import Iterable
 
+from celery import Task
 from django.core.files import File
 from django.core.files.storage import default_storage
 from django.db.models import Prefetch
 from django.utils import timezone
 
 from config.celery import app
+from engine.core.models import ActivityLog
 from engine.core.media_upload_paths import generate_order_export_file_path
 from engine.core.tenant_execution import system_scope
 
@@ -40,12 +42,34 @@ def _order_id_chunks(
         yield buf
 
 
+class OrderExportTask(Task):
+    def on_failure(self, exc, task_id, args, kwargs, einfo):
+        try:
+            ActivityLog.objects.create(
+                action=ActivityLog.Action.CUSTOM,
+                entity_type="celery_task",
+                entity_id=task_id or "",
+                summary="ERROR: order export task failed",
+                metadata={
+                    "task": self.name,
+                    "args": list(args or []),
+                    "kwargs": kwargs or {},
+                    "error": str(exc),
+                },
+            )
+        except Exception:
+            logger.exception("failed to write activity log for order export task failure")
+        super().on_failure(exc, task_id, args, kwargs, einfo)
+
+
 @app.task(
+    bind=True,
+    base=OrderExportTask,
     name="engine.apps.orders.export_orders_csv",
     soft_time_limit=540,
     time_limit=600,
 )
-def export_orders_csv(job_id: str) -> None:
+def export_orders_csv(self, job_id: str) -> None:
     run_order_export_csv_job(job_id)
 
 

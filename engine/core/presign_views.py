@@ -23,6 +23,7 @@ ENTITY_FOLDERS = {
     "product": "products",
     "blog": "blogs",
     "banner": "banners",
+    "popup": "popups",
     "category": "categories",
     "support": "support",
 }

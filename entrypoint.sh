@@ -34,9 +34,6 @@ PY
 echo "Waiting for database..."
 wait_for_postgres
 echo "Database ready"
-echo "Running migrations..."
-python manage.py migrate --noinput
-echo "Migrations done"
 echo "Collecting static files..."
 python manage.py collectstatic --noinput
 echo "Static files ready"

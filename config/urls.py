@@ -29,9 +29,11 @@ api_v1_patterns = [
     path('store/', include('engine.apps.stores.urls')),
     path('fraud-check/', include('engine.apps.fraud_check.urls')),
     path('products/', include('engine.apps.products.urls')),
+    path('storefront/', include('engine.apps.products.storefront_urls')),
     path('catalog/', include('engine.apps.products.catalog_urls')),
     path('categories/', include(category_urlpatterns)),
     path('banners/', include('engine.apps.banners.urls')),
+    path('popups/', include('engine.apps.popups.urls')),
     path('blogs/', include('engine.apps.blogs.urls')),
     path('orders/', include('engine.apps.orders.urls')),
     path('shipping/', include('engine.apps.shipping.urls')),
@@ -40,6 +42,7 @@ api_v1_patterns = [
     path('notifications/', include('engine.apps.notifications.urls')),
     path('system-notifications/', include('engine.apps.notifications.system_urls')),
     path('support/', include('engine.apps.support.urls')),
+    # Unified storefront search endpoint; keep legacy product-search endpoint for compatibility.
     path('search/', StorefrontSearchView.as_view(), name='storefront-search'),
     path('billing/', include('engine.apps.billing.urls')),
 ]

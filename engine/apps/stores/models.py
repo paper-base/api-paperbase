@@ -214,6 +214,11 @@ class StoreSettings(models.Model):
         default=False,
         help_text="Allow public storefront read endpoints without API key for this store.",
     )
+    language = models.CharField(
+        max_length=8,
+        default="en",
+        help_text="Preferred storefront language code (e.g. en, bn).",
+    )
     storefront_public = models.JSONField(
         blank=True,
         default=dict,

@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from engine.core.serializers import SafeModelSerializer
 
+from . import services
 from .models import StaffNotification, StorefrontCTA
 
 
@@ -25,3 +26,7 @@ class AdminNotificationSerializer(SafeModelSerializer):
             'created_at', 'updated_at',
         ]
         read_only_fields = ['public_id', 'created_at', 'updated_at']
+
+    def create(self, validated_data):
+        store = validated_data.pop("store", None)
+        return services.create_storefront_cta(store=store, validated_data=validated_data)

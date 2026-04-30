@@ -15,7 +15,6 @@ class Banner(models.Model):
 
     PLACEMENT_CHOICES = [
         ("home_top", "Home Top"),
-        ("home_mid", "Home Mid"),
         ("home_bottom", "Home Bottom"),
     ]
 

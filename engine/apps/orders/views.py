@@ -1,6 +1,13 @@
+import asyncio
+import json
 import logging
 
+from asgiref.sync import sync_to_async
+from django.core.cache import cache
 from django.db import transaction
+from django.core.files.storage import default_storage
+from django.http import JsonResponse
+from django.http import StreamingHttpResponse
 from django.db.models import Count, Prefetch, Q
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import status
@@ -25,6 +32,7 @@ from .serializers import (
     StorefrontOrderReceiptSerializer,
 )
 from .purchase_ledger_service import append_ledger_lines_for_order
+from .invoice_tasks import generate_order_invoice_pdf
 from .services import (
     build_variant_snapshot_text,
     recalculate_order_totals,
@@ -36,6 +44,9 @@ from .utils import get_next_order_number
 from .stock import adjust_stock
 from .throttles import DirectOrderRateThrottle
 from engine.apps.emails.triggers import notify_store_new_order
+from engine.apps.billing.subscription_status import (
+    assert_storefront_subscription_allows_for_owner,
+)
 from engine.core.realtime import emit_store_event
 
 logger = logging.getLogger(__name__)
@@ -48,6 +59,79 @@ def _notify_order_created(order: Order) -> None:
         "payment_success",
         {"order_public_id": order.public_id},
     )
+
+
+def _invoice_ready_cache_key(order_public_id: str) -> str:
+    return f"invoice_ready:{order_public_id}"
+
+
+def _check_invoice_ready(order: Order) -> dict:
+    # Source of truth is DB state; storage.exists() can be inconsistent/slow with remote object storage.
+    fresh = Order.objects.filter(pk=order.pk).only("public_id", "pdf_file").first()
+    if not fresh or not fresh.pdf_file:
+        return {"ready": False, "url": ""}
+    cache.set(_invoice_ready_cache_key(order.public_id), 1, 3600)
+    return {"ready": True, "url": default_storage.url(fresh.pdf_file.name)}
+
+
+def _assert_storefront_access_for_store(store) -> None:
+    """
+    Run storefront subscription guard in a sync context.
+    Accessing `store.owner` may hit ORM if relation isn't cached.
+    """
+    assert_storefront_subscription_allows_for_owner(getattr(store, "owner", None))
+
+
+# Async-safe wrapper for use in async contexts
+_check_invoice_ready_async = sync_to_async(_check_invoice_ready, thread_sensitive=False)
+_assert_storefront_access_for_store_async = sync_to_async(
+    _assert_storefront_access_for_store,
+    thread_sensitive=False,
+)
+
+
+async def order_invoice_stream(request, public_id: str):
+    """
+    Native Django async SSE endpoint for invoice readiness.
+    Uses async sleeps so workers remain non-blocking under concurrent streams.
+    """
+    store = getattr(request, "store", None)
+    if store is None:
+        return JsonResponse({"detail": "Store context missing."}, status=401)
+
+    try:
+        await _assert_storefront_access_for_store_async(store)
+    except Exception as exc:
+        detail = getattr(exc, "detail", {"detail": "Storefront unavailable."})
+        return JsonResponse(detail, status=403, safe=isinstance(detail, dict))
+
+    order = await sync_to_async(
+        lambda: Order.objects.filter(public_id=public_id, store=store).first(),
+        thread_sensitive=False,
+    )()
+    if not order:
+        return JsonResponse({"detail": "Not found."}, status=404)
+
+    async def event_generator():
+        for _ in range(10):
+            payload = await _check_invoice_ready_async(order)
+            yield f"data: {json.dumps(payload)}\n\n"
+            if payload.get("ready"):
+                return
+            await asyncio.sleep(3)
+        yield f"data: {json.dumps({'ready': False, 'timeout': True, 'url': ''})}\n\n"
+
+    response = StreamingHttpResponse(
+        event_generator(),
+        content_type="text/event-stream",
+    )
+    response["Cache-Control"] = "no-cache"
+    response["X-Accel-Buffering"] = "no"
+    return response
+
+
+# Explicit middleware opt-in for function-based storefront endpoint.
+order_invoice_stream.allow_api_key = True
 
 
 class OrderCreateView(CreateAPIView):
@@ -67,7 +151,9 @@ class OrderCreateView(CreateAPIView):
         store = ctx.store
         if not store:
             raise PermissionDenied("No active store resolved.")
-        queryset = Order.objects.filter(store=store).annotate(
+        queryset = Order.objects.filter(store=store).select_related(
+            "shipping_zone", "shipping_method", "shipping_rate", "customer"
+        ).annotate(
             unavailable_items_count=Count("items", filter=Q(items__product__isnull=True), distinct=True),
         ).prefetch_related(
             "items__product",
@@ -397,3 +483,62 @@ class OrderPaymentSubmitView(APIView):
             StorefrontOrderReceiptSerializer(instance=order_for_receipt).data,
             status=status.HTTP_200_OK,
         )
+
+
+class OrderInvoiceView(APIView):
+    authentication_classes = []
+    permission_classes = [IsStorefrontAPIKey]
+    throttle_classes = [DirectOrderRateThrottle, UserRateThrottle]
+    allow_api_key = True
+
+    def get(self, request, public_id: str):
+        store = require_api_key_store(request)
+        order = Order.objects.filter(public_id=public_id, store=store).first()
+        if not order:
+            raise NotFound()
+
+        readiness = _check_invoice_ready(order)
+        if readiness.get("ready") and readiness.get("url"):
+            return Response(
+                {"ready": True, "url": readiness["url"]},
+                status=status.HTTP_200_OK,
+            )
+
+        generate_order_invoice_pdf.delay(str(order.id), int(store.id))
+        return Response(
+            {
+                "ready": False,
+                "url": "",
+                "status": "generating",
+                "message": (
+                    "Your invoice is being prepared. "
+                    "Please try again in a few seconds."
+                ),
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+
+class OrderInvoiceStatusView(APIView):
+    authentication_classes = []
+    permission_classes = [IsStorefrontAPIKey]
+    throttle_classes = [DirectOrderRateThrottle, UserRateThrottle]
+    allow_api_key = True
+
+    def get(self, request, public_id: str):
+        store = require_api_key_store(request)
+        order = Order.objects.filter(public_id=public_id, store=store).first()
+        if not order:
+            raise NotFound()
+        return Response(_check_invoice_ready(order), status=status.HTTP_200_OK)
+
+
+class OrderInvoiceStreamView(APIView):
+    authentication_classes = []
+    permission_classes = [IsStorefrontAPIKey]
+    throttle_classes = [DirectOrderRateThrottle, UserRateThrottle]
+    allow_api_key = True
+
+    async def get(self, request, public_id: str):
+        # Compatibility shim; URL wiring uses native async Django view.
+        return await order_invoice_stream(request._request, public_id)

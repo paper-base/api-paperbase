@@ -118,6 +118,7 @@ def _get_branding_response(request, store: Store):
         'contact_email': store.contact_email or '',
         'phone': store.phone or '',
         'address': store.address or '',
+        'language': (getattr(settings_row, "language", "") or "en") if settings_row else "en",
         'social_links': social_links,
     }
     branding[store.public_id] = data
@@ -160,6 +161,7 @@ class BrandingView(APIView):
                 'contact_email': '',
                 'phone': '',
                 'address': '',
+                'language': 'en',
                 'social_links': default_social_links(),
             })
         return Response(_get_branding_response(request, store))
@@ -191,6 +193,14 @@ class BrandingView(APIView):
             store.phone = (request.data.get('phone') or '').strip()[:50]
         if 'address' in request.data:
             store.address = (request.data.get('address') or '').strip()
+        if 'language' in request.data:
+            language = (request.data.get("language") or "").strip().lower()
+            if language not in ("en", "bn"):
+                return Response({"detail": "language must be one of: en, bn."}, status=400)
+            settings_obj, _ = StoreSettings.objects.get_or_create(store=store)
+            settings_obj.language = language
+            settings_obj.save(update_fields=["language", "updated_at"])
+            set_request_store_settings_row(request, store, settings_obj)
         logo_file = request.FILES.get('logo')
         if logo_file:
             store.logo = logo_file

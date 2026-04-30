@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from django.conf import settings
+from rest_framework.exceptions import ValidationError
 
 from engine.core import cache_service
 
@@ -26,3 +27,10 @@ def get_active_notifications(store, request):
 def invalidate_notification_cache(store_public_id: str) -> None:
     """Clear notification caches for a store."""
     cache_service.invalidate_store_resource(store_public_id, "notifications")
+
+
+def create_storefront_cta(store, validated_data: dict) -> StorefrontCTA:
+    """Create a tenant CTA while enforcing one CTA per store."""
+    if StorefrontCTA.objects.filter(store=store).exists():
+        raise ValidationError({"detail": "A CTA already exists for this store."})
+    return StorefrontCTA.objects.create(store=store, **validated_data)

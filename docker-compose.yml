@@ -25,6 +25,19 @@ services:
       timeout: 3s
       retries: 5
 
+  migrate:
+    build: .
+    entrypoint: ["python", "manage.py", "migrate", "--noinput"]
+    env_file:
+      - .env
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.runtime
+      DATABASE_URL: postgresql://paperbase:paperbase@db:5432/paperbase
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+
   web:
     build: .
     ports:
@@ -39,7 +52,8 @@ services:
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.runtime
       DEBUG: "true"
-      SECRET_KEY: dev-change-me-not-for-production-use-32b-minimum
+      SECRET_KEY: ${SECRET_KEY}
+      STORE_API_KEY_SECRET: ${STORE_API_KEY_SECRET}
       DATABASE_URL: postgresql://paperbase:paperbase@db:5432/paperbase
       REDIS_URL: redis://redis:6379/0
       ALLOWED_HOSTS: localhost,127.0.0.1,[::1]
@@ -55,6 +69,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   celery-critical:
     build: .
@@ -75,6 +91,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   celery-default:
     build: .
@@ -95,6 +113,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   celery-capi:
     build: .
@@ -115,6 +135,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   celery-beat:
     build: .
@@ -133,6 +155,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
 volumes:
   pgdata:

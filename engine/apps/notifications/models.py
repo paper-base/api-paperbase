@@ -220,6 +220,12 @@ class StorefrontCTA(models.Model):
 
     class Meta:
         ordering = ['order', '-created_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=["store"],
+                name="notifications_storefrontcta_store_unique",
+            )
+        ]
 
     objects = TenantAwareManager()
 

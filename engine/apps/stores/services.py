@@ -7,6 +7,7 @@ import secrets
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
 from django.http import HttpRequest
 from django.utils import timezone
@@ -71,10 +72,11 @@ def allocate_unique_store_code(base: str, *, exclude_pk: int | None = None) -> s
 
 
 def _api_key_secret() -> bytes:
-    # Prefer a dedicated secret for API key hashing; fall back to SECRET_KEY.
-    secret = (
-        getattr(settings, "STORE_API_KEY_SECRET", "") or getattr(settings, "SECRET_KEY", "")
-    ).strip()
+    secret = (getattr(settings, "STORE_API_KEY_SECRET", "") or "").strip()
+    if not secret:
+        raise ImproperlyConfigured(
+            "STORE_API_KEY_SECRET must be set for API key hashing."
+        )
     return secret.encode("utf-8")
 
 
@@ -148,7 +150,7 @@ def resolve_active_store_api_key(raw_key: str) -> StoreApiKey | None:
         return None
     digest = _hash_store_api_key(raw_key)
     return (
-        StoreApiKey.objects.select_related("store")
+        StoreApiKey.objects.select_related("store", "store__owner")
         .filter(
             key_hash=digest,
             revoked_at__isnull=True,

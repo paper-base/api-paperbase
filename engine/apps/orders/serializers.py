@@ -14,7 +14,7 @@ def storefront_order_line_variant_details(line: OrderItem) -> str | None:
     if variant is None:
         return None
     rows = []
-    for link in variant.attribute_values.select_related("attribute_value__attribute").all():
+    for link in variant.attribute_values.all():
         av = link.attribute_value
         attr = av.attribute
         rows.append((attr.order, attr.slug or "", attr.name, av.value))
@@ -93,7 +93,7 @@ class OrderItemSerializer(SafeModelSerializer):
         if not obj.variant_id:
             return None
         rows = []
-        for link in obj.variant.attribute_values.select_related("attribute_value__attribute").all():
+        for link in obj.variant.attribute_values.all():
             av = link.attribute_value
             attr = av.attribute
             rows.append(

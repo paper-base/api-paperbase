@@ -159,6 +159,16 @@ def _iter_urlpatterns(patterns):
             yield pattern
 
 
+def _view_allows_api_key(view_func) -> bool:
+    """
+    Support both class-based views and function-based views for API-key opt-in.
+    """
+    view_class = getattr(view_func, "view_class", None) or getattr(view_func, "cls", None)
+    if view_class is not None:
+        return bool(getattr(view_class, "allow_api_key", False))
+    return bool(getattr(view_func, "allow_api_key", False))
+
+
 def validate_storefront_api_key_view_flags(*, patterns=None) -> None:
     url_patterns = patterns if patterns is not None else get_resolver().url_patterns
     missing_allow_flag = []
@@ -229,8 +239,7 @@ class TenantApiKeyMiddleware(MiddlewareMixin):
 
     def process_view(self, request: HttpRequest, view_func, view_args, view_kwargs):
         maybe_validate_storefront_api_key_view_flags()
-        view_class = getattr(view_func, "view_class", None) or getattr(view_func, "cls", None)
-        allow_api_key = bool(getattr(view_class, "allow_api_key", False))
+        allow_api_key = _view_allows_api_key(view_func)
         raw_token = getattr(request, "raw_api_key_token", None)
 
         # For routes that don't require tenant API key by path, allow API keys only
