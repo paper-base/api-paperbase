@@ -83,6 +83,10 @@ def flush_store_capi(self, store_public_id: str) -> None:
 
     r = _get_redis()
     consumer_name = f"celery-{self.request.id or 'unknown'}"
+    integration_data = _load_integration(store_public_id)
+    if integration_data is None:
+        remove_store_from_active(r, store_public_id, platform="meta")
+        return
 
     entries = read_pending_events(r, store_public_id, consumer_name, count=BATCH_SIZE, platform="meta")
     if not entries:
@@ -107,12 +111,6 @@ def flush_store_capi(self, store_public_id: str) -> None:
         ack_events(r, store_public_id, bad_ids, platform="meta")
 
     if not payloads:
-        return
-
-    integration_data = _load_integration(store_public_id)
-    if integration_data is None:
-        ack_events(r, store_public_id, message_ids, platform="meta")
-        remove_store_from_active(r, store_public_id, platform="meta")
         return
 
     pixel_id, access_token, test_event_code, store = integration_data

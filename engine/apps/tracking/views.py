@@ -23,6 +23,31 @@ from engine.apps.tracking.throttles import TrackingIngestThrottle
 logger = logging.getLogger(__name__)
 
 
+def _store_has_active_tracking(store) -> bool:
+    from engine.apps.marketing_integrations.models import MarketingIntegration
+
+    store_public_id = str(getattr(store, "public_id", "") or "")
+    if not store_public_id:
+        return False
+
+    cache_key = cache_service.build_key(store_public_id, "tracking_integrations_active")
+    cached = cache_service.get(cache_key)
+    if isinstance(cached, bool):
+        return cached
+
+    pixel_ids = MarketingIntegration.objects.filter(
+        store=store,
+        is_active=True,
+        provider__in=[
+            MarketingIntegration.Provider.FACEBOOK,
+            MarketingIntegration.Provider.TIKTOK,
+        ],
+    ).values_list("pixel_id", flat=True)
+    enabled = any((pixel_id or "").strip() for pixel_id in pixel_ids)
+    cache_service.set(cache_key, enabled, 300)
+    return enabled
+
+
 def _bearer_token_from_headers(request) -> str | None:
     header = request.headers.get("Authorization") or request.headers.get("authorization") or ""
     if not header:
@@ -178,6 +203,23 @@ class TrackingEventIngestView(APIView):
             return Response({"detail": "Store inactive."}, status=status.HTTP_403_FORBIDDEN)
 
         store_public_id_for_log = getattr(store, "public_id", None)
+
+        if not _store_has_active_tracking(store):
+            outcome_status = "ignored"
+            outcome_reason = "tracking_disabled"
+            logger.info(
+                json.dumps(
+                    {
+                        "store_id": store_public_id_for_log,
+                        "event_name": event_name_for_log,
+                        "event_id": event_id_for_log,
+                        "status": outcome_status,
+                        "reason": outcome_reason,
+                    },
+                    separators=(",", ":"),
+                )
+            )
+            return Response(status=status.HTTP_204_NO_CONTENT)
 
         if not _domain_allowed_for_store(request, store):
             outcome_reason = "origin_not_allowed"

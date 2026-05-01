@@ -26,6 +26,23 @@ def _product_only_extra_field_schema(raw):
     return out
 
 
+def _store_tracking_enabled(store) -> bool:
+    try:
+        from engine.apps.marketing_integrations.models import MarketingIntegration
+
+        pixel_ids = MarketingIntegration.objects.filter(
+            store=store,
+            is_active=True,
+            provider__in=[
+                MarketingIntegration.Provider.FACEBOOK,
+                MarketingIntegration.Provider.TIKTOK,
+            ],
+        ).values_list("pixel_id", flat=True)
+        return any((pixel_id or "").strip() for pixel_id in pixel_ids)
+    except Exception:
+        return False
+
+
 class StorePublicView(APIView):
     """Read-only storefront branding and public configuration (API key)."""
 
@@ -40,7 +57,7 @@ class StorePublicView(APIView):
 
     def get(self, request):
         store = require_api_key_store(request)
-        cache_key = f"cache:{store.public_id}:store_public:v1"
+        cache_key = f"cache:{store.public_id}:store_public:v2"
         cached = cache_service.get(cache_key)
         if cached is not None:
             return Response(cached)
@@ -94,6 +111,8 @@ class StorePublicView(APIView):
         except Exception:
             pixel_id = None
 
+        tracking_enabled = _store_tracking_enabled(store)
+
         payload = {
             "store_name": store.name,
             "logo_url": absolute_media_url(store.logo, request),
@@ -116,6 +135,7 @@ class StorePublicView(APIView):
             # Public pixel ID for tracker.js self-configuration.
             # None when no active Facebook integration exists.
             "pixel_id": pixel_id,
+            "tracking_enabled": tracking_enabled,
             "theme_settings": {
                 "primary_color": theme.get("primary_color") or "",
             },
