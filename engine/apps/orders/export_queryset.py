@@ -45,6 +45,8 @@ EXPORT_FILTER_KEYS = frozenset(
         "search",
         "customer",
         "customer_public_id",
+        "category",
+        "category_public_id",
     }
 )
 
@@ -92,6 +94,12 @@ def apply_order_admin_filters(
     )
     if customer_public_id:
         qs = qs.filter(customer__public_id=customer_public_id)
+
+    category_public_id = _param_get(query_params, filters, "category") or _param_get(
+        query_params, filters, "category_public_id"
+    )
+    if category_public_id:
+        qs = qs.filter(items__product__category__public_id=category_public_id).distinct()
 
     status_value = _param_get(query_params, filters, "status").lower()
     if status_value in ALLOWED_ORDER_STATUSES:
