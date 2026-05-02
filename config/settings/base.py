@@ -86,6 +86,7 @@ INSTALLED_APPS = [
     "engine.apps.fraud_check",
     "engine.apps.marketing_integrations",
     "engine.apps.tracking",
+    "engine.apps.theming.apps.ThemingConfig",
     "engine.apps.emails",
 ]
 

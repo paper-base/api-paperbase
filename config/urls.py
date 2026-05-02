@@ -45,6 +45,7 @@ api_v1_patterns = [
     # Unified storefront search endpoint; keep legacy product-search endpoint for compatibility.
     path('search/', StorefrontSearchView.as_view(), name='storefront-search'),
     path('billing/', include('engine.apps.billing.urls')),
+    path('theming/', include('engine.apps.theming.urls')),
 ]
 
 urlpatterns = [
