@@ -97,10 +97,10 @@ class AdminNotificationViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
         public_id = instance.public_id
         text = getattr(instance, "cta_text", "")
         ctx = get_active_store(self.request)
+        sid = ctx.store.public_id if ctx.store else None
         super().perform_destroy(instance)
-        if ctx.store:
-            invalidate_notification_cache(ctx.store.public_id)
-            sid = ctx.store.public_id
+        if sid:
+            invalidate_notification_cache(sid)
             dispatch_storefront_webhook.delay(
                 sid,
                 {"event": "notification.deleted", "type": "notification", "store_public_id": sid},
