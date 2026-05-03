@@ -179,9 +179,10 @@ class AdminBlogTagViewSet(
         name = instance.name
         public_id = instance.public_id
         ctx = get_active_store(self.request)
+        sid = ctx.store.public_id if ctx.store else None
         super().perform_destroy(instance)
-        if ctx.store:
-            services.invalidate_blog_cache(ctx.store.public_id)
+        if sid:
+            services.invalidate_blog_cache(sid)
         log_activity(
             request=self.request,
             action=ActivityLog.Action.DELETE,

@@ -476,9 +476,10 @@ class AdminCategoryViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
         public_id = instance.public_id
         schedule_media_deletion(instance)
         ctx = get_active_store(self.request)
+        sid = ctx.store.public_id if ctx.store else None
         super().perform_destroy(instance)
-        if ctx.store:
-            invalidate_category_cache(ctx.store.public_id)
+        if sid:
+            invalidate_category_cache(sid)
         log_activity(
             request=self.request,
             action=ActivityLog.Action.DELETE,
@@ -570,6 +571,7 @@ class AdminProductVariantViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet
         sku = instance.sku
         variant_public_id = instance.public_id
         ctx = get_active_store(self.request)
+        sid = ctx.store.public_id if ctx.store else None
         super().perform_destroy(instance)
         if not product.variants.exists():
             from engine.apps.inventory.cache_sync import refresh_product_stock_cache
@@ -584,8 +586,8 @@ class AdminProductVariantViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet
                     store_id=int(product.store_id),
                     product_id=product.id,
                 )
-        if ctx.store:
-            invalidate_product_cache(ctx.store.public_id)
+        if sid:
+            invalidate_product_cache(sid)
         log_activity(
             request=self.request,
             action=ActivityLog.Action.DELETE,

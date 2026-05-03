@@ -77,10 +77,10 @@ class AdminBannerViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
         public_id = instance.public_id
         schedule_media_deletion(instance)
         ctx = get_active_store(self.request)
+        sid = ctx.store.public_id if ctx.store else None
         super().perform_destroy(instance)
-        if ctx.store:
-            invalidate_banner_cache(ctx.store.public_id)
-            sid = ctx.store.public_id
+        if sid:
+            invalidate_banner_cache(sid)
             dispatch_storefront_webhook.delay(
                 sid,
                 {"event": "banner.deleted", "type": "banner", "store_public_id": sid},
