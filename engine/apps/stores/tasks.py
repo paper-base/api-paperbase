@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
     bind=True,
     max_retries=3,
     name="engine.stores.dispatch_storefront_webhook",
+    queue="default",
 )
 def dispatch_storefront_webhook(self, store_public_id: str, payload: dict[str, Any]) -> None:
     event = str(payload.get("event") or "")
