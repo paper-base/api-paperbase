@@ -9,27 +9,54 @@ from .services import ORDER_EMAIL_NOTIFICATIONS_FEATURE
 
 User = get_user_model()
 
+_STORE_SETTINGS_CORE_FIELDS = [
+    "modules_enabled",
+    "low_stock_threshold",
+    "extra_field_schema",
+    "email_notify_owner_on_order_received",
+    "email_customer_on_order_confirmed",
+    "public_api_enabled",
+]
 
-class StoreSettingsSerializer(SafeModelSerializer):
+
+def _mask_order_email_flags_in_settings_data(
+    data: dict, request: object | None
+) -> dict:
+    if request and getattr(request, "user", None) and getattr(request.user, "is_authenticated", False):
+        if not has_feature(request.user, ORDER_EMAIL_NOTIFICATIONS_FEATURE):
+            data["email_notify_owner_on_order_received"] = False
+            data["email_customer_on_order_confirmed"] = False
+    return data
+
+
+class StoreSettingsNestedSerializer(SafeModelSerializer):
+    """
+    StoreSettings subset embedded on Store (dashboard).
+
+    Excludes storefront_url and revalidate_secret so webhook material is not
+    duplicated on store list/retrieve responses (use store/settings/current/
+    for integration fields).
+    """
+
     class Meta:
         model = StoreSettings
-        fields = [
-            "modules_enabled",
-            "low_stock_threshold",
-            "extra_field_schema",
-            "email_notify_owner_on_order_received",
-            "email_customer_on_order_confirmed",
-            "public_api_enabled",
-        ]
+        fields = list(_STORE_SETTINGS_CORE_FIELDS)
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
-        request = self.context.get("request")
-        if request and getattr(request.user, "is_authenticated", False):
-            if not has_feature(request.user, ORDER_EMAIL_NOTIFICATIONS_FEATURE):
-                data["email_notify_owner_on_order_received"] = False
-                data["email_customer_on_order_confirmed"] = False
-        return data
+        return _mask_order_email_flags_in_settings_data(data, self.context.get("request"))
+
+
+class StoreSettingsSerializer(SafeModelSerializer):
+    """Full store settings for tenant ``store/settings/current/`` (read/write)."""
+
+    class Meta:
+        model = StoreSettings
+        fields = list(_STORE_SETTINGS_CORE_FIELDS) + ["storefront_url", "revalidate_secret"]
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        return _mask_order_email_flags_in_settings_data(data, self.context.get("request"))
 
     def validate(self, attrs):
         request = self.context.get("request")
@@ -65,7 +92,7 @@ class StoreSettingsSerializer(SafeModelSerializer):
 
 
 class StoreSerializer(SafeModelSerializer):
-    settings = StoreSettingsSerializer(read_only=True)
+    settings = StoreSettingsNestedSerializer(read_only=True)
 
     class Meta:
         model = Store

@@ -7,6 +7,7 @@ from engine.core.admin_views import StoreRolePermissionMixin
 from engine.core.media_deletion_service import schedule_media_deletion
 from engine.core.models import ActivityLog
 from engine.core.tenancy import get_active_store
+from engine.apps.stores.tasks import dispatch_storefront_webhook
 
 from .models import Banner
 from .admin_serializers import AdminBannerSerializer
@@ -40,6 +41,11 @@ class AdminBannerViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
             )
         instance = serializer.save(store=store)
         invalidate_banner_cache(store.public_id)
+        sid = store.public_id
+        dispatch_storefront_webhook.delay(
+            sid,
+            {"event": "banner.created", "type": "banner", "store_public_id": sid},
+        )
         log_activity(
             request=self.request,
             action=ActivityLog.Action.CREATE,
@@ -53,6 +59,11 @@ class AdminBannerViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
         ctx = get_active_store(self.request)
         if ctx.store:
             invalidate_banner_cache(ctx.store.public_id)
+            sid = ctx.store.public_id
+            dispatch_storefront_webhook.delay(
+                sid,
+                {"event": "banner.updated", "type": "banner", "store_public_id": sid},
+            )
         log_activity(
             request=self.request,
             action=ActivityLog.Action.UPDATE,
@@ -69,6 +80,11 @@ class AdminBannerViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
         super().perform_destroy(instance)
         if ctx.store:
             invalidate_banner_cache(ctx.store.public_id)
+            sid = ctx.store.public_id
+            dispatch_storefront_webhook.delay(
+                sid,
+                {"event": "banner.deleted", "type": "banner", "store_public_id": sid},
+            )
         log_activity(
             request=self.request,
             action=ActivityLog.Action.DELETE,

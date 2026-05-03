@@ -34,15 +34,30 @@ PY
 echo "Waiting for database..."
 wait_for_postgres
 echo "Database ready"
-echo "Running migrations..."
-if [ -n "${DIRECT_DATABASE_URL:-}" ]; then
-  python manage.py migrate --database=direct --noinput
+
+skip_migrate=0
+case "$(printf '%s' "${SKIP_MIGRATE:-}" | tr '[:upper:]' '[:lower:]')" in
+  1|true|yes) skip_migrate=1 ;;
+esac
+
+if [ "$skip_migrate" -eq 0 ]; then
+  echo "Running migrations..."
+  if [ -n "${DIRECT_DATABASE_URL:-}" ]; then
+    python manage.py migrate --database=direct --noinput
+  else
+    python manage.py migrate --noinput
+  fi
+  echo "Migrations complete"
+  echo "Collecting static files..."
+  python manage.py collectstatic --noinput
+  echo "Static files ready"
 else
-  python manage.py migrate --noinput
+  echo "Skipping migrations and collectstatic (SKIP_MIGRATE is set; use the web container to migrate)."
 fi
-echo "Migrations complete"
-echo "Collecting static files..."
-python manage.py collectstatic --noinput
-echo "Static files ready"
+
 echo "Starting server..."
-exec gunicorn config.asgi:application -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT:-8000} --workers 2
+if [ "$#" -gt 0 ]; then
+  exec "$@"
+else
+  exec gunicorn config.asgi:application -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT:-8000} --workers 2
+fi

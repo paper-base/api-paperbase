@@ -7,6 +7,7 @@ from django.dispatch import receiver
 from engine.core import cache_service
 
 from .models import Store, StoreSettings
+from .tasks import dispatch_storefront_webhook
 from .services import (
     invalidate_store_api_key_resolution_cache_from_digest,
     sync_store_owner_to_user,
@@ -40,6 +41,12 @@ def _invalidate_store_public_cache(store_public_id: str) -> None:
 @receiver(post_save, sender=StoreSettings)
 def invalidate_store_public_cache_on_settings_save(sender, instance: StoreSettings, **kwargs):
     _invalidate_store_public_cache(instance.store.public_id)
+    sid = instance.store.public_id
+    if sid:
+        dispatch_storefront_webhook.delay(
+            sid,
+            {"event": "store.updated", "type": "store", "store_public_id": sid},
+        )
 
 
 @receiver(post_delete, sender=StoreSettings)

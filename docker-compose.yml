@@ -25,19 +25,6 @@ services:
       timeout: 3s
       retries: 5
 
-  migrate:
-    build: .
-    entrypoint: ["python", "manage.py", "migrate", "--noinput"]
-    env_file:
-      - .env
-    environment:
-      DJANGO_SETTINGS_MODULE: config.settings.runtime
-      DATABASE_URL: postgresql://paperbase:paperbase@db:5432/paperbase
-      REDIS_URL: redis://redis:6379/0
-    depends_on:
-      db:
-        condition: service_healthy
-
   web:
     build: .
     ports:
@@ -69,8 +56,12 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8000/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 120s
 
   celery-critical:
     build: .
@@ -80,6 +71,7 @@ services:
       DJANGO_SETTINGS_MODULE: config.settings.runtime
       DATABASE_URL: postgresql://paperbase:paperbase@db:5432/paperbase
       REDIS_URL: redis://redis:6379/0
+      SKIP_MIGRATE: "true"
     command: >
       celery -A config worker
       -Q critical
@@ -91,8 +83,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
+      web:
+        condition: service_healthy
 
   celery-default:
     build: .
@@ -102,6 +94,7 @@ services:
       DJANGO_SETTINGS_MODULE: config.settings.runtime
       DATABASE_URL: postgresql://paperbase:paperbase@db:5432/paperbase
       REDIS_URL: redis://redis:6379/0
+      SKIP_MIGRATE: "true"
     command: >
       celery -A config worker
       -Q default
@@ -113,8 +106,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
+      web:
+        condition: service_healthy
 
   celery-capi:
     build: .
@@ -124,6 +117,7 @@ services:
       DJANGO_SETTINGS_MODULE: config.settings.runtime
       DATABASE_URL: postgresql://paperbase:paperbase@db:5432/paperbase
       REDIS_URL: redis://redis:6379/0
+      SKIP_MIGRATE: "true"
     command: >
       celery -A config worker
       -Q capi
@@ -135,8 +129,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
+      web:
+        condition: service_healthy
 
   celery-beat:
     build: .
@@ -146,6 +140,7 @@ services:
       DJANGO_SETTINGS_MODULE: config.settings.runtime
       DATABASE_URL: postgresql://paperbase:paperbase@db:5432/paperbase
       REDIS_URL: redis://redis:6379/0
+      SKIP_MIGRATE: "true"
     command: >
       celery -A config beat
       --scheduler django_celery_beat.schedulers:DatabaseScheduler
@@ -155,8 +150,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
+      web:
+        condition: service_healthy
 
 volumes:
   pgdata:

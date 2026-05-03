@@ -224,6 +224,17 @@ class StoreSettings(models.Model):
         default=dict,
         help_text="Public storefront-only data: theme_settings, country, seo, policy_urls, social_links, etc.",
     )
+    storefront_url = models.URLField(
+        blank=True,
+        default="",
+        help_text="Deployed storefront base URL e.g. store.yourdomain.com. Used for webhook dispatch.",
+    )
+    revalidate_secret = models.CharField(
+        max_length=64,
+        blank=True,
+        default="",
+        help_text="Shared HMAC secret for storefront webhook verification. Must match REVALIDATE_SECRET on the storefront.",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

@@ -6,6 +6,7 @@ from engine.core.activity import log_activity
 from engine.core.admin_views import StoreRolePermissionMixin
 from engine.core.models import ActivityLog
 from engine.core.tenancy import get_active_store
+from engine.apps.stores.tasks import dispatch_storefront_webhook
 from .admin_serializers import AdminNotificationSerializer, AdminStaffNotificationSerializer
 from .models import StaffNotification, StorefrontCTA
 from .services import invalidate_notification_cache
@@ -59,6 +60,11 @@ class AdminNotificationViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
             )
         instance = serializer.save(store=store)
         invalidate_notification_cache(store.public_id)
+        sid = store.public_id
+        dispatch_storefront_webhook.delay(
+            sid,
+            {"event": "notification.created", "type": "notification", "store_public_id": sid},
+        )
         log_activity(
             request=self.request,
             action=ActivityLog.Action.CREATE,
@@ -73,6 +79,11 @@ class AdminNotificationViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
         ctx = get_active_store(self.request)
         if ctx.store:
             invalidate_notification_cache(ctx.store.public_id)
+            sid = ctx.store.public_id
+            dispatch_storefront_webhook.delay(
+                sid,
+                {"event": "notification.updated", "type": "notification", "store_public_id": sid},
+            )
         log_activity(
             request=self.request,
             action=ActivityLog.Action.UPDATE,
@@ -89,6 +100,11 @@ class AdminNotificationViewSet(StoreRolePermissionMixin, viewsets.ModelViewSet):
         super().perform_destroy(instance)
         if ctx.store:
             invalidate_notification_cache(ctx.store.public_id)
+            sid = ctx.store.public_id
+            dispatch_storefront_webhook.delay(
+                sid,
+                {"event": "notification.deleted", "type": "notification", "store_public_id": sid},
+            )
         log_activity(
             request=self.request,
             action=ActivityLog.Action.DELETE,
