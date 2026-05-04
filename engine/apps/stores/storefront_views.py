@@ -48,6 +48,7 @@ class StorePublicView(APIView):
 
     permission_classes = [IsStorefrontAPIKey]
     authentication_classes = []
+    throttle_classes = ()
     allow_api_key = True
     access_scope = "storefront"
 

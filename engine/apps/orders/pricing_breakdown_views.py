@@ -18,6 +18,7 @@ from .pricing import PricingEngine, storefront_pricing_breakdown_response
 class PricingBreakdownView(APIView):
     permission_classes = [IsStorefrontAPIKey]
     authentication_classes = []
+    throttle_classes = ()
     allow_api_key = True
 
     def post(self, request):

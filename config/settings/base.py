@@ -158,8 +158,10 @@ BACKUP_PRUNE_STORE_EVENT_LOG_HOURS = int(os.getenv("BACKUP_PRUNE_STORE_EVENT_LOG
 BACKUP_PRUNE_ORDER_EXPORT_JOB_DAYS = int(os.getenv("BACKUP_PRUNE_ORDER_EXPORT_JOB_DAYS", "30"))
 
 # Storefront rate limits (per minute, fixed window) — see engine.core.rate_limit
+# SSR and cache warmers share one egress IP; many parallel page renders fan out to many
+# API calls — keep a finite cap but avoid false 429s under legitimate burst traffic.
 TENANT_STOREFRONT_RATE_LIMIT_PER_IP_PER_MIN = int(
-    os.getenv("TENANT_STOREFRONT_RATE_LIMIT_PER_IP_PER_MIN", "100")
+    os.getenv("TENANT_STOREFRONT_RATE_LIMIT_PER_IP_PER_MIN", "400")
 )
 TENANT_API_KEY_AGGREGATE_RATE_LIMIT_PER_MIN = int(
     os.getenv("TENANT_API_KEY_AGGREGATE_RATE_LIMIT_PER_MIN", "5000")

@@ -21,6 +21,10 @@ from . import services
 class StorefrontTenantMixin:
     """Public storefront: reject platform/anonymous requests with no tenant context."""
 
+    # ApiKeyRateLimitMiddleware already limits per-(store, IP) and per API key; DRF's
+    # AnonRateThrottle would treat all SSR traffic as one IP and falsely cap warm renders.
+    throttle_classes = ()
+
     def initial(self, request, *args, **kwargs):
         super().initial(request, *args, **kwargs)
         require_resolved_store(request)

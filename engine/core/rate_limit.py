@@ -34,7 +34,7 @@ def _rate_window_seconds() -> int:
 
 
 def _per_ip_limit() -> int:
-    return int(getattr(settings, "TENANT_STOREFRONT_RATE_LIMIT_PER_IP_PER_MIN", 100))
+    return int(getattr(settings, "TENANT_STOREFRONT_RATE_LIMIT_PER_IP_PER_MIN", 400))
 
 
 def _settings_aggregate_fallback() -> int:

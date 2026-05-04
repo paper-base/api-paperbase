@@ -22,6 +22,7 @@ class ShippingOptionsView(APIView):
     """
     permission_classes = [IsStorefrontAPIKey]
     authentication_classes = []
+    throttle_classes = ()
     allow_api_key = True
     access_scope = "storefront"
 
@@ -45,6 +46,7 @@ class ShippingZonesView(APIView):
 
     permission_classes = [IsStorefrontAPIKey]
     authentication_classes = []
+    throttle_classes = ()
     allow_api_key = True
     access_scope = "storefront"
 
@@ -65,6 +67,7 @@ class ShippingPreviewView(APIView):
 
     permission_classes = [IsStorefrontAPIKey]
     authentication_classes = []
+    throttle_classes = ()
     allow_api_key = True
     access_scope = "storefront"
 

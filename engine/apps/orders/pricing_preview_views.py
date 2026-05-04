@@ -40,6 +40,7 @@ class PricingPreviewInputSerializer(serializers.Serializer):
 class PricingPreviewView(APIView):
     permission_classes = [IsStorefrontAPIKey]
     authentication_classes = []
+    throttle_classes = ()
     allow_api_key = True
 
     def post(self, request):
