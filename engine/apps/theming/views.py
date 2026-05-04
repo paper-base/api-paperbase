@@ -10,6 +10,7 @@ from rest_framework.views import APIView
 from rest_framework.generics import RetrieveUpdateAPIView
 
 from config.permissions import DenyAPIKeyAccess, IsStoreAdmin
+from engine.apps.stores.tasks import dispatch_storefront_webhook
 from engine.core.request_context import get_dashboard_store_from_request
 from engine.core.tenant_drf import ProvenTenantContextMixin
 
@@ -69,6 +70,16 @@ class ThemeView(ProvenTenantContextMixin, RetrieveUpdateAPIView):
         # Warm cache with fresh payload
         data = serialize_theme_payload(theme)
         set_cached_theme(store.public_id, data)
+        sid = store.public_id
+        if sid:
+            dispatch_storefront_webhook.delay(
+                sid,
+                {
+                    "event": "theme.updated",
+                    "type": "store",
+                    "store_public_id": sid,
+                },
+            )
 
     def update(self, request, *args, **kwargs):
         partial = kwargs.pop("partial", False)
