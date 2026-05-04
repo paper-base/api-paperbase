@@ -230,7 +230,9 @@ class OrderCreateSerializer(serializers.Serializer):
     shipping_name = serializers.CharField(max_length=255)
     phone = serializers.CharField(max_length=20)
     email = serializers.EmailField(required=False, allow_blank=True, default='')
-    shipping_address = serializers.CharField()
+    shipping_address = serializers.CharField(
+        required=False, allow_blank=True, default=""
+    )
     district = serializers.CharField(max_length=100, required=False, allow_blank=True, default='')
     products = serializers.ListField(
         child=serializers.DictField(),
@@ -266,10 +268,27 @@ class OrderCreateSerializer(serializers.Serializer):
             )
         return digits
 
-    def validate_shipping_address(self, value):
-        if not (value or '').strip():
-            raise serializers.ValidationError('Required.')
-        return value.strip()
+    def validate(self, data):
+        from engine.apps.orders.checkout_rules import get_required_checkout_fields
+
+        store = self.context.get("store")
+        try:
+            checkout_settings = store.checkout_settings if store else None
+        except Exception:
+            checkout_settings = None
+
+        required_fields = get_required_checkout_fields(checkout_settings)
+        errors = {}
+
+        for field in required_fields:
+            value = data.get(field)
+            if value is None or (isinstance(value, str) and not value.strip()):
+                errors[field] = "Required."
+
+        if errors:
+            raise serializers.ValidationError(errors)
+
+        return data
 
     def validate_products(self, value):
         from engine.apps.products.models import Product

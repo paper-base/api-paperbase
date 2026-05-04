@@ -6,7 +6,7 @@ from django.dispatch import receiver
 
 from engine.core import cache_service
 
-from .models import Store, StoreSettings
+from .models import Store, StoreSettings, StorefrontCheckoutSettings
 from .tasks import dispatch_storefront_webhook
 from .services import (
     invalidate_store_api_key_resolution_cache_from_digest,
@@ -29,6 +29,16 @@ def sync_store_owner_on_save(sender, instance, **kwargs):
             invalidate_store_api_key_resolution_cache_from_digest(digest)
 
 
+@receiver(post_save, sender=Store)
+def create_checkout_settings_for_new_store(sender, instance, created, **kwargs):
+    if not created:
+        return
+    StorefrontCheckoutSettings.objects.get_or_create(
+        store=instance,
+        defaults={"customer_form_variant": "extended"},
+    )
+
+
 @receiver(pre_delete, sender=Store)
 def block_store_delete_without_contact_email(sender, instance: Store, **kwargs):
     _require_store_contact_email_before_delete(instance)
@@ -36,6 +46,7 @@ def block_store_delete_without_contact_email(sender, instance: Store, **kwargs):
 
 def _invalidate_store_public_cache(store_public_id: str) -> None:
     cache_service.delete(f"cache:{store_public_id}:store_public:v1")
+    cache_service.delete(f"cache:{store_public_id}:store_public:v3")
 
 
 @receiver(post_save, sender=StoreSettings)

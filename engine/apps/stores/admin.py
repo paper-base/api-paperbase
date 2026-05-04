@@ -5,7 +5,7 @@ from django.db.models.deletion import ProtectedError
 
 from engine.core.admin import StoreListFilter, StoreScopedAdminMixin
 
-from .models import Store, StoreMembership, StoreSettings
+from .models import Store, StoreMembership, StoreSettings, StorefrontCheckoutSettings
 
 
 def _store_delete_allowed(request) -> bool:
@@ -140,6 +140,16 @@ class StoreAdmin(StoreScopedAdminMixin, admin.ModelAdmin):
             except ValidationError as exc:
                 msg = exc.messages[0] if getattr(exc, "messages", None) else str(exc)
                 messages.error(request, f"{obj}: {msg}")
+
+
+@admin.register(StorefrontCheckoutSettings)
+class StorefrontCheckoutSettingsAdmin(StoreScopedAdminMixin, admin.ModelAdmin):
+    list_display = ("store", "customer_form_variant")
+    list_filter = (StoreListFilter,)
+    search_fields = ("store__name",)
+
+    def optimize_store_queryset(self, qs):
+        return qs.select_related("store")
 
 
 @admin.register(StoreSettings)

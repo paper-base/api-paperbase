@@ -567,3 +567,26 @@ class StoreApiKey(models.Model):
         if not self.public_id:
             self.public_id = generate_public_id("storeapikey")
         super().save(*args, **kwargs)
+
+
+class StorefrontCheckoutSettings(models.Model):
+    store = models.OneToOneField(
+        Store,
+        on_delete=models.CASCADE,
+        related_name="checkout_settings",
+    )
+    CUSTOMER_FORM_VARIANT = [
+        ("minimal", "Minimal"),
+        ("extended", "Extended"),
+    ]
+    customer_form_variant = models.CharField(
+        max_length=20,
+        choices=CUSTOMER_FORM_VARIANT,
+        default="extended",
+    )
+
+    class Meta:
+        verbose_name = "Storefront Checkout Settings"
+
+    def __str__(self) -> str:
+        return f"{self.store.name} — {self.customer_form_variant}"

@@ -57,7 +57,7 @@ class StorePublicView(APIView):
 
     def get(self, request):
         store = require_api_key_store(request)
-        cache_key = f"cache:{store.public_id}:store_public:v2"
+        cache_key = f"cache:{store.public_id}:store_public:v3"
         cached = cache_service.get(cache_key)
         if cached is not None:
             return Response(cached)
@@ -113,6 +113,14 @@ class StorePublicView(APIView):
 
         tracking_enabled = _store_tracking_enabled(store)
 
+        try:
+            checkout_settings = store.checkout_settings
+            checkout_config = {
+                "customer_form_variant": checkout_settings.customer_form_variant,
+            }
+        except Exception:
+            checkout_config = {"customer_form_variant": "extended"}
+
         payload = {
             "store_name": store.name,
             "logo_url": absolute_media_url(store.logo, request),
@@ -139,6 +147,7 @@ class StorePublicView(APIView):
             "theme_settings": {
                 "primary_color": theme.get("primary_color") or "",
             },
+            "checkout_settings": checkout_config,
             "seo": {
                 "default_title": seo.get("default_title") or "",
                 "default_description": seo.get("default_description") or "",
