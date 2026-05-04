@@ -124,3 +124,17 @@ def get_palette_version() -> str:
 
 # Auto-generated — never set this manually
 PALETTE_VERSION: str = get_palette_version()
+
+CARD_VARIANTS = {
+    "classic": {
+        "name": "Classic",
+        "description": "Clean minimal card",
+    },
+    "shelf": {
+        "name": "Shelf",
+        "description": "Price first with Order now",
+    },
+}
+
+CARD_VARIANT_CHOICES = list(CARD_VARIANTS.keys())
+DEFAULT_CARD_VARIANT = "classic"

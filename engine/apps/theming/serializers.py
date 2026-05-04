@@ -3,7 +3,12 @@ from __future__ import annotations
 from rest_framework import serializers
 
 from .models import StorefrontTheme
-from .presets import PALETTE_CHOICES, PALETTE_VERSION, resolve_palette
+from .presets import (
+    CARD_VARIANT_CHOICES,
+    PALETTE_CHOICES,
+    PALETTE_VERSION,
+    resolve_palette,
+)
 
 
 class StorefrontThemeSerializer(serializers.ModelSerializer):
@@ -12,7 +17,14 @@ class StorefrontThemeSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = StorefrontTheme
-        fields = ("palette", "palette_version", "resolved_palette", "created_at", "updated_at")
+        fields = (
+            "palette",
+            "card_variant",
+            "palette_version",
+            "resolved_palette",
+            "created_at",
+            "updated_at",
+        )
         read_only_fields = ("created_at", "updated_at")
 
     def get_palette_version(self, obj: StorefrontTheme) -> str:
@@ -25,6 +37,12 @@ class StorefrontThemeSerializer(serializers.ModelSerializer):
         key = (value or "").strip().lower()
         if key not in PALETTE_CHOICES:
             raise serializers.ValidationError("Invalid palette.")
+        return key
+
+    def validate_card_variant(self, value: str) -> str:
+        key = (value or "").strip().lower()
+        if key not in CARD_VARIANT_CHOICES:
+            raise serializers.ValidationError("Invalid card variant.")
         return key
 
 

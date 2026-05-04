@@ -16,7 +16,7 @@ from engine.core.tenant_drf import ProvenTenantContextMixin
 from .cache import PRESETS_CACHE_KEY, PRESETS_CACHE_TTL, get_cached_theme, invalidate_theme_cache, set_cached_theme
 from .models import StorefrontTheme
 from .permissions import IsThemeOwner, PresetsViewPermission, ThemeGetPermission
-from .presets import PALETTE_LABELS, PALETTES, PALETTE_CHOICES
+from .presets import CARD_VARIANTS, PALETTE_LABELS, PALETTES, PALETTE_CHOICES
 from .serializers import StorefrontThemeSerializer, serialize_theme_payload
 
 
@@ -107,7 +107,15 @@ class PresetsView(APIView):
                     "tokens": dict(PALETTES[key]),
                 }
             )
-        payload = {"presets": presets_out}
+        card_variants_out = [
+            {
+                "key": key,
+                "name": meta["name"],
+                "description": meta["description"],
+            }
+            for key, meta in CARD_VARIANTS.items()
+        ]
+        payload = {"presets": presets_out, "card_variants": card_variants_out}
         try:
             cache.set(PRESETS_CACHE_KEY, json.dumps(payload), PRESETS_CACHE_TTL)
         except Exception:

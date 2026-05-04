@@ -12,12 +12,15 @@ logger = logging.getLogger(__name__)
 
 THEME_CACHE_TTL = 60 * 60 * 24  # 24 hours
 PRESETS_CACHE_TTL = 60 * 60 * 24
-# Bump when palette keys/labels change so stale entries are not served for 24h.
-PRESETS_CACHE_KEY = "theme:presets:v2"
+# Bump when palette keys/labels or presets payload shape changes so stale entries are not served for 24h.
+PRESETS_CACHE_KEY = "theme:presets:v4"
+
+# Bump when serialized theme payload gains new keys (e.g. card_variant) so old Redis blobs are not served.
+THEME_CACHE_SCHEMA_VERSION = "2"
 
 
 def get_cache_key(store_public_id: str) -> str:
-    return f"theme:storefront:{store_public_id}:{PALETTE_VERSION}"
+    return f"theme:storefront:{store_public_id}:{PALETTE_VERSION}:{THEME_CACHE_SCHEMA_VERSION}"
 
 
 def theme_cache_key(store_public_id: str) -> str:

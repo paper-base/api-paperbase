@@ -2,7 +2,12 @@ from django.db import models
 
 from engine.apps.stores.models import Store
 
-from .presets import DEFAULT_PALETTE, PALETTE_CHOICES
+from .presets import (
+    CARD_VARIANT_CHOICES,
+    DEFAULT_CARD_VARIANT,
+    DEFAULT_PALETTE,
+    PALETTE_CHOICES,
+)
 
 
 class StorefrontTheme(models.Model):
@@ -15,6 +20,11 @@ class StorefrontTheme(models.Model):
         max_length=50,
         choices=[(k, k) for k in PALETTE_CHOICES],
         default=DEFAULT_PALETTE,
+    )
+    card_variant = models.CharField(
+        max_length=50,
+        choices=[(k, k) for k in CARD_VARIANT_CHOICES],
+        default=DEFAULT_CARD_VARIANT,
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

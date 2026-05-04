@@ -99,12 +99,27 @@ class ThemingIsolationTests(TestCase):
         resp = self.client.get("/api/v1/theming/")
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.data["palette"], "ivory")
+        self.assertEqual(resp.data["card_variant"], "classic")
 
     def test_jwt_user_b_sees_only_store_b_theme(self):
         _auth_jwt(self.client, self.owner_b.email, store_public_id=self.store_b.public_id)
         resp = self.client.get("/api/v1/theming/")
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.data["palette"], "sage")
+        self.assertEqual(resp.data["card_variant"], "classic")
+
+    def test_patch_card_variant_jwt(self):
+        _auth_jwt(self.client, self.owner_a.email, store_public_id=self.store_a.public_id)
+        resp = self.client.patch("/api/v1/theming/", {"card_variant": "shelf"}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["card_variant"], "shelf")
+        self.theme_a.refresh_from_db()
+        self.assertEqual(self.theme_a.card_variant, "shelf")
+
+    def test_patch_invalid_card_variant_returns_400(self):
+        _auth_jwt(self.client, self.owner_a.email, store_public_id=self.store_a.public_id)
+        resp = self.client.patch("/api/v1/theming/", {"card_variant": "nope"}, format="json")
+        self.assertEqual(resp.status_code, 400)
 
     def test_patch_with_api_key_returns_403(self):
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {self.pk_a}")
